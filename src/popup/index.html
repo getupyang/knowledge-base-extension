@@ -51,13 +51,34 @@
       const notionToken = document.getElementById("notionToken").value.trim();
       const databaseId = document.getElementById("databaseId").value.trim();
       const openrouterKey = document.getElementById("openrouterKey").value.trim();
+      const status = document.getElementById("status");
+
+      if (!notionToken || !databaseId || !openrouterKey) {
+        status.style.color = "#ef4444";
+        status.textContent = "请填写全部三个字段";
+        return;
+      }
+
+      status.style.color = "#10b981";
+      status.textContent = "保存中...";
 
       chrome.storage.local.set({ notionToken, databaseId, openrouterKey }, () => {
-        // 通知background重新加载密钥
-        chrome.runtime.sendMessage({ type: "RELOAD_CONFIG" });
-        const status = document.getElementById("status");
-        status.textContent = "✓ 已保存";
-        setTimeout(() => status.textContent = "", 2000);
+        if (chrome.runtime.lastError) {
+          status.style.color = "#ef4444";
+          status.textContent = "保存失败：" + chrome.runtime.lastError.message;
+          return;
+        }
+        // 回读验证确认写入成功
+        chrome.storage.local.get(["notionToken", "databaseId", "openrouterKey"], (result) => {
+          if (result.notionToken && result.databaseId && result.openrouterKey) {
+            chrome.runtime.sendMessage({ type: "RELOAD_CONFIG" });
+            status.textContent = "✓ 已保存";
+            setTimeout(() => status.textContent = "", 2000);
+          } else {
+            status.style.color = "#ef4444";
+            status.textContent = "写入失败，请重试";
+          }
+        });
       });
     });
   </script>
