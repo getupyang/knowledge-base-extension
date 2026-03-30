@@ -1,15 +1,17 @@
 // 密钥通过 popup 设置页配置，存储在 chrome.storage.local，不硬编码在代码里
 // 首次使用请点击插件图标进行配置
-let NOTION_TOKEN = "";
-let DATABASE_ID = "";
-let OPENROUTER_KEY = "";
 
-// 启动时从storage加载密钥
-chrome.storage.local.get(["notionToken", "databaseId", "openrouterKey"], (result) => {
-  NOTION_TOKEN = result.notionToken || "";
-  DATABASE_ID = result.databaseId || "";
-  OPENROUTER_KEY = result.openrouterKey || "";
-});
+async function getConfig() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["notionToken", "databaseId", "openrouterKey"], (result) => {
+      resolve({
+        NOTION_TOKEN: result.notionToken || "",
+        DATABASE_ID: result.databaseId || "",
+        OPENROUTER_KEY: result.openrouterKey || ""
+      });
+    });
+  });
+}
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
@@ -61,11 +63,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 // 统一消息处理
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "RELOAD_CONFIG") {
-    chrome.storage.local.get(["notionToken", "databaseId", "openrouterKey"], (result) => {
-      NOTION_TOKEN = result.notionToken || "";
-      DATABASE_ID = result.databaseId || "";
-      OPENROUTER_KEY = result.openrouterKey || "";
-    });
+    // 不再需要缓存，每次调用时实时读取
+    sendResponse({ success: true });
     return;
   }
   if (msg.type === "PING") {
@@ -87,6 +86,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 async function callAI(systemPrompt, msgs) {
+  const { OPENROUTER_KEY } = await getConfig();
+  if (!OPENROUTER_KEY) throw new Error("请先在插件设置中配置 OpenRouter API Key");
   const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -119,6 +120,9 @@ function splitRichText(str, max = 1990) {
 }
 
 async function saveToNotion({ title, url, platform, excerpt, thought, aiConversation }) {
+  const { NOTION_TOKEN, DATABASE_ID } = await getConfig();
+  if (!NOTION_TOKEN) throw new Error("请先在插件设置中配置 Notion Token");
+  if (!DATABASE_ID) throw new Error("请先在插件设置中配置 Notion Database ID");
   const body = {
     parent: { database_id: DATABASE_ID },
     properties: {
