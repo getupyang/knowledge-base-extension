@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "知识库助手",
+  "version": "0.3.0",
+  "description": "选中文字保存到Notion，AI对话自动采集",
+  "permissions": [
+    "contextMenus",
+    "storage",
+    "activeTab",
+    "scripting"
+  ],
+
+  "host_permissions": [
+    "https://api.notion.com/*",
+    "https://openrouter.ai/*",
+    "https://claude.ai/*"
+  ],
+  "background": {
+    "service_worker": "src/background/index.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content/index.js"]
+    },
+    {
+      "matches": ["https://claude.ai/*"],
+      "js": ["src/collectors/claude.js"]
+    }
+  ],
+  "action": {
+    "default_popup": "src/popup/index.html",
+    "default_title": "知识库助手"
+  }
+}

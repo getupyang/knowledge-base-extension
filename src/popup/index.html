@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { width: 280px; padding: 16px; font-family: -apple-system, sans-serif; font-size: 13px; color: #333; }
+    h3 { margin: 0 0 12px; font-size: 15px; }
+    label { display: block; margin-bottom: 4px; color: #666; font-size: 12px; }
+    input {
+      width: 100%; box-sizing: border-box;
+      border: 1px solid #e0e0e0; border-radius: 6px;
+      padding: 6px 8px; font-size: 12px; margin-bottom: 10px;
+      font-family: monospace; color: #333;
+    }
+    input:focus { outline: none; border-color: #10b981; }
+    button {
+      width: 100%; padding: 8px; background: #10b981; color: white;
+      border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500;
+    }
+    button:hover { background: #059669; }
+    .status { margin-top: 8px; font-size: 12px; color: #10b981; text-align: center; min-height: 16px; }
+    .tip { margin-top: 10px; padding: 8px 10px; background: #f5f5f5; border-radius: 6px; font-size: 11px; color: #999; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <h3>知识库助手 ⚙️</h3>
+
+  <label>Notion Token</label>
+  <input type="password" id="notionToken" placeholder="ntn_..." />
+
+  <label>Notion Database ID</label>
+  <input type="text" id="databaseId" placeholder="32dae..." />
+
+  <label>OpenRouter API Key</label>
+  <input type="password" id="openrouterKey" placeholder="sk-or-v1-..." />
+
+  <button id="saveBtn">保存配置</button>
+  <div class="status" id="status"></div>
+
+  <div class="tip">配置保存在本地，不会上传。选中网页文字右键即可保存到知识库。</div>
+
+  <script>
+    // 加载已保存的配置
+    chrome.storage.local.get(["notionToken", "databaseId", "openrouterKey"], (result) => {
+      if (result.notionToken) document.getElementById("notionToken").value = result.notionToken;
+      if (result.databaseId) document.getElementById("databaseId").value = result.databaseId;
+      if (result.openrouterKey) document.getElementById("openrouterKey").value = result.openrouterKey;
+    });
+
+    document.getElementById("saveBtn").addEventListener("click", () => {
+      const notionToken = document.getElementById("notionToken").value.trim();
+      const databaseId = document.getElementById("databaseId").value.trim();
+      const openrouterKey = document.getElementById("openrouterKey").value.trim();
+
+      chrome.storage.local.set({ notionToken, databaseId, openrouterKey }, () => {
+        // 通知background重新加载密钥
+        chrome.runtime.sendMessage({ type: "RELOAD_CONFIG" });
+        const status = document.getElementById("status");
+        status.textContent = "✓ 已保存";
+        setTimeout(() => status.textContent = "", 2000);
+      });
+    });
+  </script>
+</body>
+</html>
