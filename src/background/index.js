@@ -1,16 +1,12 @@
-// 密钥通过 popup 设置页配置，存储在 chrome.storage.local，不硬编码在代码里
-// 首次使用请点击插件图标进行配置
+const CONFIG = {
+  NOTION_TOKEN: "NOTION_TOKEN_REMOVED",
+  DATABASE_ID: "DATABASE_ID_REMOVED",
+  OPENROUTER_KEY: "OPENROUTER_KEY_REMOVED",
+  OPENROUTER_MODEL: "openai/gpt-4o-mini"
+};
 
 async function getConfig() {
-  return new Promise((resolve) => {
-    chrome.storage.local.get(["notionToken", "databaseId", "openrouterKey"], (result) => {
-      resolve({
-        NOTION_TOKEN: result.notionToken || "",
-        DATABASE_ID: result.databaseId || "",
-        OPENROUTER_KEY: result.openrouterKey || ""
-      });
-    });
-  });
+  return CONFIG;
 }
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -22,6 +18,11 @@ chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: "open-ai-chat",
     title: "AI对话后保存",
+    contexts: ["selection"]
+  });
+  chrome.contextMenus.create({
+    id: "add-comment",
+    title: "💬 评论",
     contexts: ["selection"]
   });
 });
@@ -58,6 +59,16 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       context: { excerpt: selectedText, title: pageTitle, url: pageUrl, platform }
     }).catch(() => {});
   }
+
+  if (info.menuItemId === "add-comment") {
+    chrome.tabs.sendMessage(tab.id, {
+      type: "ADD_COMMENT",
+      excerpt: selectedText,
+      title: pageTitle,
+      url: pageUrl,
+      platform
+    }).catch(() => {});
+  }
 });
 
 // 统一消息处理
@@ -86,7 +97,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 async function callAI(systemPrompt, msgs) {
-  const { OPENROUTER_KEY } = await getConfig();
+  const { OPENROUTER_KEY, OPENROUTER_MODEL } = await getConfig();
   if (!OPENROUTER_KEY) throw new Error("请先在插件设置中配置 OpenRouter API Key");
   const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -97,7 +108,7 @@ async function callAI(systemPrompt, msgs) {
       "X-Title": "Knowledge Base Assistant"
     },
     body: JSON.stringify({
-      model: "anthropic/claude-3.5-sonnet",
+      model: OPENROUTER_MODEL,
       messages: [{ role: "system", content: systemPrompt }, ...msgs]
     })
   });

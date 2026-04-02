@@ -13,7 +13,8 @@
   "host_permissions": [
     "https://api.notion.com/*",
     "https://openrouter.ai/*",
-    "https://claude.ai/*"
+    "https://claude.ai/*",
+    "http://localhost/*"
   ],
   "background": {
     "service_worker": "src/background/index.js"
@@ -21,7 +22,8 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["src/content/index.js"]
+      "js": ["src/content/index.js"],
+      "world": "ISOLATED"
     },
     {
       "matches": ["https://claude.ai/*"],
