@@ -182,9 +182,12 @@ async function run() {
     }, (res) => {
       let data = '';
       res.on('data', d => data += d);
-      res.on('end', () => resolve(JSON.parse(data)));
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); }
+        catch(e) { console.log('  Notion parse error:', data.slice(0,200)); resolve(null); }
+      });
     });
-    req.on('error', () => resolve(null));
+    req.on('error', (e) => { console.log('  Notion request error:', e.message); resolve(null); });
     req.write(body);
     req.end();
   });

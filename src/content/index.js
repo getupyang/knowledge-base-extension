@@ -410,7 +410,6 @@ const commentSystem = (() => {
   const STORAGE_KEY = () => "kb_comments_" + location.href.split("?")[0];
   let panelEl = null;
   let currentExcerpt = "";
-  let currentHighlightEl = null;
 
   // ── 持久化 ──
   function load() {
@@ -437,15 +436,6 @@ const commentSystem = (() => {
 
   // ── 高亮 ──
   function highlightSelection(excerpt) {
-    // 移除上一个高亮
-    if (currentHighlightEl) {
-      const parent = currentHighlightEl.parentNode;
-      if (parent) {
-        parent.replaceChild(document.createTextNode(currentHighlightEl.textContent), currentHighlightEl);
-        parent.normalize();
-      }
-      currentHighlightEl = null;
-    }
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return;
     const range = sel.getRangeAt(0);
@@ -455,8 +445,23 @@ const commentSystem = (() => {
     mark.title = "点击查看评论";
     try {
       range.surroundContents(mark);
-      currentHighlightEl = mark;
-      mark.addEventListener("click", () => open(excerpt, location.href, document.title));
+      // 点击高亮：打开面板，不重新高亮（防止自我破坏）
+      mark.addEventListener("click", (e) => {
+        e.stopPropagation();
+        currentExcerpt = excerpt;
+        buildPanel();
+        panelEl.classList.remove("kb-hidden");
+        render();
+        // 滚动到对应评论卡片
+        const comments = load();
+        const match = comments.find(c => c.excerpt === excerpt);
+        if (match) {
+          setTimeout(() => {
+            const card = document.getElementById("kb-cmt-" + match.id);
+            if (card) card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+          }, 100);
+        }
+      });
     } catch (e) {
       // 跨节点选区无法 surroundContents，忽略
     }
@@ -713,10 +718,10 @@ const commentSystem = (() => {
     render();
   }
 
-  // ── 对外接口 ──
+  // ── 对外接口（由右键菜单触发，先高亮再打开面板）──
   function open(excerpt, url, title) {
     currentExcerpt = excerpt;
-    highlightSelection(excerpt);
+    highlightSelection(excerpt);  // 此时 selection 还在，安全
     buildPanel();
     // 更新输入区 quote 预览
     const qp = document.getElementById("kb-cp-quote-preview");

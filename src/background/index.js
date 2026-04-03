@@ -89,12 +89,41 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   if (msg.type === "CALL_AI") {
-    callAI(msg.data.systemPrompt, msg.data.messages)
+    callAIViaAgent(msg.data.systemPrompt, msg.data.messages)
       .then(reply => sendResponse({ success: true, reply }))
       .catch(err => sendResponse({ success: false, error: err.message }));
     return true;
   }
 });
+
+// 通过 localhost:8766 调 claude -p（质量更好，有 Notion 记忆注入）
+async function callAIViaAgent(systemPrompt, msgs) {
+  const AGENT_API = 'http://localhost:8766';
+  const userMsg = msgs[msgs.length - 1]?.content || '';
+  // 把 systemPrompt 作为 comment 内容发过去（8766 会注入 Notion 记忆 + 项目上下文）
+  const createRes = await fetch(`${AGENT_API}/comments`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      page_url: 'chrome-extension://comment',
+      page_title: '插件评论',
+      selected_text: systemPrompt.match(/用户划线内容[：:][「「]?([^」\n]+)/)?.[1] || '',
+      comment: userMsg
+    })
+  });
+  if (!createRes.ok) throw new Error('agent_api 创建失败');
+  const { id } = await createRes.json();
+
+  // 轮询最多 5 分钟，每 3 秒一次
+  for (let i = 0; i < 100; i++) {
+    await new Promise(r => setTimeout(r, 3000));
+    const pollRes = await fetch(`${AGENT_API}/comments/${id}`);
+    const data = await pollRes.json();
+    const agentReply = data.replies?.find(r => r.author === 'agent');
+    if (agentReply) return agentReply.content;
+  }
+  throw new Error('agent 响应超时');
+}
 
 async function callAI(systemPrompt, msgs) {
   const { OPENROUTER_KEY, OPENROUTER_MODEL } = await getConfig();
