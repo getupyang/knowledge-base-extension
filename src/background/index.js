@@ -1,12 +1,12 @@
-const CONFIG = {
-  NOTION_TOKEN: "NOTION_TOKEN_REMOVED",
-  DATABASE_ID: "DATABASE_ID_REMOVED",
-  OPENROUTER_KEY: "OPENROUTER_KEY_REMOVED",
-  OPENROUTER_MODEL: "openai/gpt-4o-mini"
-};
-
 async function getConfig() {
-  return CONFIG;
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["notionToken", "databaseId"], (result) => {
+      resolve({
+        NOTION_TOKEN: result.notionToken || "",
+        DATABASE_ID: result.databaseId || ""
+      });
+    });
+  });
 }
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -125,29 +125,6 @@ async function callAIViaAgent(systemPrompt, msgs) {
   throw new Error('agent 响应超时');
 }
 
-async function callAI(systemPrompt, msgs) {
-  const { OPENROUTER_KEY, OPENROUTER_MODEL } = await getConfig();
-  if (!OPENROUTER_KEY) throw new Error("请先在插件设置中配置 OpenRouter API Key");
-  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${OPENROUTER_KEY}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": "chrome-extension://knowledge-base",
-      "X-Title": "Knowledge Base Assistant"
-    },
-    body: JSON.stringify({
-      model: OPENROUTER_MODEL,
-      messages: [{ role: "system", content: systemPrompt }, ...msgs]
-    })
-  });
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error?.message || "AI请求失败");
-  }
-  const data = await res.json();
-  return data.choices[0].message.content;
-}
 
 function splitRichText(str, max = 1990) {
   if (!str) return [{ text: { content: "" } }];

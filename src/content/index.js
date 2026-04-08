@@ -406,10 +406,19 @@ function escapeHtml(str) {
 
 // ─── 评论系统 ────────────────────────────────────────────────
 
+const DEBUG_MODE = true; // 发布时改为 false
+
 const commentSystem = (() => {
   const STORAGE_KEY = () => "kb_comments_" + location.href.split("?")[0];
   let panelEl = null;
   let currentExcerpt = "";
+
+  // ── 提前保存 selection（提交时 selection 已消失，需要提前捕获）──
+  let _savedSelection = "";
+  document.addEventListener("mouseup", () => {
+    const sel = window.getSelection()?.toString().trim() || "";
+    if (sel.length > 5) _savedSelection = sel;
+  });
 
   // ── 持久化 ──
   function load() {
@@ -425,11 +434,11 @@ const commentSystem = (() => {
     save(comments);
     return c;
   }
-  function addReply(commentId, replyText, isAI) {
+  function addReply(commentId, replyText, isAI, debugMeta = null) {
     const comments = load();
     const c = comments.find(x => x.id === commentId);
     if (!c) return;
-    c.replies.push({ id: Date.now(), text: replyText, isAI, createdAt: new Date().toISOString() });
+    c.replies.push({ id: Date.now(), text: replyText, isAI, debugMeta, createdAt: new Date().toISOString() });
     save(comments);
     return c;
   }
@@ -547,6 +556,9 @@ const commentSystem = (() => {
       #kb-cp-send-btn:hover { background: #111; }
       #kb-cp-send-status { font-size: 11px; color: #888; margin-left: 8px; }
       .kb-empty { text-align: center; color: #ccc; padding: 40px 0; font-size: 13px; }
+      .kb-debug { margin-top: 6px; }
+      .kb-debug summary { font-size: 10px; color: #9ca3af; cursor: pointer; user-select: none; }
+      .kb-debug-body { font-size: 10px; color: #9ca3af; line-height: 1.8; padding: 4px 0 0 8px; font-family: monospace; }
     `;
     document.head.appendChild(s);
   }
@@ -600,12 +612,32 @@ const commentSystem = (() => {
     body.innerHTML = comments.map(c => {
       const t = new Date(c.createdAt);
       const timeStr = `${t.getMonth()+1}/${t.getDate()} ${String(t.getHours()).padStart(2,"0")}:${String(t.getMinutes()).padStart(2,"0")}`;
-      const repliesHtml = c.replies.map(r => `
+      const repliesHtml = c.replies.map(r => {
+        let debugHtml = "";
+        if (DEBUG_MODE && r.isAI && r.debugMeta) {
+          try {
+            const dm = typeof r.debugMeta === "string" ? JSON.parse(r.debugMeta) : r.debugMeta;
+            const ctx = dm.context_layers || {};
+            const notionOk = ctx.notion_memory ? "✓" : "✗";
+            const selOk = ctx.selected_text ? "✓" : "✗";
+            debugHtml = `
+              <details class="kb-debug">
+                <summary>▶ Debug</summary>
+                <div class="kb-debug-body">
+                  Agent: @${dm.agent_type} · 耗时: ${dm.elapsed_s}s · Prompt ~${dm.prompt_tokens_est} tokens<br>
+                  Context: project✓ notion${notionOk} selected_text${selOk} 文章上下文✗<br>
+                  状态: ${dm.status}
+                </div>
+              </details>`;
+          } catch (e) { /* 解析失败静默 */ }
+        }
+        return `
         <div class="kb-reply ${r.isAI ? "ai" : "user"}">
           <div class="kb-reply-label">${r.isAI ? "🤖 AI" : "你"} · ${new Date(r.createdAt).toLocaleTimeString("zh",{hour:"2-digit",minute:"2-digit"})}</div>
           ${escapeHtml(r.text)}
-        </div>
-      `).join("");
+          ${debugHtml}
+        </div>`;
+      }).join("");
       const hasAI = c.replies.some(r => r.isAI);
       return `
         <div class="kb-cmt-card" id="kb-cmt-${c.id}">
@@ -631,10 +663,36 @@ const commentSystem = (() => {
     const btn = document.getElementById("kb-cp-send-btn");
     btn.disabled = true;
     status.textContent = "保存中...";
-    addComment(currentExcerpt, text);
+    const c = addComment(currentExcerpt, text);
     ta.value = "";
-    status.textContent = "✓ 已保存";
-    setTimeout(() => { status.textContent = ""; }, 2000);
+
+    // 同步写入 agent_api（source of truth），存返回的 agent_comment_id 用于后续轮询
+    try {
+      const resp = await fetch("http://localhost:8766/comments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          page_url: location.href,
+          page_title: document.title,
+          selected_text: currentExcerpt || _savedSelection,
+          comment: text,
+        }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        // 把 agent_api 的 id 存回 localStorage，供 askAI 轮询使用
+        const comments = load();
+        const match = comments.find(x => x.id === c.id);
+        if (match) { match.agentCommentId = data.id; save(comments); }
+        status.textContent = `✓ 已发送 @${data.agent_type}`;
+      } else {
+        status.textContent = "✓ 已保存（agent 离线）";
+      }
+    } catch {
+      status.textContent = "✓ 已保存（agent 离线）";
+    }
+
+    setTimeout(() => { status.textContent = ""; }, 3000);
     btn.disabled = false;
     render();
   }
@@ -667,7 +725,8 @@ const commentSystem = (() => {
     });
   }
 
-  // ── AI 回复 ──
+  // ── AI 回复（via agent_api localhost:8766）──
+  // DEPRECATED: OpenRouter direct call (chrome.runtime.sendMessage CALL_AI) replaced by agent_api
   async function askAI(commentId) {
     const comments = load();
     const c = comments.find(x => x.id === commentId);
@@ -675,45 +734,64 @@ const commentSystem = (() => {
     const card = document.getElementById("kb-cmt-" + commentId);
     const btn = card ? card.querySelector(".kb-ai-btn") : null;
     if (btn) { btn.disabled = true; btn.textContent = "AI 思考中..."; }
-    // 在卡片里加 thinking 提示
     const thinkingEl = document.createElement("div");
     thinkingEl.className = "kb-thinking";
-    thinkingEl.textContent = "AI 正在回复...";
+    thinkingEl.textContent = "AI 正在处理（最多90秒）...";
     if (card) card.appendChild(thinkingEl);
 
-    const systemPrompt = `你是用户的数字助手，非常了解这个项目背景：
-用户是独立创业者，产品方向是「一人公司 AI 操作系统」，用 AI 虚拟同事替代早期团队。
-目标用户：决策型知识工作者。
-
-用户在阅读网页内容时对某段文字发表了评论，请基于以下信息给出有深度的回应：
-页面：${location.href}
-用户划线内容：「${c.excerpt || "（无）"}」
-用户评论：${c.text}
-
-要求：
-- 直接回应用户的观点，有话直说
-- 结合项目背景给出对创业方向有价值的判断
-- 中文回答，不超过300字`;
-
     try {
-      const reply = await new Promise((resolve, reject) => {
-        chrome.runtime.sendMessage(
-          { type: "CALL_AI", data: { systemPrompt, messages: [{ role: "user", content: c.text }] } },
-          (resp) => {
-            if (resp && resp.success) resolve(resp.reply);
-            else reject(new Error(resp?.error || "AI 调用失败"));
-          }
-        );
-      });
-      addReply(commentId, reply, true);
-      localStorage.setItem('__kb_last_ai_reply', JSON.stringify({ commentId, reply, ok: true, ts: Date.now() }));
-      // 回写 Notion：评论 + AI 回复一起存
-      saveCommentToNotion(c, reply);
+      let agentCommentId = c.agentCommentId;
+
+      // 如果已有 agentCommentId，rerun；否则新建
+      if (agentCommentId) {
+        await fetch(`http://localhost:8766/comments/${agentCommentId}/rerun`, { method: "POST" });
+      } else {
+        const resp = await fetch("http://localhost:8766/comments", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            page_url: location.href,
+            page_title: document.title,
+            selected_text: c.excerpt || "",
+            comment: c.text,
+          }),
+        });
+        if (!resp.ok) throw new Error("agent_api 不可用");
+        const data = await resp.json();
+        agentCommentId = data.id;
+        // 存回 localStorage
+        const fresh = load();
+        const match = fresh.find(x => x.id === commentId);
+        if (match) { match.agentCommentId = agentCommentId; save(fresh); }
+      }
+
+      // 轮询等待 agent 回复（每3秒，最多30次=90秒）
+      let reply = null;
+      let replyDebugMeta = null;
+      for (let i = 0; i < 30; i++) {
+        await new Promise(r => setTimeout(r, 3000));
+        const pollResp = await fetch(`http://localhost:8766/comments/${agentCommentId}`);
+        if (!pollResp.ok) continue;
+        const data = await pollResp.json();
+        const agentReplies = data.replies.filter(r => r.author === "agent");
+        if (agentReplies.length > 0) {
+          const lastReply = agentReplies[agentReplies.length - 1];
+          reply = lastReply.content;
+          replyDebugMeta = lastReply.debug_meta || null;
+          break;
+        }
+      }
+
+      if (reply) {
+        addReply(commentId, reply, true, replyDebugMeta);
+        saveCommentToNotion(c, reply);
+      } else {
+        addReply(commentId, "AI 处理中，稍后刷新查看结果。", true);
+      }
     } catch (err) {
-      const errMsg = "AI 回复失败：" + err.message;
-      addReply(commentId, errMsg, true);
-      localStorage.setItem('__kb_last_ai_reply', JSON.stringify({ commentId, reply: errMsg, ok: false, ts: Date.now() }));
+      addReply(commentId, "AI 回复失败：" + err.message, true);
     }
+
     if (thinkingEl.parentNode) thinkingEl.remove();
     render();
   }

@@ -1,0 +1,8 @@
+# 知识库助手配置文件
+# 复制此文件为 ~/.kb_config，填入真实值后运行 setup.sh
+# chmod 600 ~/.kb_config
+
+NOTION_TOKEN=ntn_your_token_here
+NOTION_DATABASE_ID=your_32char_database_id_here
+CLAUDE_BIN=/Users/YOUR_USERNAME/.npm-global/bin/claude
+RESEARCH_DIR=/path/to/knowledge-base-extension/backend
