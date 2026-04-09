@@ -67,11 +67,13 @@ echo "  详细图文教程：https://github.com/getupyang/knowledge-base-extensi
 echo ""
 echo "  简要步骤："
 echo "  1. 打开 https://www.notion.so/my-integrations，创建 Integration，复制 Token"
-echo "  2. 在 Notion 创建数据库，点击右上角 ··· → Add connections → 选你的 Integration"
-echo "  3. 数据库 URL 中 notion.so/xxxxxxxx 里的 xxxxxxxx 就是 Database ID"
-echo "  4. 数据库需要以下字段（名称必须一致）："
+echo "  2. 在 Notion 新建页面 → 选 Database - Full page"
+echo "  3. 添加字段（名称必须一致）："
 echo "       标题(title)  来源平台(select)  来源URL(url)"
 echo "       原文片段(rich_text)  我的想法(rich_text)  评论区对话(rich_text)"
+echo "  4. ⚠️ 关键一步：打开数据库页面 → 右上角 ··· → Connections → 选你的 Integration"
+echo "     （不做这一步，插件写入 Notion 会报 'Could not find database' 错误）"
+echo "  5. 数据库 URL 中 notion.so/xxxxxxxx 里的 xxxxxxxx 就是 Database ID"
 echo ""
 
 if [ -f "$CONFIG_FILE" ]; then
