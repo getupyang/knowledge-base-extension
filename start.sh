@@ -47,7 +47,7 @@ echo "→ 启动 Agent API (8766)..."
 nohup python3 -m uvicorn agent_api:app --host 127.0.0.1 --port 8766 > "$LOG_DIR/agent_api.log" 2>&1 &
 AGENT_PID=$!
 
-sleep 2
+sleep 4
 
 # ── 验证 ──────────────────────────────────────────────────
 ALL_OK=true
