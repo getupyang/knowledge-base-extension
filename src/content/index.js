@@ -1,380 +1,23 @@
-const MODEL = "anthropic/claude-3.5-sonnet";
-
-let messages = [];
-let currentContext = null;
-let panelEl = null;
-
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "ADD_COMMENT") {
+    // 右键菜单触发：selection 已消失，先用文字匹配高亮，再打开评论面板
+    commentSystem.highlightByText(msg.excerpt);
     commentSystem.open(msg.excerpt, msg.url, msg.title);
     sendResponse({ ok: true });
     return;
   }
-  if (msg.type === "SHOW_INPUT_DIALOG") {
-    showInputDialog(msg.excerpt, msg.title, msg.url, msg.platform, (response) => {
-      sendResponse(response);
-    });
-    return true; // 保持异步channel
-  } else if (msg.type === "OPEN_CHAT_PANEL") {
-    openChatPanel(msg.context);
-  } else if (msg.type === "SAVE_SUCCESS") {
-    showToast("✓ 已保存到知识库", "success");
-  } else if (msg.type === "SAVE_ERROR") {
-    showToast("✗ 保存失败：" + msg.error, "error");
+  if (msg.type === "HIGHLIGHT_AND_SAVE") {
+    // 右键菜单触发高亮：此时 selection 已消失，用文字内容匹配恢复
+    commentSystem.highlightByText(msg.excerpt);
+    commentSystem.saveHighlightToNotion(msg.excerpt, msg.title, msg.url, msg.platform);
+    sendResponse({ ok: true });
+    return;
   }
 });
 
-// ─── 聊天侧边栏 ────────────────────────────────────────────
-
-function openChatPanel(context) {
-  currentContext = context;
-  messages = [];
-
-  // 已有panel则更新内容
-  if (panelEl) {
-    updatePanelContext();
-    return;
-  }
-
-  // 注入样式
-  if (!document.getElementById("kb-panel-style")) {
-    const style = document.createElement("style");
-    style.id = "kb-panel-style";
-    style.textContent = `
-      #kb-panel {
-        position: fixed;
-        top: 0; right: 0;
-        width: 380px;
-        height: 100vh;
-        background: #fff;
-        box-shadow: -4px 0 24px rgba(0,0,0,0.12);
-        z-index: 2147483647;
-        display: flex;
-        flex-direction: column;
-        font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-        font-size: 14px;
-        color: #333;
-      }
-      #kb-panel * { box-sizing: border-box; }
-      #kb-panel-header {
-        padding: 12px 16px;
-        border-bottom: 1px solid #eee;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        flex-shrink: 0;
-      }
-      #kb-panel-header h2 { font-size: 14px; font-weight: 600; }
-      #kb-panel-actions { display: flex; gap: 8px; align-items: center; }
-      #kb-save-btn {
-        padding: 5px 12px;
-        background: #10b981;
-        color: white;
-        border: none;
-        border-radius: 6px;
-        cursor: pointer;
-        font-size: 12px;
-        font-weight: 500;
-      }
-      #kb-save-btn:disabled { background: #ccc; cursor: not-allowed; }
-      #kb-close-btn {
-        background: none;
-        border: none;
-        cursor: pointer;
-        font-size: 18px;
-        color: #999;
-        padding: 0 4px;
-        line-height: 1;
-      }
-      #kb-excerpt {
-        margin: 12px 16px 0;
-        padding: 10px 12px;
-        background: #f8f8f8;
-        border-radius: 8px;
-        font-size: 12px;
-        color: #555;
-        line-height: 1.6;
-        border-left: 3px solid #10b981;
-        flex-shrink: 0;
-      }
-      #kb-excerpt-source {
-        font-size: 11px;
-        color: #aaa;
-        margin: 4px 16px 8px;
-        flex-shrink: 0;
-      }
-      #kb-chat-area {
-        flex: 1;
-        overflow-y: auto;
-        padding: 12px 16px;
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-        min-height: 0;
-      }
-      .kb-msg { display: flex; flex-direction: column; gap: 3px; }
-      .kb-msg-label { font-size: 11px; color: #aaa; font-weight: 500; }
-      .kb-msg-bubble {
-        padding: 9px 12px;
-        border-radius: 8px;
-        line-height: 1.6;
-        font-size: 13px;
-        white-space: pre-wrap;
-        word-break: break-word;
-        user-select: text;
-        -webkit-user-select: text;
-        cursor: text;
-      }
-      .kb-msg.user .kb-msg-bubble {
-        background: #f0fdf4;
-        border: 1px solid #d1fae5;
-        color: #065f46;
-      }
-      .kb-msg.assistant .kb-msg-bubble {
-        background: #f8f9fa;
-        border: 1px solid #eee;
-        color: #333;
-      }
-      .kb-msg.loading .kb-msg-bubble { color: #aaa; }
-      #kb-input-area {
-        padding: 12px 16px;
-        border-top: 1px solid #eee;
-        display: flex;
-        gap: 8px;
-        align-items: flex-end;
-        flex-shrink: 0;
-      }
-      #kb-user-input {
-        flex: 1;
-        border: 1px solid #e0e0e0;
-        border-radius: 8px;
-        padding: 8px 12px;
-        font-size: 13px;
-        font-family: inherit;
-        resize: none;
-        height: 60px;
-        outline: none;
-        line-height: 1.5;
-        color: #333;
-        background: #fff;
-      }
-      #kb-user-input:focus { border-color: #10b981; }
-      #kb-send-btn {
-        padding: 8px 14px;
-        background: #333;
-        color: white;
-        border: none;
-        border-radius: 8px;
-        cursor: pointer;
-        font-size: 13px;
-        height: 60px;
-      }
-      #kb-send-btn:disabled { background: #ccc; cursor: not-allowed; }
-    `;
-    document.head.appendChild(style);
-  }
-
-  panelEl = document.createElement("div");
-  panelEl.id = "kb-panel";
-  panelEl.innerHTML = `
-    <div id="kb-panel-header">
-      <h2>知识库助手</h2>
-      <div id="kb-panel-actions">
-        <button id="kb-save-btn" disabled>保存到Notion</button>
-        <button id="kb-close-btn">×</button>
-      </div>
-    </div>
-    <div id="kb-excerpt"></div>
-    <div id="kb-excerpt-source"></div>
-    <div id="kb-chat-area"></div>
-    <div id="kb-input-area">
-      <textarea id="kb-user-input" placeholder="输入问题（Cmd+Enter发送）"></textarea>
-      <button id="kb-send-btn">发送</button>
-    </div>
-  `;
-  document.body.appendChild(panelEl);
-
-  // 事件绑定
-  document.getElementById("kb-close-btn").addEventListener("click", () => {
-    panelEl.remove();
-    panelEl = null;
-  });
-  document.getElementById("kb-send-btn").addEventListener("click", sendMessage);
-  document.getElementById("kb-user-input").addEventListener("keydown", (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") sendMessage();
-  });
-  document.getElementById("kb-save-btn").addEventListener("click", saveConversation);
-
-  updatePanelContext();
-}
-
-function updatePanelContext() {
-  document.getElementById("kb-excerpt").textContent = `「${truncate(currentContext.excerpt, 200)}」`;
-  document.getElementById("kb-excerpt-source").textContent = `${currentContext.platform} · ${truncate(currentContext.title, 50)}`;
-  document.getElementById("kb-chat-area").innerHTML = "";
-  document.getElementById("kb-save-btn").disabled = true;
-  const input = document.getElementById("kb-user-input");
-  if (input) { input.disabled = false; input.focus(); }
-}
-
-async function sendMessage() {
-  const input = document.getElementById("kb-user-input");
-  const sendBtn = document.getElementById("kb-send-btn");
-  const text = input.value.trim();
-  if (!text || !currentContext) return;
-
-  input.value = "";
-  input.style.height = "60px";
-  input.disabled = true;
-  sendBtn.disabled = true;
-
-  appendMessage("user", text);
-  messages.push({ role: "user", content: text });
-
-  const loadingEl = appendMessage("assistant", "思考中...", true);
-
-  const systemPrompt = `你是用户的思考伙伴，帮助用户深度理解和延伸阅读内容。
-
-用户正在阅读：
-来源：${currentContext.platform} - ${currentContext.title}
-链接：${currentContext.url}
-原文片段：「${currentContext.excerpt}」
-
-要求：
-- 回答要有深度，不要为了简洁牺牲质量
-- 主动补充原文没有提到但高度相关的背景知识
-- 如果原文的观点值得挑战或有局限性，直接指出
-- 用中文回答`;
-
-  try {
-    const reply = await callAI(systemPrompt, messages);
-    loadingEl.classList.remove("loading");
-    loadingEl.querySelector(".kb-msg-bubble").textContent = reply;
-    messages.push({ role: "assistant", content: reply });
-    document.getElementById("kb-save-btn").disabled = false;
-  } catch (err) {
-    loadingEl.querySelector(".kb-msg-bubble").textContent = "出错了：" + err.message;
-  }
-
-  input.disabled = false;
-  sendBtn.disabled = false;
-  input.focus();
-}
-
-async function callAI(systemPrompt, msgs) {
-  const response = await chrome.runtime.sendMessage({
-    type: "CALL_AI",
-    data: { systemPrompt, messages: msgs }
-  });
-  if (response?.success) {
-    return response.reply;
-  }
-  throw new Error(response?.error || "AI请求失败");
-}
-
-function appendMessage(role, text, isLoading = false) {
-  const chatArea = document.getElementById("kb-chat-area");
-  const div = document.createElement("div");
-  div.className = `kb-msg ${role}${isLoading ? " loading" : ""}`;
-  div.innerHTML = `
-    <div class="kb-msg-label">${role === "user" ? "我" : "AI"}</div>
-    <div class="kb-msg-bubble">${escapeHtml(text)}</div>
-  `;
-  chatArea.appendChild(div);
-  chatArea.scrollTop = chatArea.scrollHeight;
-  return div;
-}
-
-async function saveConversation() {
-  if (!currentContext || messages.length === 0) return;
-  const saveBtn = document.getElementById("kb-save-btn");
-  saveBtn.disabled = true;
-  saveBtn.textContent = "保存中...";
-
-  const aiConversation = messages.map(m =>
-    `${m.role === "user" ? "Q" : "A"}: ${m.content}`
-  ).join("\n\n");
-
-  try {
-    const response = await chrome.runtime.sendMessage({
-      type: "SAVE_TO_NOTION",
-      data: {
-        title: currentContext.title,
-        url: currentContext.url,
-        platform: currentContext.platform,
-        excerpt: currentContext.excerpt,
-        thought: "",
-        aiConversation
-      }
-    });
-    if (response?.success) {
-      saveBtn.textContent = "✓ 已保存";
-      setTimeout(() => { saveBtn.textContent = "保存到Notion"; saveBtn.disabled = false; }, 2000);
-    } else {
-      throw new Error(response?.error || "未知错误");
-    }
-  } catch (err) {
-    console.error("保存失败详情:", err);
-    saveBtn.textContent = "保存失败";
-    saveBtn.disabled = false;
-  }
-}
-
-// ─── 快速保存弹框 ────────────────────────────────────────────
-
-function showInputDialog(excerpt, title, url, platform, callback) {
-  const existing = document.getElementById("kb-dialog");
-  if (existing) existing.remove();
-
-  const overlay = document.createElement("div");
-  overlay.id = "kb-dialog";
-  overlay.style.cssText = `
-    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-    z-index: 2147483646; background: rgba(0,0,0,0.3);
-    display: flex; align-items: center; justify-content: center;
-  `;
-
-  const box = document.createElement("div");
-  box.style.cssText = `
-    background: white; border-radius: 12px; padding: 20px;
-    width: 420px; max-width: 90vw;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.2);
-    font-family: -apple-system, sans-serif;
-  `;
-  box.innerHTML = `
-    <div style="font-size:12px;color:#888;margin-bottom:8px;">${platform} · ${truncate(title, 40)}</div>
-    <div style="font-size:13px;color:#444;background:#f8f8f8;padding:10px;border-radius:6px;margin-bottom:12px;line-height:1.5;max-height:80px;overflow:hidden;">
-      「${truncate(excerpt, 120)}」
-    </div>
-    <textarea id="kb-thought-input" placeholder="你的想法（可留空，Cmd+Enter保存）" style="
-      width:100%; box-sizing:border-box; height:80px;
-      border:1px solid #e0e0e0; border-radius:6px;
-      padding:8px 10px; font-size:14px; font-family:inherit;
-      resize:none; outline:none; line-height:1.5;
-      background:#fff; color:#333;
-    "></textarea>
-    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px;">
-      <button id="kb-dialog-cancel" style="padding:7px 16px;border:1px solid #e0e0e0;border-radius:6px;background:white;cursor:pointer;font-size:13px;color:#666;">取消</button>
-      <button id="kb-dialog-save" style="padding:7px 16px;border:none;border-radius:6px;background:#10b981;color:white;cursor:pointer;font-size:13px;font-weight:500;">保存</button>
-    </div>
-  `;
-  overlay.appendChild(box);
-  document.body.appendChild(overlay);
-
-  const textarea = box.querySelector("#kb-thought-input");
-  setTimeout(() => textarea.focus(), 50);
-
-  const doSave = () => { overlay.remove(); callback({ thought: textarea.value.trim() }); };
-  const doCancel = () => { overlay.remove(); callback(null); };
-
-  box.querySelector("#kb-dialog-save").addEventListener("click", doSave);
-  box.querySelector("#kb-dialog-cancel").addEventListener("click", doCancel);
-  textarea.addEventListener("keydown", (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") doSave();
-    if (e.key === "Escape") doCancel();
-  });
-  // 不允许点击遮罩关闭，避免误触
-}
+// ─── 旧聊天侧边栏已移除（由评论系统替代）────────────────────
+// REMOVED: openChatPanel, updatePanelContext, sendMessage, callAI,
+//          appendMessage, saveConversation, showInputDialog
 
 // ─── 工具函数 ────────────────────────────────────────────────
 
@@ -404,6 +47,153 @@ function escapeHtml(str) {
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>");
 }
 
+// ─── XPath 工具（高亮持久化用）────────────────────────────────
+
+function getXPath(node) {
+  if (node.nodeType === Node.TEXT_NODE) node = node.parentNode;
+  if (!node || node === document.body) return "/html/body";
+  const parts = [];
+  while (node && node !== document.body) {
+    let idx = 1;
+    let sib = node.previousSibling;
+    while (sib) { if (sib.nodeType === Node.ELEMENT_NODE && sib.nodeName === node.nodeName) idx++; sib = sib.previousSibling; }
+    parts.unshift(`${node.nodeName.toLowerCase()}[${idx}]`);
+    node = node.parentNode;
+  }
+  return "/html/body/" + parts.join("/");
+}
+
+function resolveXPath(xpath) {
+  try {
+    return document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+  } catch { return null; }
+}
+
+// ─── 小 bar（划线后出现的快捷操作栏）────────────────────────
+
+const selectionBar = (() => {
+  let barEl = null;
+  let hideTimer = null;
+  let savedExcerpt = "";
+  let savedRange = null;
+
+  function injectStyles() {
+    if (document.getElementById("kb-bar-style")) return;
+    const s = document.createElement("style");
+    s.id = "kb-bar-style";
+    s.textContent = `
+      #kb-sel-bar {
+        position: absolute;
+        z-index: 2147483647;
+        display: flex;
+        gap: 4px;
+        background: #1a1a1a;
+        border-radius: 8px;
+        padding: 5px 7px;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.28);
+        font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+        pointer-events: all;
+        white-space: nowrap;
+        transition: opacity 0.15s;
+      }
+      #kb-sel-bar button {
+        background: none;
+        border: none;
+        color: #fff;
+        font-size: 13px;
+        padding: 3px 8px;
+        border-radius: 5px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        transition: background 0.1s;
+      }
+      #kb-sel-bar button:hover { background: rgba(255,255,255,0.15); }
+      #kb-sel-bar .kb-bar-divider {
+        width: 1px; background: rgba(255,255,255,0.2);
+        margin: 2px 2px; border-radius: 1px;
+      }
+    `;
+    document.head.appendChild(s);
+  }
+
+  function show(rect, excerpt, range) {
+    injectStyles();
+    hide();
+    savedExcerpt = excerpt;
+    // 克隆 range 以免 selection 清除后失效
+    savedRange = range ? range.cloneRange() : null;
+
+    barEl = document.createElement("div");
+    barEl.id = "kb-sel-bar";
+    barEl.innerHTML = `
+      <button id="kb-bar-highlight" title="高亮保存">🖊️ 高亮</button>
+      <div class="kb-bar-divider"></div>
+      <button id="kb-bar-comment" title="添加评论">💬 评论</button>
+    `;
+
+    document.body.appendChild(barEl);
+
+    // 定位到选区上方
+    const scrollX = window.scrollX || window.pageXOffset;
+    const scrollY = window.scrollY || window.pageYOffset;
+    const barW = 160; // 估算宽度，实际渲染后会自适应
+    let left = rect.left + scrollX + rect.width / 2 - barW / 2;
+    let top = rect.top + scrollY - 44;
+    if (top < scrollY + 8) top = rect.bottom + scrollY + 8; // 空间不够则显示在下方
+    if (left < 8) left = 8;
+    barEl.style.left = left + "px";
+    barEl.style.top = top + "px";
+
+    barEl.querySelector("#kb-bar-highlight").addEventListener("click", (e) => {
+      e.stopPropagation();
+      hide();
+      commentSystem.doHighlight(savedExcerpt, savedRange);
+      commentSystem.saveHighlightToNotion(savedExcerpt, document.title, location.href, null);
+    });
+    barEl.querySelector("#kb-bar-comment").addEventListener("click", (e) => {
+      e.stopPropagation();
+      hide();
+      commentSystem.doHighlightAndOpenComment(savedExcerpt, savedRange);
+    });
+
+    // 3秒无操作自动消失
+    hideTimer = setTimeout(hide, 3000);
+    barEl.addEventListener("mouseenter", () => { clearTimeout(hideTimer); });
+    barEl.addEventListener("mouseleave", () => { hideTimer = setTimeout(hide, 1500); });
+  }
+
+  function hide() {
+    clearTimeout(hideTimer);
+    if (barEl) { barEl.remove(); barEl = null; }
+  }
+
+  // mouseup 监听：有选中文字时显示 bar
+  document.addEventListener("mouseup", (e) => {
+    // 如果点击在 bar 自身上，不处理
+    if (barEl && barEl.contains(e.target)) return;
+    // 如果点击在评论面板上，不处理
+    if (e.target.closest("#kb-comment-panel")) return;
+
+    setTimeout(() => {
+      const sel = window.getSelection();
+      const text = sel?.toString().trim() || "";
+      if (text.length < 3) { hide(); return; }
+      const range = sel.getRangeAt(0);
+      const rect = range.getBoundingClientRect();
+      show(rect, text, range);
+    }, 200); // 200ms 延迟，避免与页面自带菜单冲突
+  });
+
+  // 点击页面其他地方收起 bar
+  document.addEventListener("mousedown", (e) => {
+    if (barEl && !barEl.contains(e.target)) hide();
+  });
+
+  return { hide };
+})();
+
 // ─── 评论系统 ────────────────────────────────────────────────
 
 const DEBUG_MODE = true; // 发布时改为 false
@@ -432,6 +222,7 @@ const commentSystem = (() => {
     const c = { id: Date.now(), excerpt, text, createdAt: new Date().toISOString(), replies: [] };
     comments.unshift(c);
     save(comments);
+    setTimeout(updateBadge, 0);
     return c;
   }
   function addReply(commentId, replyText, isAI, debugMeta = null) {
@@ -443,38 +234,229 @@ const commentSystem = (() => {
     return c;
   }
 
-  // ── 高亮 ──
-  function highlightSelection(excerpt) {
-    const sel = window.getSelection();
-    if (!sel || sel.rangeCount === 0) return;
-    const range = sel.getRangeAt(0);
+  // ── highlights 持久化存储（独立于 comments）──
+  const HL_KEY = () => "kb_highlights_" + location.href.split("?")[0];
+  function loadHighlights() {
+    try { return JSON.parse(localStorage.getItem(HL_KEY()) || "[]"); } catch { return []; }
+  }
+  function saveHighlights(hls) {
+    localStorage.setItem(HL_KEY(), JSON.stringify(hls));
+  }
+  function addHighlight(excerpt, position) {
+    const hls = loadHighlights();
+    const h = { id: Date.now(), excerpt, position, createdAt: new Date().toISOString() };
+    hls.unshift(h);
+    saveHighlights(hls);
+    setTimeout(updateBadge, 0);
+    return h;
+  }
+
+  // ── 将 range 转为可序列化的 position ──
+  function serializeRange(range) {
+    try {
+      return {
+        startXPath: getXPath(range.startContainer),
+        startOffset: range.startOffset,
+        endXPath: getXPath(range.endContainer),
+        endOffset: range.endOffset,
+      };
+    } catch { return null; }
+  }
+
+  // ── 从 position 重建 range ──
+  function deserializeRange(pos) {
+    try {
+      const startNode = resolveXPath(pos.startXPath);
+      const endNode = resolveXPath(pos.endXPath);
+      if (!startNode || !endNode) return null;
+      // XPath 解析到元素节点时，取其对应的文本子节点
+      const startText = startNode.nodeType === Node.TEXT_NODE ? startNode : startNode.childNodes[pos.startOffset] || startNode.firstChild;
+      const endText = endNode.nodeType === Node.TEXT_NODE ? endNode : endNode.childNodes[pos.endOffset] || endNode.firstChild;
+      if (!startText || !endText) return null;
+      const r = document.createRange();
+      r.setStart(startNode.nodeType === Node.TEXT_NODE ? startNode : startNode, pos.startOffset);
+      r.setEnd(endNode.nodeType === Node.TEXT_NODE ? endNode : endNode, pos.endOffset);
+      return r;
+    } catch { return null; }
+  }
+
+  // ── 插入 <mark> 并绑定点击事件 ──
+  function insertMark(range, excerpt) {
     const mark = document.createElement("mark");
     mark.className = "kb-comment-highlight";
     mark.style.cssText = "background:#fef08a;border-radius:2px;cursor:pointer;padding:1px 0;";
     mark.title = "点击查看评论";
     try {
-      range.surroundContents(mark);
-      // 点击高亮：打开面板，不重新高亮（防止自我破坏）
+      // surroundContents 在跨节点时会抛异常，先尝试，失败再用 extractContents
+      try {
+        range.surroundContents(mark);
+      } catch {
+        // 跨节点选区：提取内容包入 mark
+        const fragment = range.extractContents();
+        mark.appendChild(fragment);
+        range.insertNode(mark);
+      }
       mark.addEventListener("click", (e) => {
         e.stopPropagation();
         currentExcerpt = excerpt;
-        buildPanel();
-        panelEl.classList.remove("kb-hidden");
+        // 确保面板打开，记录面板原本是否关闭（用于 flash 延迟计算）
+        if (!panelEl) buildPanel();
+        const wasPanelClosed = !panelOpen;
+        if (!panelOpen) {
+          panelOpen = true;
+          panelEl.classList.remove("kb-btn-hidden");
+          document.body.style.marginRight = "320px";
+          updateBadge();
+        }
         render();
-        // 滚动到对应评论卡片
+        // 找对应卡片，等面板滑出动画结束后滚动 + flash
         const comments = load();
         const match = comments.find(c => c.excerpt === excerpt);
         if (match) {
+          // 面板 slide 动画 250ms + buffer 100ms = 350ms 后再 flash
+          const flashDelay = wasPanelClosed ? 400 : 100;
           setTimeout(() => {
             const card = document.getElementById("kb-cmt-" + match.id);
-            if (card) card.scrollIntoView({ behavior: "smooth", block: "nearest" });
-          }, 100);
+            if (!card) return;
+            card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+            // flash 动画持续 600ms（更慢，用户能看清）
+            card.classList.remove("kb-flash");
+            void card.offsetWidth;
+            card.classList.add("kb-flash");
+            setTimeout(() => card.classList.remove("kb-flash"), 700);
+          }, flashDelay);
         }
       });
-    } catch (e) {
-      // 跨节点选区无法 surroundContents，忽略
+      return true;
+    } catch { return false; }
+  }
+
+  // ── 高亮（由小bar或右键菜单触发，range 存在）──
+  function doHighlight(excerpt, range) {
+    if (!range) return;
+    const position = serializeRange(range);
+    const ok = insertMark(range, excerpt); // 先插 mark，再清 selection
+    window.getSelection()?.removeAllRanges();
+    if (ok && position) {
+      addHighlight(excerpt, position);
     }
-    sel.removeAllRanges();
+  }
+
+  // ── 高亮 + 打开评论面板（点"评论"按钮）──
+  function doHighlightAndOpenComment(excerpt, range) {
+    doHighlight(excerpt, range);
+    open(excerpt, location.href, document.title);
+  }
+
+  // ── 右键菜单触发：selection 已消失，用文字内容在页面上匹配并高亮 ──
+  function highlightByText(excerpt) {
+    if (!excerpt) return;
+    // 用 TreeWalker 找到文本节点中匹配的位置
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      const idx = node.textContent.indexOf(excerpt);
+      if (idx !== -1) {
+        try {
+          const range = document.createRange();
+          range.setStart(node, idx);
+          range.setEnd(node, idx + excerpt.length);
+          const position = serializeRange(range);
+          insertMark(range, excerpt);
+          if (position) addHighlight(excerpt, position);
+        } catch { /* 跨节点忽略 */ }
+        return;
+      }
+    }
+  }
+
+  // ── 页面加载时恢复所有高亮 ──
+  function restoreHighlights() {
+    const hls = loadHighlights();
+    hls.forEach(h => {
+      if (!h.position) return;
+      const range = deserializeRange(h.position);
+      if (range) insertMark(range, h.excerpt);
+    });
+  }
+
+  // ── 高亮后静默保存 Notion ──
+  function saveHighlightToNotion(excerpt, title, url, platform) {
+    chrome.runtime.sendMessage({
+      type: "SAVE_TO_NOTION",
+      data: {
+        title: title || document.title,
+        url: url || location.href,
+        platform: platform || detectLocalPlatform(),
+        excerpt,
+        thought: "",
+        aiConversation: ""
+      }
+    }, (resp) => {
+      if (chrome.runtime.lastError) { showToast("✗ Notion 保存失败", "error"); return; }
+      if (resp && resp.success) {
+        showToast("✓ 已高亮并保存到 Notion", "success");
+      } else {
+        showToast("✗ Notion 保存失败：" + (resp?.error || "未知错误"), "error");
+      }
+    });
+  }
+
+  function detectLocalPlatform() {
+    const h = location.hostname;
+    if (h.includes('mp.weixin.qq.com')) return '公众号';
+    if (h.includes('substack.com')) return '博客';
+    if (h.includes('zhihu.com')) return '知乎';
+    if (h.includes('twitter.com') || h.includes('x.com')) return 'Twitter';
+    if (h.includes('localhost')) return '知识库';
+    return '网页';
+  }
+
+  // ── badge 常驻（有高亮或评论时显示，点击开关评论栏）──
+  let badgeEl = null;
+  let panelOpen = false;
+
+  function updateBadge() {
+    const comments = load();
+    const highlights = loadHighlights();
+    const total = comments.length + highlights.filter(h => !comments.find(c => c.excerpt === h.excerpt)).length;
+    if (total === 0) {
+      if (badgeEl) { badgeEl.remove(); badgeEl = null; }
+      return;
+    }
+    if (!badgeEl) {
+      badgeEl = document.createElement("button");
+      badgeEl.id = "kb-badge";
+      badgeEl.addEventListener("click", togglePanel);
+      document.body.appendChild(badgeEl);
+    }
+    badgeEl.innerHTML = panelOpen
+      ? `<span>›</span>`
+      : `<span style="font-size:16px">💬</span><span style="font-size:12px;margin-top:3px">${total}</span>`;
+    badgeEl.style.cssText = `
+      position: fixed; right: 0; top: 50%; transform: translateY(-50%);
+      z-index: 2147483646; width: 32px; padding: 8px 0;
+      background: #6366f1; color: white; border: none;
+      border-radius: 8px 0 0 8px; font-size: 13px; line-height: 1.4;
+      cursor: pointer; display: flex; flex-direction: column; align-items: center;
+      box-shadow: -2px 0 8px rgba(99,102,241,0.3);
+      font-family: -apple-system, sans-serif;
+      transition: background 0.15s;
+    `;
+  }
+
+  function togglePanel() {
+    if (!panelEl) buildPanel();
+    panelOpen = !panelOpen;
+    if (panelOpen) {
+      panelEl.classList.remove("kb-btn-hidden");
+      document.body.style.marginRight = "320px";
+      render();
+    } else {
+      panelEl.classList.add("kb-btn-hidden");
+      document.body.style.marginRight = "";
+    }
+    updateBadge();
   }
 
   // ── 注入样式 ──
@@ -483,17 +465,27 @@ const commentSystem = (() => {
     const s = document.createElement("style");
     s.id = "kb-comment-style";
     s.textContent = `
+      @keyframes kb-card-flash {
+        0%   { border-color: transparent; box-shadow: none; }
+        20%  { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,0.25); }
+        70%  { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,0.25); }
+        100% { border-color: transparent; box-shadow: none; }
+      }
+      .kb-cmt-card.kb-flash {
+        animation: kb-card-flash 0.6s ease-in-out 1;
+      }
       #kb-comment-panel {
-        position: fixed; top: 0; right: 0; width: 360px; height: 100vh;
+        position: fixed; top: 0; right: 0; width: 320px; height: 100vh;
         background: #fafafa; border-left: 1px solid #e8e8e8;
-        display: flex; flex-direction: column; z-index: 2147483647;
+        display: flex; flex-direction: column; z-index: 2147483645;
         font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
         font-size: 14px; color: #333; box-shadow: -4px 0 20px rgba(0,0,0,0.08);
         transform: translateX(0); transition: transform 0.25s ease;
+        overflow: hidden;
       }
-      #kb-comment-panel.kb-hidden { transform: translateX(100%); }
+      #kb-comment-panel.kb-btn-hidden { transform: translateX(100%); }
       #kb-cp-header {
-        padding: 14px 16px; border-bottom: 1px solid #e8e8e8;
+        padding: 12px 14px; border-bottom: 1px solid #e8e8e8;
         display: flex; align-items: center; justify-content: space-between;
         background: white; flex-shrink: 0;
       }
@@ -503,12 +495,35 @@ const commentSystem = (() => {
         padding: 3px 10px; font-size: 12px; cursor: pointer; color: #666;
       }
       #kb-cp-close:hover { border-color: #6366f1; color: #6366f1; }
-      #kb-cp-body { flex: 1; overflow-y: auto; padding: 12px; }
+      #kb-cp-body {
+        flex: 1; overflow-y: auto; padding: 10px;
+        position: relative;
+      }
       .kb-cmt-card {
         background: white; border-radius: 10px; padding: 12px 14px;
-        margin-bottom: 10px; border-left: 3px solid #6366f1;
+        border: 2px solid transparent;
         box-shadow: 0 1px 3px rgba(0,0,0,0.07);
+        margin-bottom: 8px;
+        transition: border-color 0.15s;
       }
+      .kb-cmt-card.kb-flash {
+        animation: kb-card-flash 0.15s ease-out 1;
+      }
+      .kb-cmt-content {
+        max-height: 300px; overflow: hidden; position: relative;
+        transition: max-height 0.3s ease;
+      }
+      .kb-cmt-content.expanded { max-height: none; overflow: visible; }
+      .kb-cmt-content.overflowing:not(.expanded)::after {
+        content: ''; position: absolute; bottom: 0; left: 0; right: 0;
+        height: 40px;
+        background: linear-gradient(transparent, white);
+      }
+      .kb-cmt-expand {
+        font-size: 11px; color: #6366f1; cursor: pointer; margin-top: 4px;
+        background: none; border: none; padding: 0; text-align: left;
+      }
+      .kb-cmt-expand:hover { text-decoration: underline; }
       .kb-cmt-quote {
         font-size: 11px; color: #888; font-style: italic;
         background: #fef9c3; border-left: 2px solid #fbbf24;
@@ -520,19 +535,58 @@ const commentSystem = (() => {
       .kb-cmt-text { font-size: 13px; line-height: 1.6; color: #333; margin-bottom: 8px; }
       .kb-cmt-meta { font-size: 11px; color: #bbb; margin-bottom: 8px; }
       .kb-reply {
-        border-radius: 8px; padding: 8px 10px; font-size: 12px;
-        line-height: 1.6; margin-bottom: 6px; white-space: pre-wrap;
+        border-radius: 6px; padding: 7px 9px; font-size: 12px;
+        line-height: 1.5; margin-bottom: 5px;
+        /* 不能加 white-space:pre-wrap，内部有 HTML（marked 解析），会撑出大量空白 */
       }
       .kb-reply.ai { background: #f8f7ff; border: 1px solid #ede9fe; color: #444; }
       .kb-reply.user { background: #f0fdf4; border: 1px solid #d1fae5; color: #444; }
-      .kb-reply-label { font-size: 10px; color: #9ca3af; margin-bottom: 3px; font-weight: 600; }
+      .kb-reply-label { font-size: 10px; color: #9ca3af; margin-bottom: 2px; font-weight: 600; }
+      .kb-reply-body { font-size: 12px; line-height: 1.5; margin: 0; }
+      .kb-reply.ai .kb-reply-body > p:first-child { margin-top: 0; }
+      .kb-reply.ai .kb-reply-body p { margin: 0 0 3px 0; }
+      .kb-reply.ai .kb-reply-body p:last-child { margin-bottom: 0; }
+      /* 用户回复用 pre-wrap 保留换行，但要包裹在 span 里避免影响 AI 的 HTML */
+      .kb-reply.user .kb-reply-body { white-space: pre-wrap; }
+      .kb-reply.ai .kb-reply-body ul, .kb-reply.ai .kb-reply-body ol { margin: 2px 0 4px 0; padding-left: 14px; }
+      .kb-reply.ai .kb-reply-body li { margin-bottom: 1px; }
+      .kb-reply.ai .kb-reply-body h1, .kb-reply.ai .kb-reply-body h2 { font-size: 12px; font-weight: 700; margin: 6px 0 2px; }
+      .kb-reply.ai .kb-reply-body h3, .kb-reply.ai .kb-reply-body h4 { font-size: 12px; font-weight: 600; margin: 4px 0 2px; }
+      .kb-reply.ai .kb-reply-body strong { font-weight: 700; }
+      .kb-reply.ai .kb-reply-body em { font-style: italic; }
+      .kb-reply.ai .kb-reply-body code { font-family: monospace; background: #f0eeff; padding: 1px 3px; border-radius: 3px; font-size: 11px; }
+      .kb-reply.ai .kb-reply-body pre { background: #f5f5f5; padding: 6px 8px; border-radius: 6px; overflow-x: auto; margin: 4px 0; }
+      .kb-reply.ai .kb-reply-body table { border-collapse: collapse; width: 100%; font-size: 11px; margin: 4px 0; }
+      .kb-reply.ai .kb-reply-body th, .kb-reply.ai .kb-reply-body td { border: 1px solid #e0e0e0; padding: 3px 5px; text-align: left; }
+      .kb-reply.ai .kb-reply-body th { background: #f8f8f8; font-weight: 600; }
+      .kb-reply.ai .kb-reply-body blockquote { border-left: 2px solid #c7d2fe; padding-left: 6px; margin: 3px 0; color: #6b7280; }
+      .kb-reply.ai .kb-reply-body a { color: #6366f1; text-decoration: none; }
+      .kb-reply.ai .kb-reply-body a:hover { text-decoration: underline; }
+      .kb-reply + .kb-reply { margin-top: 4px; }
+      .kb-inline-reply { margin-top: 6px; }
+      .kb-inline-reply textarea {
+        width: 100%; border: 1px solid #e0e0e0; border-radius: 6px;
+        padding: 6px 8px; font-size: 12px; font-family: inherit;
+        height: 54px; resize: none; outline: none; display: block;
+        background: #fff; color: #333; box-sizing: border-box;
+      }
+      .kb-inline-reply textarea:focus { border-color: #6366f1; }
+      .kb-inline-reply-actions { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+      .kb-reply-send { background: #333; color: white; border: none; border-radius: 5px; padding: 4px 10px; font-size: 11px; cursor: pointer; }
+      .kb-reply-send:hover { background: #111; }
+      .kb-reply-btn { background: none; border: none; color: #9ca3af; font-size: 11px; cursor: pointer; padding: 0; }
+      .kb-reply-btn:hover { color: #6366f1; }
       .kb-ai-btn {
         background: #6366f1; color: white; border: none; border-radius: 6px;
         padding: 5px 12px; font-size: 11px; cursor: pointer; margin-top: 4px;
       }
       .kb-ai-btn:hover { background: #4f46e5; }
       .kb-ai-btn:disabled { background: #c7d2fe; cursor: not-allowed; }
-      .kb-thinking { font-size: 11px; color: #9ca3af; padding: 4px 0; font-style: italic; }
+      .kb-thinking {
+        font-size: 11px; color: #6366f1; padding: 8px 10px; font-style: normal;
+        background: #f5f3ff; border-radius: 6px; margin-top: 6px; line-height: 1.6;
+        border-left: 2px solid #c7d2fe;
+      }
       #kb-cp-input-area {
         border-top: 1px solid #e8e8e8; padding: 12px; background: white; flex-shrink: 0;
       }
@@ -546,7 +600,7 @@ const commentSystem = (() => {
         width: 100%; border: 1px solid #e0e0e0; border-radius: 8px;
         padding: 8px 10px; font-size: 13px; font-family: inherit;
         height: 68px; resize: none; outline: none; display: block;
-        background: #fff; color: #333;
+        background: #fff; color: #333; box-sizing: border-box;
       }
       #kb-cp-textarea:focus { border-color: #6366f1; }
       #kb-cp-send-btn {
@@ -559,6 +613,7 @@ const commentSystem = (() => {
       .kb-debug { margin-top: 6px; }
       .kb-debug summary { font-size: 10px; color: #9ca3af; cursor: pointer; user-select: none; }
       .kb-debug-body { font-size: 10px; color: #9ca3af; line-height: 1.8; padding: 4px 0 0 8px; font-family: monospace; }
+      .kb-expand-hidden { display: none !important; }
     `;
     document.head.appendChild(s);
   }
@@ -587,7 +642,10 @@ const commentSystem = (() => {
     document.body.appendChild(panelEl);
 
     document.getElementById("kb-cp-close").addEventListener("click", () => {
-      panelEl.classList.add("kb-hidden");
+      panelOpen = false;
+      panelEl.classList.add("kb-btn-hidden");
+      document.body.style.marginRight = "";
+      updateBadge();
     });
     document.getElementById("kb-cp-send-btn").addEventListener("click", submitComment);
     document.getElementById("kb-cp-textarea").addEventListener("keydown", (e) => {
@@ -606,7 +664,7 @@ const commentSystem = (() => {
     if (!body) return;
     const comments = load();
     if (!comments.length) {
-      body.innerHTML = '<div class="kb-empty">选中文字，右键「💬 评论」添加第一条评论</div>';
+      body.innerHTML = '<div class="kb-empty">选中文字「💬 评论」添加第一条评论</div>';
       return;
     }
     body.innerHTML = comments.map(c => {
@@ -631,10 +689,14 @@ const commentSystem = (() => {
               </details>`;
           } catch (e) { /* 解析失败静默 */ }
         }
+        const safeText = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        const bodyHtml = r.isAI
+          ? (typeof marked !== "undefined" ? marked.parse(r.text) : safeText(r.text))
+          : `<span>${safeText(r.text)}</span>`; // pre-wrap 来自 CSS，不需要 <br>
         return `
         <div class="kb-reply ${r.isAI ? "ai" : "user"}">
           <div class="kb-reply-label">${r.isAI ? "🤖 AI" : "你"} · ${new Date(r.createdAt).toLocaleTimeString("zh",{hour:"2-digit",minute:"2-digit"})}</div>
-          ${escapeHtml(r.text)}
+          <div class="kb-reply-body">${bodyHtml}</div>
           ${debugHtml}
         </div>`;
       }).join("");
@@ -642,16 +704,123 @@ const commentSystem = (() => {
       return `
         <div class="kb-cmt-card" id="kb-cmt-${c.id}">
           ${c.excerpt ? `<div class="kb-cmt-quote">"${escapeHtml(c.excerpt.slice(0,100))}${c.excerpt.length>100?"…":""}"</div>` : ""}
-          <div class="kb-cmt-text">${escapeHtml(c.text)}</div>
-          <div class="kb-cmt-meta">${timeStr}</div>
-          ${repliesHtml}
-          ${!hasAI
-            ? `<button class="kb-ai-btn" data-ask-ai="${c.id}">✨ 召唤 AI 回复</button>`
-            : `<button class="kb-ai-btn" data-ask-ai="${c.id}" style="background:#e0e7ff;color:#4f46e5;">🔄 再次召唤</button>`
-          }
+          <div class="kb-cmt-content" id="kb-cmt-content-${c.id}">
+            <div class="kb-cmt-text">${escapeHtml(c.text)}</div>
+            <div class="kb-cmt-meta">${timeStr}</div>
+            ${repliesHtml}
+          </div>
+          <button class="kb-cmt-expand kb-expand-hidden" id="kb-cmt-expand-${c.id}" data-expand="${c.id}">展开全部 ↓</button>
+          <div style="display:flex;gap:6px;margin-top:6px;align-items:center;flex-wrap:wrap;">
+            ${!hasAI
+              ? `<button class="kb-ai-btn" data-ask-ai="${c.id}">✨ 召唤 AI</button>`
+              : `<button class="kb-ai-btn" data-ask-ai="${c.id}" style="background:#e0e7ff;color:#4f46e5;font-size:10px;">🔄 再次召唤</button>`
+            }
+            <button class="kb-reply-btn" data-open-reply="${c.id}">↩ 追问</button>
+          </div>
+          <div class="kb-inline-reply kb-expand-hidden" id="kb-inline-reply-${c.id}">
+            <textarea placeholder="追问 AI（Cmd+Enter 发送）..." id="kb-reply-ta-${c.id}"></textarea>
+            <div class="kb-inline-reply-actions">
+              <button class="kb-reply-send" data-send-reply="${c.id}">发送 + 召唤 AI</button>
+              <button class="kb-reply-btn" data-close-reply="${c.id}">取消</button>
+            </div>
+          </div>
         </div>
       `;
     }).join("");
+
+    // 检查每张卡片是否溢出，显示折叠按钮
+    comments.forEach(c => {
+      const contentEl = document.getElementById("kb-cmt-content-" + c.id);
+      const expandBtn = document.getElementById("kb-cmt-expand-" + c.id);
+      if (!contentEl || !expandBtn) return;
+      if (contentEl.scrollHeight > 300 + 10) {
+        contentEl.classList.add("overflowing");
+        expandBtn.classList.remove("kb-expand-hidden");
+      }
+    });
+  }
+
+  // 事件委托：折叠/展开 + 追问输入框
+  document.addEventListener("click", (e) => {
+    // 折叠/展开
+    const expandBtn = e.target.closest("[data-expand]");
+    if (expandBtn) {
+      const id = expandBtn.dataset.expand;
+      const contentEl = document.getElementById("kb-cmt-content-" + id);
+      if (!contentEl) return;
+      const isExpanded = contentEl.classList.toggle("expanded");
+      expandBtn.textContent = isExpanded ? "收起 ↑" : "展开全部 ↓";
+      return;
+    }
+    // 打开追问框
+    const openBtn = e.target.closest("[data-open-reply]");
+    if (openBtn) {
+      const id = openBtn.dataset.openReply;
+      const box = document.getElementById("kb-inline-reply-" + id);
+      if (box) { box.classList.remove("kb-expand-hidden"); document.getElementById("kb-reply-ta-" + id)?.focus(); }
+      return;
+    }
+    // 关闭追问框
+    const closeBtn = e.target.closest("[data-close-reply]");
+    if (closeBtn) {
+      const id = closeBtn.dataset.closeReply;
+      const box = document.getElementById("kb-inline-reply-" + id);
+      if (box) box.classList.add("kb-expand-hidden");
+      return;
+    }
+    // 发送追问
+    const sendBtn = e.target.closest("[data-send-reply]");
+    if (sendBtn) {
+      const id = parseInt(sendBtn.dataset.sendReply, 10);
+      submitReply(id);
+      return;
+    }
+  });
+
+  // Cmd+Enter 发送追问
+  document.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+      const ta = e.target.closest("[id^='kb-reply-ta-']");
+      if (ta) {
+        const id = parseInt(ta.id.replace("kb-reply-ta-", ""), 10);
+        submitReply(id);
+      }
+    }
+  });
+
+  // ── 提交追问（用户回复 AI，再触发 AI）──
+  async function submitReply(commentId) {
+    const ta = document.getElementById("kb-reply-ta-" + commentId);
+    if (!ta) return;
+    const text = ta.value.trim();
+    if (!text) return;
+    ta.value = "";
+    const box = document.getElementById("kb-inline-reply-" + commentId);
+    if (box) box.classList.add("kb-expand-hidden");
+
+    // 存到 localStorage replies（isAI=false）
+    addReply(commentId, text, false);
+    render();
+
+    // 同步到 agent_api（追加 user reply）
+    const comments = load();
+    const c = comments.find(x => x.id === commentId);
+    if (!c) return;
+    if (c.agentCommentId) {
+      try {
+        await fetch(`http://localhost:8766/comments/${c.agentCommentId}/reply`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: text }),
+        });
+      } catch { /* 离线时静默 */ }
+    }
+
+    // Notion 更新（追加对话内容）
+    updateNotionPage(c);
+
+    // 立即触发 AI 回复
+    askAI(commentId);
   }
 
   // ── 提交评论 ──
@@ -666,7 +835,8 @@ const commentSystem = (() => {
     const c = addComment(currentExcerpt, text);
     ta.value = "";
 
-    // 同步写入 agent_api（source of truth），存返回的 agent_comment_id 用于后续轮询
+    // 同步写入 agent_api（source of truth），仅存储，不触发 agent
+    // 用户点"召唤 AI 回复"时才真正触发，@xxx 只是意图标记
     try {
       const resp = await fetch("http://localhost:8766/comments", {
         method: "POST",
@@ -676,15 +846,15 @@ const commentSystem = (() => {
           page_title: document.title,
           selected_text: currentExcerpt || _savedSelection,
           comment: text,
+          no_agent: true,  // 告知后端不要立即触发 agent
         }),
       });
       if (resp.ok) {
         const data = await resp.json();
-        // 把 agent_api 的 id 存回 localStorage，供 askAI 轮询使用
         const comments = load();
         const match = comments.find(x => x.id === c.id);
         if (match) { match.agentCommentId = data.id; save(comments); }
-        status.textContent = `✓ 已发送 @${data.agent_type}`;
+        status.textContent = "✓ 已保存";
       } else {
         status.textContent = "✓ 已保存（agent 离线）";
       }
@@ -692,13 +862,16 @@ const commentSystem = (() => {
       status.textContent = "✓ 已保存（agent 离线）";
     }
 
+    // 评论提交时立即写一次 Notion，AI 回复完成后再 upsert 同一条
+    updateNotionPage(c);
+
     setTimeout(() => { status.textContent = ""; }, 3000);
     btn.disabled = false;
     render();
   }
 
-  // ── 回写 Notion ──
-  function saveCommentToNotion(comment, aiReply) {
+  // ── Notion upsert：每条划线/评论对应一个 Notion page，追加消息而非新建 ──
+  function updateNotionPage(comment) {
     const platform = (() => {
       const h = location.hostname;
       if (h.includes('localhost')) return '知识库';
@@ -708,20 +881,42 @@ const commentSystem = (() => {
       if (h.includes('twitter.com') || h.includes('x.com')) return 'Twitter';
       return '网页';
     })();
+    // 只有存在 AI 回复时才构建对话记录（首次纯用户评论不写对话字段）
+    // 格式：时间戳 + 角色 + 内容，按时间序
+    const hasAIReply = comment.replies.some(r => r.isAI);
+    const allMessages = hasAIReply ? [
+      `[${new Date(comment.createdAt).toLocaleString("zh")}] 你: ${comment.text}`,
+      ...comment.replies.map(r =>
+        `[${new Date(r.createdAt).toLocaleString("zh")}] ${r.isAI ? "AI" : "你"}: ${r.text}`
+      )
+    ].join("\n\n") : "";
+
     const title = `[评论] ${document.title.slice(0, 60)}`;
     chrome.runtime.sendMessage({
-      type: "SAVE_TO_NOTION",
+      type: "UPSERT_NOTION_PAGE",
       data: {
+        notionPageId: comment.notionPageId || null,  // 有则更新，无则新建
         title,
         url: location.href,
         platform,
         excerpt: comment.excerpt || "",
         thought: comment.text,
-        aiConversation: aiReply ? `AI: ${aiReply}` : ""
+        aiConversation: allMessages,
+        commentId: comment.id,  // 用于把新建的 page_id 存回 localStorage
       }
     }, (resp) => {
-      if (chrome.runtime.lastError) return; // 静默失败，不影响用户
-      if (resp && !resp.success) console.warn("[KB] Notion 写入失败:", resp.error);
+      if (chrome.runtime.lastError) { showToast("✗ Notion 保存失败", "error"); return; }
+      if (resp && resp.success) {
+        // 把 Notion page_id 存回 localStorage，下次直接更新同一条
+        if (resp.pageId && !comment.notionPageId) {
+          const comments = load();
+          const match = comments.find(x => x.id === comment.id);
+          if (match) { match.notionPageId = resp.pageId; save(comments); }
+        }
+        showToast("✓ 已保存到 Notion", "success");
+      } else if (resp && !resp.success) {
+        showToast("✗ Notion 保存失败：" + (resp.error || "未知错误"), "error");
+      }
     });
   }
 
@@ -736,14 +931,26 @@ const commentSystem = (() => {
     if (btn) { btn.disabled = true; btn.textContent = "AI 思考中..."; }
     const thinkingEl = document.createElement("div");
     thinkingEl.className = "kb-thinking";
-    thinkingEl.textContent = "AI 正在处理（最多90秒）...";
+    thinkingEl.textContent = "AI 思考中...";
     if (card) card.appendChild(thinkingEl);
 
     try {
       let agentCommentId = c.agentCommentId;
 
-      // 如果已有 agentCommentId，rerun；否则新建
+      // 构建完整对话历史作为 comment（首轮 + 所有追问）
+      const allUserMessages = [c.text, ...c.replies.filter(r => !r.isAI).map(r => r.text)];
+      const conversationComment = allUserMessages.join("\n\n---追问---\n\n");
+
+      // 如果已有 agentCommentId，rerun with latest conversation；否则新建
       if (agentCommentId) {
+        // 更新 comment 内容为完整对话再 rerun
+        try {
+          await fetch(`http://localhost:8766/comments/${agentCommentId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ comment: conversationComment }),
+          });
+        } catch { /* 旧版后端无此端点，静默 */ }
         await fetch(`http://localhost:8766/comments/${agentCommentId}/rerun`, { method: "POST" });
       } else {
         const resp = await fetch("http://localhost:8766/comments", {
@@ -753,23 +960,50 @@ const commentSystem = (() => {
             page_url: location.href,
             page_title: document.title,
             selected_text: c.excerpt || "",
-            comment: c.text,
+            comment: conversationComment,
+            no_agent: false,
           }),
         });
         if (!resp.ok) throw new Error("agent_api 不可用");
         const data = await resp.json();
         agentCommentId = data.id;
-        // 存回 localStorage
         const fresh = load();
         const match = fresh.find(x => x.id === commentId);
         if (match) { match.agentCommentId = agentCommentId; save(fresh); }
       }
 
-      // 轮询等待 agent 回复（每3秒，最多30次=90秒）
+      // 轮询等待 agent 回复（每5秒，最多360次=30分钟）
       let reply = null;
       let replyDebugMeta = null;
-      for (let i = 0; i < 30; i++) {
-        await new Promise(r => setTimeout(r, 3000));
+      const startPoll = Date.now();
+      // 根据 agent 类型和经过时间显示有意义的状态
+      const agentType = (() => {
+        const freshComments = load();
+        const fc = freshComments.find(x => x.id === commentId);
+        return fc ? (fc.text.match(/@(调研|竞品|思辨|解释)/)?.[1] || "思辨") : "思辨";
+      })();
+      const phases = agentType === "调研" || agentType === "竞品"
+        ? [
+            [0,  "🤖 Agent 已派出，正在加载上下文..."],
+            [8,  "🔍 正在搜索相关信息（GitHub / ProductHunt / 36kr）..."],
+            [30, "📊 正在整理搜索结果..."],
+            [60, "🧠 正在综合分析，深度调研需要一些时间..."],
+            [120,"⏳ 仍在处理，复杂调研可能需要 5-10 分钟..."],
+          ]
+        : [
+            [0,  "🤖 Agent 已派出，正在思考..."],
+            [15, "🧠 正在深入分析..."],
+            [60, "⏳ 思考时间有点长，内容比较复杂..."],
+          ];
+      for (let i = 0; i < 360; i++) {
+        await new Promise(r => setTimeout(r, 5000));
+        const elapsed = Math.round((Date.now() - startPoll) / 1000);
+        // 找当前阶段文字
+        let phaseText = phases[0][1];
+        for (const [threshold, text] of phases) {
+          if (elapsed >= threshold) phaseText = text;
+        }
+        if (thinkingEl.parentNode) thinkingEl.textContent = `${phaseText} (${elapsed}s)`;
         const pollResp = await fetch(`http://localhost:8766/comments/${agentCommentId}`);
         if (!pollResp.ok) continue;
         const data = await pollResp.json();
@@ -784,9 +1018,11 @@ const commentSystem = (() => {
 
       if (reply) {
         addReply(commentId, reply, true, replyDebugMeta);
-        saveCommentToNotion(c, reply);
+        // 每次 AI 回复后更新 Notion（upsert：有 page 则追加，无则新建）
+        const freshC = load().find(x => x.id === commentId);
+        if (freshC) updateNotionPage(freshC);
       } else {
-        addReply(commentId, "AI 处理中，稍后刷新查看结果。", true);
+        addReply(commentId, "AI 仍在处理中，请稍候刷新页面查看结果。", true);
       }
     } catch (err) {
       addReply(commentId, "AI 回复失败：" + err.message, true);
@@ -796,10 +1032,9 @@ const commentSystem = (() => {
     render();
   }
 
-  // ── 对外接口（由右键菜单触发，先高亮再打开面板）──
+  // ── 对外接口：打开评论面板（高亮由调用方处理）──
   function open(excerpt, url, title) {
     currentExcerpt = excerpt;
-    highlightSelection(excerpt);  // 此时 selection 还在，安全
     buildPanel();
     // 更新输入区 quote 预览
     const qp = document.getElementById("kb-cp-quote-preview");
@@ -810,35 +1045,24 @@ const commentSystem = (() => {
     // 清空输入框，聚焦
     const ta = document.getElementById("kb-cp-textarea");
     if (ta) { ta.value = ""; ta.focus(); }
-    panelEl.classList.remove("kb-hidden");
+    panelOpen = true;
+    panelEl.classList.remove("kb-btn-hidden");
+    document.body.style.marginRight = "320px";
     render();
+    updateBadge();
   }
 
-  // 页面加载时自动渲染已有评论
+  // 页面加载时恢复高亮 + 渲染已有评论
   function init() {
+    restoreHighlights();
     const comments = load();
     if (comments.length > 0) {
       buildPanel();
-      panelEl.classList.add("kb-hidden"); // 有历史评论但不自动弹出
+      panelEl.classList.add("kb-btn-hidden");
       render();
-      // 显示一个悬浮按钮提示有历史评论
-      const badge = document.createElement("button");
-      badge.id = "kb-comment-badge";
-      badge.textContent = `💬 ${comments.length}`;
-      badge.style.cssText = `
-        position: fixed; bottom: 24px; right: 24px; z-index: 2147483646;
-        background: #6366f1; color: white; border: none; border-radius: 20px;
-        padding: 8px 14px; font-size: 13px; cursor: pointer;
-        box-shadow: 0 4px 12px rgba(99,102,241,0.4);
-        font-family: -apple-system, sans-serif;
-      `;
-      badge.addEventListener("click", () => {
-        if (!panelEl) buildPanel();
-        panelEl.classList.remove("kb-hidden");
-        badge.remove();
-      });
-      document.body.appendChild(badge);
     }
+    // badge 响应式更新：有高亮或评论时常驻显示
+    updateBadge();
   }
 
   document.addEventListener("DOMContentLoaded", init);
@@ -852,5 +1076,5 @@ const commentSystem = (() => {
     }
   });
 
-  return { open, render, load };
+  return { open, render, load, doHighlight, doHighlightAndOpenComment, highlightByText, saveHighlightToNotion };
 })();

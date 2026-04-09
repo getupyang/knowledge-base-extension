@@ -9,21 +9,36 @@ async function getConfig() {
   });
 }
 
+// 启动时自动从 agent_api 拉取 Notion 配置写入 storage（避免重装插件后需要手动填）
+async function autoLoadConfig() {
+  try {
+    const existing = await chrome.storage.local.get(["notionToken", "databaseId"]);
+    if (existing.notionToken && existing.databaseId) return; // 已有配置，不覆盖
+    const resp = await fetch("http://localhost:8766/config");
+    if (!resp.ok) return;
+    const { notionToken, databaseId } = await resp.json();
+    if (notionToken && databaseId) {
+      await chrome.storage.local.set({ notionToken, databaseId });
+      console.log("[KB] 已从本地服务自动载入 Notion 配置");
+    }
+  } catch { /* 后端未启动，静默跳过 */ }
+}
+
+chrome.runtime.onStartup.addListener(autoLoadConfig);
+chrome.runtime.onInstalled.addListener(autoLoadConfig);
+
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({
-    id: "save-to-notion",
-    title: "保存到知识库",
-    contexts: ["selection"]
-  });
-  chrome.contextMenus.create({
-    id: "open-ai-chat",
-    title: "AI对话后保存",
-    contexts: ["selection"]
-  });
-  chrome.contextMenus.create({
-    id: "add-comment",
-    title: "💬 评论",
-    contexts: ["selection"]
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: "kb-highlight",
+      title: "🖊️ 高亮保存",
+      contexts: ["selection"]
+    });
+    chrome.contextMenus.create({
+      id: "kb-comment",
+      title: "💬 评论",
+      contexts: ["selection"]
+    });
   });
 });
 
@@ -33,34 +48,17 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const pageTitle = tab.title;
   const platform = detectPlatform(pageUrl);
 
-  if (info.menuItemId === "save-to-notion") {
-    // 发消息给content script显示弹框，通过sendResponse回传结果
+  if (info.menuItemId === "kb-highlight") {
     chrome.tabs.sendMessage(tab.id, {
-      type: "SHOW_INPUT_DIALOG",
+      type: "HIGHLIGHT_AND_SAVE",
       excerpt: selectedText,
       title: pageTitle,
       url: pageUrl,
       platform
-    }, async (response) => {
-      if (!response) return; // 用户取消
-      const thought = response.thought || "";
-      try {
-        await saveToNotion({ title: pageTitle, url: pageUrl, platform, excerpt: selectedText, thought, aiConversation: "" });
-        chrome.tabs.sendMessage(tab.id, { type: "SAVE_SUCCESS" }).catch(() => {});
-      } catch (err) {
-        chrome.tabs.sendMessage(tab.id, { type: "SAVE_ERROR", error: err.message }).catch(() => {});
-      }
-    });
-  }
-
-  if (info.menuItemId === "open-ai-chat") {
-    chrome.tabs.sendMessage(tab.id, {
-      type: "OPEN_CHAT_PANEL",
-      context: { excerpt: selectedText, title: pageTitle, url: pageUrl, platform }
     }).catch(() => {});
   }
 
-  if (info.menuItemId === "add-comment") {
+  if (info.menuItemId === "kb-comment") {
     chrome.tabs.sendMessage(tab.id, {
       type: "ADD_COMMENT",
       excerpt: selectedText,
@@ -85,6 +83,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "SAVE_TO_NOTION") {
     saveToNotion(msg.data)
       .then(() => sendResponse({ success: true }))
+      .catch(err => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+  if (msg.type === "UPSERT_NOTION_PAGE") {
+    upsertNotionPage(msg.data)
+      .then(pageId => sendResponse({ success: true, pageId }))
       .catch(err => sendResponse({ success: false, error: err.message }));
     return true;
   }
@@ -136,6 +140,60 @@ function splitRichText(str, max = 1990) {
   return chunks.slice(0, 100);
 }
 
+// 每条划线评论对应一个 Notion page：有 pageId 则更新，无则新建
+async function upsertNotionPage({ notionPageId, title, url, platform, excerpt, thought, aiConversation }) {
+  const { NOTION_TOKEN, DATABASE_ID } = await getConfig();
+  if (!NOTION_TOKEN) throw new Error("请先在插件设置中配置 Notion Token");
+  if (!DATABASE_ID) throw new Error("请先在插件设置中配置 Notion Database ID");
+
+  const headers = {
+    "Authorization": `Bearer ${NOTION_TOKEN}`,
+    "Content-Type": "application/json",
+    "Notion-Version": "2022-06-28"
+  };
+
+  // 只有当存在 AI 回复时才写 评论区对话 字段（避免第一条纯用户评论重复存两份）
+  const hasAIContent = aiConversation && aiConversation.includes("AI:");
+  const conversationField = hasAIContent
+    ? { 评论区对话: { rich_text: splitRichText(aiConversation) } }
+    : {};
+
+  if (notionPageId) {
+    // 更新已有 page
+    const res = await fetch(`https://api.notion.com/v1/pages/${notionPageId}`, {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({
+        properties: {
+          我的想法: { rich_text: splitRichText(thought) },
+          ...conversationField
+        }
+      })
+    });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.message || "Notion 更新失败"); }
+    return notionPageId;
+  } else {
+    // 新建 page（首次提交评论时创建，不含对话记录）
+    const body = {
+      parent: { database_id: DATABASE_ID },
+      properties: {
+        标题: { title: [{ text: { content: truncate(title, 100) } }] },
+        来源平台: { select: { name: platform } },
+        来源URL: { url },
+        原文片段: { rich_text: splitRichText(excerpt) },
+        我的想法: { rich_text: splitRichText(thought) },
+        ...conversationField
+      }
+    };
+    const res = await fetch("https://api.notion.com/v1/pages", {
+      method: "POST", headers, body: JSON.stringify(body)
+    });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.message || "Notion API错误"); }
+    const data = await res.json();
+    return data.id;
+  }
+}
+
 async function saveToNotion({ title, url, platform, excerpt, thought, aiConversation }) {
   const { NOTION_TOKEN, DATABASE_ID } = await getConfig();
   if (!NOTION_TOKEN) throw new Error("请先在插件设置中配置 Notion Token");
@@ -148,7 +206,7 @@ async function saveToNotion({ title, url, platform, excerpt, thought, aiConversa
       来源URL: { url: url },
       原文片段: { rich_text: splitRichText(excerpt) },
       我的想法: { rich_text: splitRichText(thought) },
-      AI对话: { rich_text: splitRichText(aiConversation) }
+      评论区对话: { rich_text: splitRichText(aiConversation) }
     }
   };
 

@@ -21,6 +21,7 @@ source "$CONFIG_FILE"
 export KB_NOTION_TOKEN="$NOTION_TOKEN"
 export KB_NOTION_DATABASE_ID="$NOTION_DATABASE_ID"
 export KB_CLAUDE_BIN="$CLAUDE_BIN"
+export HOME="$HOME"  # 显式传递，防止 uvicorn 子进程丢失 HOME 导致 claude 找不到认证配置
 # RESEARCH_DIR：server.py 的文档根目录，从 ~/.kb_config 读（指向用户的私人 MD 文件目录）
 # agent_api 的数据目录固定用 BACKEND_DIR
 export RESEARCH_DIR="${RESEARCH_DIR:-$BACKEND_DIR}"

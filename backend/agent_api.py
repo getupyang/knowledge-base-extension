@@ -81,6 +81,22 @@ def init_db():
 init_db()
 
 # ──────────────────────────────────────────
+# 启动诊断日志（帮助新用户排查问题）
+# ──────────────────────────────────────────
+
+def _startup_check():
+    claude_bin = os.environ.get("KB_CLAUDE_BIN") or os.path.expanduser("~/.npm-global/bin/claude")
+    notion_ok = bool(os.environ.get("KB_NOTION_TOKEN") or os.environ.get("NOTION_TOKEN"))
+    print(f"[agent_api] 数据库: {DB_PATH} ({'✓' if os.path.exists(DB_PATH) else '✗ 不存在'})")
+    print(f"[agent_api] Claude: {claude_bin} ({'✓' if os.path.exists(claude_bin) else '✗ 未找到'})")
+    print(f"[agent_api] Notion Token: {'✓ 已配置' if notion_ok else '✗ 未配置'}")
+    print(f"[agent_api] HOME: {os.environ.get('HOME', '未设置')}")
+    if not os.path.exists(claude_bin):
+        print(f"[agent_api] ⚠ claude 二进制未找到，agent 调用将失败。请检查 ~/.kb_config 中的 CLAUDE_BIN")
+
+_startup_check()
+
+# ──────────────────────────────────────────
 # Agent 路由配置
 # ──────────────────────────────────────────
 
@@ -116,7 +132,7 @@ AGENT_PROMPTS = {
 ## 给命题方的机会缺口
 最后必须回答：「这个竞品给命题方留下的最大可执行机会是什么？请给出具体的产品切入点（不超过2个），并说明为什么命题方在6个月内能做到。」
 
-中文回答。""",
+中文回答。引用英文内容时，必须附中文翻译，格式：中文翻译（英文原文）。""",
 
     "思辨": """你是思辨讨论伙伴，熟悉这个项目的背景。
 
@@ -150,7 +166,7 @@ AGENT_PROMPTS = {
 3. 覆盖中英文市场
 4. 给出调研发现 + 启发性问题
 
-中文回答。""",
+中文回答。引用英文内容时，必须附中文翻译，格式：中文翻译（英文原文）。""",
 
     "解释": """你是知识讲解助手，熟悉这个项目背景。
 
@@ -165,7 +181,7 @@ AGENT_PROMPTS = {
 2. 结合项目背景说明和我们方向的关联
 3. 如果有延伸价值，顺带提出
 
-中文回答。""",
+中文回答。引用英文内容时，必须附中文翻译，格式：中文翻译（英文原文）。""",
 }
 
 DEFAULT_AGENT = "思辨"
@@ -250,32 +266,42 @@ def run_agent(comment_id: int, agent_type: str, prompt: str):
     prompt_tokens_est = len(prompt) // 4
     status = "error"
     content = ""
+    print(f"[agent_api] 开始处理 comment_id={comment_id} agent_type=@{agent_type} prompt_len={len(prompt)}")
 
     # 路径从环境变量读（由 start.sh 注入），fallback 到常见位置
     CLAUDE_BIN = (
         os.environ.get("KB_CLAUDE_BIN") or
         os.path.expanduser("~/.npm-global/bin/claude")
     )
+    # 确保子进程继承当前进程的完整环境（PATH、HOME、认证配置等）
+    child_env = os.environ.copy()
+    child_env.setdefault("HOME", os.path.expanduser("~"))
     try:
         result = subprocess.run(
             [CLAUDE_BIN, "-p", prompt, "--output-format", "json", "--dangerously-skip-permissions"],
             capture_output=True,
             text=True,
-            timeout=300  # 5分钟超时
+            timeout=1800,  # 30分钟超时
+            env=child_env
         )
         if result.returncode == 0:
             data = json.loads(result.stdout)
             content = data.get("result", "（Agent 未返回内容）")
             status = "success"
         else:
-            content = f"Agent 执行出错：{result.stderr[:500]}"
+            # 同时捕获 stdout（可能有部分输出）和 stderr
+            err_detail = (result.stderr or result.stdout or "（无错误信息）")[:1000]
+            content = f"Agent 执行出错（returncode={result.returncode}）：{err_detail}"
+            print(f"[agent_api] run_agent error: rc={result.returncode} stderr={result.stderr[:200]} stdout={result.stdout[:200]}")
     except subprocess.TimeoutExpired:
-        content = "Agent 超时（5分钟），请重试。"
+        content = "Agent 超时（30分钟），深度调研仍未完成，请重试。"
     except Exception as e:
         content = f"Agent 调用失败：{str(e)}"
+        print(f"[agent_api] run_agent exception: {e}")
 
     elapsed = round(time.time() - start_time, 1)
     reply_tokens_est = len(content) // 4
+    print(f"[agent_api] 完成 comment_id={comment_id} status={status} elapsed={elapsed}s reply_len={len(content)}")
 
     # 从 comments 表查询原始数据，用于 debug_meta 上下文推断
     try:
@@ -324,6 +350,7 @@ class CommentCreate(BaseModel):
     page_title: str = ""
     selected_text: str = ""
     comment: str
+    no_agent: bool = False  # True 时仅存储，不触发 agent（用户手动召唤时再触发）
 
 class ReplyCreate(BaseModel):
     content: str
@@ -364,15 +391,19 @@ def create_comment(body: CommentCreate):
     if notion_memory:
         prompt = notion_memory + "\n\n---\n\n" + prompt
 
-    # 后台线程跑 agent，不阻塞响应
-    thread = threading.Thread(target=run_agent, args=(comment_id, agent_type, prompt), daemon=True)
-    thread.start()
+    # no_agent=True 时仅存储，不触发后台 agent（用户手动召唤时再触发）
+    if not body.no_agent:
+        thread = threading.Thread(target=run_agent, args=(comment_id, agent_type, prompt), daemon=True)
+        thread.start()
+        message = f"评论已创建，@{agent_type} agent 正在处理中..."
+    else:
+        message = "评论已存储，等待手动召唤 AI"
 
     return {
         "id": comment_id,
         "agent_type": agent_type,
         "status": "open",
-        "message": f"评论已创建，@{agent_type} agent 正在处理中..."
+        "message": message
     }
 
 @app.get("/comments")
@@ -418,6 +449,22 @@ def get_comment(comment_id: int):
     comment["replies"] = [dict(r) for r in replies]
     conn.close()
     return comment
+
+class CommentPatch(BaseModel):
+    comment: str = None
+
+@app.patch("/comments/{comment_id}")
+def patch_comment(comment_id: int, body: CommentPatch):
+    """更新评论内容（用于追问时把完整对话历史写入）"""
+    conn = sqlite3.connect(DB_PATH)
+    if body.comment is not None:
+        conn.execute(
+            "UPDATE comments SET comment = ?, updated_at = ? WHERE id = ?",
+            (body.comment, datetime.now().isoformat(), comment_id)
+        )
+    conn.commit()
+    conn.close()
+    return {"ok": True}
 
 @app.post("/comments/{comment_id}/reply")
 def add_reply(comment_id: int, body: ReplyCreate):
@@ -481,3 +528,25 @@ def rerun_agent(comment_id: int):
 @app.get("/health")
 def health():
     return {"status": "ok", "db": DB_PATH}
+
+@app.get("/debug-env")
+def debug_env():
+    """验收用：确认 uvicorn 子进程的关键环境变量正确（不暴露敏感 token）"""
+    import shutil
+    claude_bin = os.environ.get("KB_CLAUDE_BIN") or os.path.expanduser("~/.npm-global/bin/claude")
+    return {
+        "HOME": os.environ.get("HOME", "（未设置）"),
+        "claude_bin": claude_bin,
+        "claude_bin_exists": os.path.exists(claude_bin),
+        "notion_token_set": bool(os.environ.get("NOTION_TOKEN") or os.environ.get("KB_NOTION_TOKEN")),
+        "db_path": DB_PATH,
+        "db_exists": os.path.exists(DB_PATH),
+    }
+
+@app.get("/config")
+def get_config():
+    """供插件 background 启动时自动拉取 Notion 配置，写入 chrome.storage"""
+    return {
+        "notionToken": os.environ.get("NOTION_TOKEN", ""),
+        "databaseId": os.environ.get("NOTION_DATABASE_ID", ""),
+    }

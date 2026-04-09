@@ -99,7 +99,7 @@ open backend/project_context.md
 1. 打开 Chrome，地址栏输入 `chrome://extensions`
 2. 右上角开启「开发者模式」
 3. 点击「加载已解压的扩展程序」
-4. 选择 `knowledge-base-extension` 目录（即本仓库根目录）
+4. 选择下载解压后的 `knowledge-base-extension` 文件夹（即包含 `manifest.json` 的那个目录）
 
 插件图标出现在工具栏即为成功。点击插件图标，填入 Notion Token 和 Database ID（与 `~/.kb_config` 一致）。
 
