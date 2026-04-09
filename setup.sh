@@ -71,7 +71,7 @@ echo "  2. 在 Notion 创建数据库，点击右上角 ··· → Add connectio
 echo "  3. 数据库 URL 中 notion.so/xxxxxxxx 里的 xxxxxxxx 就是 Database ID"
 echo "  4. 数据库需要以下字段（名称必须一致）："
 echo "       标题(title)  来源平台(select)  来源URL(url)"
-echo "       原文片段(rich_text)  我的想法(rich_text)  AI对话(rich_text)"
+echo "       原文片段(rich_text)  我的想法(rich_text)  评论区对话(rich_text)"
 echo ""
 
 if [ -f "$CONFIG_FILE" ]; then

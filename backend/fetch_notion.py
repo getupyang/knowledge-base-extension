@@ -72,7 +72,7 @@ def format_entries(entries):
         url = props.get("来源URL", {}).get("url", "") or ""
         excerpt = get_text(props.get("原文片段", {}))
         thought = get_text(props.get("我的想法", {}))
-        ai_conv = get_text(props.get("AI对话", {}))
+        ai_conv = get_text(props.get("评论区对话", {}))
         created = e.get("created_time", "")[:10]
 
         lines.append(f"## {title or '(无标题)'}")
@@ -84,7 +84,7 @@ def format_entries(entries):
         if thought:
             lines.append(f"- **我的想法：{thought}**")
         if ai_conv:
-            lines.append(f"- AI对话：{ai_conv[:200]}{'...' if len(ai_conv) > 200 else ''}")
+            lines.append(f"- 评论区对话：{ai_conv[:200]}{'...' if len(ai_conv) > 200 else ''}")
         lines.append("")
 
     return "\n".join(lines)
@@ -95,7 +95,8 @@ if __name__ == "__main__":
     output = format_entries(entries)
 
     # 写入文件供Claude读取
-    outfile = "/Users/getupyang/research/.notion_cache.md"
+    root = os.environ.get("RESEARCH_DIR", os.path.dirname(os.path.abspath(__file__)))
+    outfile = os.path.join(root, ".notion_cache.md")
     with open(outfile, "w", encoding="utf-8") as f:
         f.write(output)
 

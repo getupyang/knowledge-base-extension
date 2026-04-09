@@ -59,7 +59,7 @@ claude --version
 | 来源URL | URL |
 | 原文片段 | Text |
 | 我的想法 | Text |
-| AI对话 | Text |
+| 评论区对话 | Text |
 
 **3.3 连接 Integration**
 
