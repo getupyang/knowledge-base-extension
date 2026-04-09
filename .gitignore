@@ -14,6 +14,10 @@ backend/comments.db
 backend/.notion_cache.md
 backend/project_context.md
 
+# 开发过程文档，不开源
+CLAUDE.md
+docs/
+
 # 密钥配置
 .kb_config
 *.kb_config
