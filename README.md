@@ -50,20 +50,23 @@ claude --version
 
 **3.2 创建数据库**
 
-在 Notion 新建一个 Database（Full page），添加以下字段（名称必须一致）：
+1. 在 Notion 左侧栏点击 `+` 新建页面
+2. 选择 **Database - Full page**（不是 Table、不是 Inline）
+3. 给数据库起个名字（如"知识库"）
+4. 添加以下字段（点击列头的 `+` 新增，**名称必须完全一致**）：
 
-| 字段名 | 类型 |
-|--------|------|
-| 标题 | Title（默认已有） |
-| 来源平台 | Select |
-| 来源URL | URL |
-| 原文片段 | Text |
-| 我的想法 | Text |
-| 评论区对话 | Text |
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| 标题 | Title | 默认已有，不用新建 |
+| 来源平台 | Select | 新建列 → 类型选 Select |
+| 来源URL | URL | 新建列 → 类型选 URL |
+| 原文片段 | Text | 新建列 → 类型选 Text |
+| 我的想法 | Text | 新建列 → 类型选 Text |
+| 评论区对话 | Text | 新建列 → 类型选 Text |
 
 **3.3 连接 Integration**
 
-打开刚建的数据库页面 → 右上角 `···` → `Connections` → 选择你的 Integration
+打开刚建的数据库页面 → 右上角 `···` → `Connections` → 选择你刚创建的 Integration
 
 **3.4 获取 Database ID**
 
