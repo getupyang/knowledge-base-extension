@@ -72,9 +72,11 @@ claude --version
 
 数据库页面的 URL 格式：
 ```
-https://www.notion.so/你的名字/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx?v=...
+https://www.notion.so/你的名字/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx?v=yyyyyyyy
+                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                                这部分是 Database ID（?v= 之前）
 ```
-其中那串 32 位字符就是 **Database ID**。
+注意：`?v=` 后面的是 view ID，**不要复制错**。
 
 ### 第四步：运行安装脚本
 

@@ -73,7 +73,8 @@ echo "       标题(title)  来源平台(select)  来源URL(url)"
 echo "       原文片段(rich_text)  我的想法(rich_text)  评论区对话(rich_text)"
 echo "  4. ⚠️ 关键一步：打开数据库页面 → 右上角 ··· → Connections → 选你的 Integration"
 echo "     （不做这一步，插件写入 Notion 会报 'Could not find database' 错误）"
-echo "  5. 数据库 URL 中 notion.so/xxxxxxxx 里的 xxxxxxxx 就是 Database ID"
+echo "  5. 数据库 URL 中 notion.so/xxxxxxxx?v=... 里 ?v= 之前的 xxxxxxxx 就是 Database ID"
+echo "     （注意：?v= 后面的是 view ID，不要复制错）"
 echo ""
 
 if [ -f "$CONFIG_FILE" ]; then
