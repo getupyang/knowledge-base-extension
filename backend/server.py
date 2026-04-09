@@ -12,7 +12,8 @@ import urllib.parse
 from datetime import datetime
 import markdown
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+# 优先用 RESEARCH_DIR 环境变量（从 ~/.kb_config 读取），否则用脚本所在目录
+ROOT = os.environ.get("RESEARCH_DIR", os.path.dirname(os.path.abspath(__file__)))
 PORT = 8765
 
 HTML_TEMPLATE = """<!DOCTYPE html>

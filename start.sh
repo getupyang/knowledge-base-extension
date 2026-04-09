@@ -21,8 +21,9 @@ source "$CONFIG_FILE"
 export KB_NOTION_TOKEN="$NOTION_TOKEN"
 export KB_NOTION_DATABASE_ID="$NOTION_DATABASE_ID"
 export KB_CLAUDE_BIN="$CLAUDE_BIN"
-export KB_RESEARCH_DIR="$BACKEND_DIR"
-export RESEARCH_DIR="$BACKEND_DIR"
+# RESEARCH_DIR：server.py 的文档根目录，从 ~/.kb_config 读（指向用户的私人 MD 文件目录）
+# agent_api 的数据目录固定用 BACKEND_DIR
+export RESEARCH_DIR="${RESEARCH_DIR:-$BACKEND_DIR}"
 
 # ── 检查并停止已有进程 ────────────────────────────────────
 for PORT in 8765 8766; do
