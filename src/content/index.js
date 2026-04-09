@@ -284,7 +284,7 @@ const commentSystem = (() => {
   function insertMark(range, excerpt) {
     const mark = document.createElement("mark");
     mark.className = "kb-comment-highlight";
-    mark.style.cssText = "background:#fef08a;border-radius:2px;cursor:pointer;padding:1px 0;";
+    mark.style.cssText = "background:#e8e0ff;border-radius:2px;cursor:pointer;padding:1px 0;";
     mark.title = "点击查看评论";
     try {
       // surroundContents 在跨节点时会抛异常，先尝试，失败再用 extractContents
