@@ -9,17 +9,15 @@ async function getConfig() {
   });
 }
 
-// 启动时自动从 agent_api 拉取 Notion 配置写入 storage（避免重装插件后需要手动填）
+// 启动时从 agent_api 拉取 Notion 配置写入 storage（后端 ~/.kb_config 为唯一配置源）
 async function autoLoadConfig() {
   try {
-    const existing = await chrome.storage.local.get(["notionToken", "databaseId"]);
-    if (existing.notionToken && existing.databaseId) return; // 已有配置，不覆盖
     const resp = await fetch("http://localhost:8766/config");
     if (!resp.ok) return;
     const { notionToken, databaseId } = await resp.json();
     if (notionToken && databaseId) {
       await chrome.storage.local.set({ notionToken, databaseId });
-      console.log("[KB] 已从本地服务自动载入 Notion 配置");
+      console.log("[KB] 已从本地服务同步 Notion 配置");
     }
   } catch { /* 后端未启动，静默跳过 */ }
 }
