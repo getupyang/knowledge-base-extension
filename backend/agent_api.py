@@ -51,9 +51,22 @@ def init_db():
             page_url TEXT NOT NULL,
             page_title TEXT,
             selected_text TEXT,       -- 用户划线的原文
+            surrounding_text TEXT,    -- 划线前后各200字，解决指代不清问题
             comment TEXT NOT NULL,    -- 用户的批注内容
             agent_type TEXT,          -- 从 @xxx 解析出来的 agent 类型
             status TEXT DEFAULT 'open',  -- open / resolved / tracking / archived
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    # 全文缓存表：按URL去重，首次评论时存，供长期理解用户信息摄入轨迹
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS page_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            page_url TEXT NOT NULL UNIQUE,
+            page_title TEXT,
+            full_text TEXT,           -- 页面全文
+            summary TEXT,             -- AI生成的摘要（异步填充）
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
@@ -71,10 +84,15 @@ def init_db():
         )
     """)
     # 兼容已有数据库：如果列不存在则添加
-    try:
-        conn.execute("ALTER TABLE replies ADD COLUMN debug_meta TEXT")
-    except Exception:
-        pass  # 列已存在，忽略
+    for col, table in [
+        ("debug_meta TEXT", "replies"),
+        ("surrounding_text TEXT", "comments"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col}")
+        except Exception:
+            pass  # 列已存在，忽略
+    # page_cache 表可能是新建的，上面 CREATE IF NOT EXISTS 已处理
     conn.commit()
     conn.close()
 
@@ -116,6 +134,8 @@ AGENT_PROMPTS = {
 用户划线内容：{selected_text}
 用户问题：{comment}
 
+**先判断这条批注在推进项目上下文里的哪个活跃问题（AQ），竞品分析要服务于该问题。**
+
 调研要求：
 1. 强制 WebSearch 搜索最新信息，禁止用训练数据填充。搜索覆盖：
    - Product Hunt、Reddit 用户评价
@@ -136,50 +156,66 @@ AGENT_PROMPTS = {
 
     "思辨": """你是思辨讨论伙伴，熟悉这个项目的背景。
 
-项目上下文：
+项目上下文（含用户当前在想的问题）：
 {project_context}
 
 当前页面：{page_url}
 用户划线内容：{selected_text}
 用户观点：{comment}
 
-要求：
-1. 认真对待用户的观点，先理解再回应
-2. 提供不同角度的思考，包括反驳和支持
-3. 结合项目实际情况给出判断
-4. 如果用户观点有重要缺漏，直接指出
+**意图判断（先做这一步再回复）：**
+用户批注可能有以下几种意图：
+1. 产品思考 — 文章激发了用户对自己项目的反思（最常见，也最容易被误读为"在评论文章"）
+2. 追问/深挖 — 信息不够，要深入
+3. 概念追问 — 不懂的概念需要解释
+4. 评价/反馈 — 对AI产出的评价（确认收到并说明改进即可，不需要长回复）
+
+**回复要求：**
+1. 先判断这条批注在推进项目上下文里的哪个活跃问题（AQ），基于该问题的上下文组织回复
+2. 如果和已有AQ都不相关，说明可能有新问题在涌现，指出来
+3. 认真对待用户的观点，先理解再回应
+4. 提供不同角度的思考，包括反驳和支持
+5. 结合项目实际情况给出判断
+6. 如果用户观点有重要缺漏，直接指出
 
 中文回答，不要说废话。""",
 
     "调研": """你是创业调研专家。
 
-项目上下文：
+项目上下文（含用户当前在想的问题）：
 {project_context}
 
 当前页面：{page_url}
 用户划线内容：{selected_text}
 调研问题：{comment}
 
+**先判断这条批注在推进项目上下文里的哪个活跃问题（AQ），调研方向要服务于该问题。**
+
 要求：
 1. 强制 WebSearch，搜索 GitHub、ProductHunt、36kr、量子位等平台
 2. 找真实数据，不用训练数据填充
 3. 覆盖中英文市场
-4. 给出调研发现 + 启发性问题
+4. 给出调研发现 + 对用户活跃问题的启发
 
 中文回答。引用英文内容时，必须附中文翻译，格式：中文翻译（英文原文）。""",
 
     "解释": """你是知识讲解助手，熟悉这个项目背景。
 
-项目上下文：
+项目上下文（含用户当前在想的问题）：
 {project_context}
 
 用户划线内容：{selected_text}
 用户问题：{comment}
 
-要求：
-1. 直接解释，不绕弯
-2. 结合项目背景说明和我们方向的关联
-3. 如果有延伸价值，顺带提出
+**意图判断（先做这一步再回复）：**
+用户可能是：概念追问（不懂，要解释）、产品思考（文章激发了项目反思）、或追问深挖（想了解更多）。
+如果是产品思考，不要只解释概念，要说清楚和用户项目的关联。
+
+**回复要求：**
+1. 先判断这条批注在推进项目上下文里的哪个活跃问题（AQ）
+2. 直接解释，不绕弯
+3. 结合项目背景说明和我们方向的关联
+4. 如果有延伸价值，顺带提出
 
 中文回答。引用英文内容时，必须附中文翻译，格式：中文翻译（英文原文）。""",
 }
@@ -278,7 +314,8 @@ def run_agent(comment_id: int, agent_type: str, prompt: str):
     child_env.setdefault("HOME", os.path.expanduser("~"))
     try:
         result = subprocess.run(
-            [CLAUDE_BIN, "-p", prompt, "--output-format", "json", "--dangerously-skip-permissions"],
+            [CLAUDE_BIN, "-p", prompt, "--output-format", "json", "--dangerously-skip-permissions",
+             "--system-prompt", "你是知识库助手的评论区 agent。直接回答用户的问题，不要执行任何 session 初始化流程（不要同步 Notion、不要读 todo、不要确认 session 阶段）。只根据下面的 prompt 内容回复。"],
             capture_output=True,
             text=True,
             timeout=1800,  # 30分钟超时
@@ -313,16 +350,28 @@ def run_agent(comment_id: int, agent_type: str, prompt: str):
     except Exception:
         has_selected_text = False
 
+    # 检查是否有前后文
+    try:
+        _conn2 = sqlite3.connect(DB_PATH)
+        _conn2.row_factory = sqlite3.Row
+        _row2 = _conn2.execute("SELECT surrounding_text FROM comments WHERE id = ?", (comment_id,)).fetchone()
+        _conn2.close()
+        has_surrounding = bool(_row2 and _row2["surrounding_text"] and _row2["surrounding_text"].strip())
+    except Exception:
+        has_surrounding = False
+
     debug_meta = json.dumps({
         "agent_type": agent_type,
         "elapsed_s": elapsed,
         "prompt_tokens_est": prompt_tokens_est,
         "reply_tokens_est": reply_tokens_est,
         "context_layers": {
-            "project_context": True,
-            "notion_memory": True,  # fetch_notion_memory 总是被调用（失败时返回空字符串）
+            "company_culture": True,
+            "project_context_with_aq": True,  # 含Active Questions
+            "notion_memory": True,
             "selected_text": has_selected_text,
-            "article_context": False  # 暂未实现
+            "surrounding_text": has_surrounding,
+            "article_context": False  # 全文摘要注入暂未实现
         },
         "status": status
     }, ensure_ascii=False)
@@ -342,6 +391,57 @@ def run_agent(comment_id: int, agent_type: str, prompt: str):
     conn.close()
 
 # ──────────────────────────────────────────
+# Prompt 构建 + Debug 日志
+# ──────────────────────────────────────────
+
+DEBUG_LOG_DIR = os.path.join(ROOT, "debug-logs")
+os.makedirs(DEBUG_LOG_DIR, exist_ok=True)
+
+def build_agent_prompt(agent_type: str, page_url: str, selected_text: str, surrounding_text: str, comment: str) -> str:
+    """构建完整的agent prompt，注入所有context层"""
+    company_culture = load_company_culture()
+    project_context = load_project_context()
+    notion_memory = fetch_notion_memory(15)
+
+    prompt_template = AGENT_PROMPTS.get(agent_type, AGENT_PROMPTS[DEFAULT_AGENT])
+
+    # 构建划线上下文：如果有前后文，拼接成更完整的上下文
+    text_context = selected_text
+    if surrounding_text and surrounding_text.strip():
+        text_context = f"[前后文] ...{surrounding_text}...\n[用户划线部分] {selected_text}"
+
+    prompt = prompt_template.format(
+        project_context=project_context,
+        page_url=page_url,
+        selected_text=text_context,
+        comment=comment,
+    )
+    # L1 文化层放最前，作为全局行为约束
+    if company_culture:
+        prompt = company_culture + "\n\n---\n\n" + prompt
+    if notion_memory:
+        prompt = notion_memory + "\n\n---\n\n" + prompt
+    return prompt
+
+def write_debug_log(comment_id: int, agent_type: str, prompt: str):
+    """把完整prompt写到debug-logs目录，方便排查"""
+    try:
+        now = datetime.now().strftime("%Y%m%d-%H%M%S")
+        filename = f"{now}_id{comment_id}_{agent_type}.md"
+        filepath = os.path.join(DEBUG_LOG_DIR, filename)
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(f"# Debug Log: Comment #{comment_id}\n")
+            f.write(f"**时间：** {now}\n")
+            f.write(f"**Agent类型：** @{agent_type}\n")
+            f.write(f"**Prompt长度：** {len(prompt)} 字符 ≈ {len(prompt)//4} tokens\n\n")
+            f.write("---\n\n")
+            f.write("## 完整 Prompt\n\n")
+            f.write(prompt)
+        print(f"[agent_api] debug log: {filepath}")
+    except Exception as e:
+        print(f"[agent_api] debug log写入失败: {e}")
+
+# ──────────────────────────────────────────
 # API 路由
 # ──────────────────────────────────────────
 
@@ -349,6 +449,8 @@ class CommentCreate(BaseModel):
     page_url: str
     page_title: str = ""
     selected_text: str = ""
+    surrounding_text: str = ""   # 划线前后各200字，解决指代不清
+    page_content: str = ""       # 页面全文（首次提交时传，后端按URL去重缓存）
     comment: str
     no_agent: bool = False  # True 时仅存储，不触发 agent（用户手动召唤时再触发）
 
@@ -366,30 +468,37 @@ def create_comment(body: CommentCreate):
 
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.execute(
-        """INSERT INTO comments (page_url, page_title, selected_text, comment, agent_type, status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, 'open', ?, ?)""",
-        (body.page_url, body.page_title, body.selected_text, cleaned_comment, agent_type, now, now)
+        """INSERT INTO comments (page_url, page_title, selected_text, surrounding_text, comment, agent_type, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)""",
+        (body.page_url, body.page_title, body.selected_text, body.surrounding_text or "", cleaned_comment, agent_type, now, now)
     )
     comment_id = cursor.lastrowid
+
+    # 全文缓存：按URL去重，首次存，后续复用
+    if body.page_content and body.page_content.strip():
+        try:
+            conn.execute(
+                """INSERT OR IGNORE INTO page_cache (page_url, page_title, full_text, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (body.page_url, body.page_title, body.page_content, now, now)
+            )
+        except Exception:
+            pass  # 重复URL，静默忽略
+
     conn.commit()
     conn.close()
 
-    # 构建 agent prompt（注入 L1 文化层 + Notion 记忆 + 项目上下文）
-    company_culture = load_company_culture()
-    project_context = load_project_context()
-    notion_memory = fetch_notion_memory(15)
-    prompt_template = AGENT_PROMPTS.get(agent_type, AGENT_PROMPTS[DEFAULT_AGENT])
-    prompt = prompt_template.format(
-        project_context=project_context,
+    # 构建 agent prompt
+    prompt = build_agent_prompt(
+        agent_type=agent_type,
         page_url=body.page_url,
         selected_text=body.selected_text or "（无划线内容）",
+        surrounding_text=body.surrounding_text or "",
         comment=cleaned_comment,
     )
-    # L1 文化层放最前，作为全局行为约束
-    if company_culture:
-        prompt = company_culture + "\n\n---\n\n" + prompt
-    if notion_memory:
-        prompt = notion_memory + "\n\n---\n\n" + prompt
+
+    # 写debug日志
+    write_debug_log(comment_id, agent_type, prompt)
 
     # no_agent=True 时仅存储，不触发后台 agent（用户手动召唤时再触发）
     if not body.no_agent:
@@ -506,21 +615,15 @@ def rerun_agent(comment_id: int):
         raise HTTPException(status_code=404, detail="Comment not found")
 
     c = dict(row)
-    company_culture = load_company_culture()
-    project_context = load_project_context()
-    notion_memory = fetch_notion_memory(15)
     agent_type = c["agent_type"] or DEFAULT_AGENT
-    prompt_template = AGENT_PROMPTS.get(agent_type, AGENT_PROMPTS[DEFAULT_AGENT])
-    prompt = prompt_template.format(
-        project_context=project_context,
+    prompt = build_agent_prompt(
+        agent_type=agent_type,
         page_url=c["page_url"],
         selected_text=c["selected_text"] or "（无划线内容）",
+        surrounding_text=c.get("surrounding_text", "") or "",
         comment=c["comment"],
     )
-    if company_culture:
-        prompt = company_culture + "\n\n---\n\n" + prompt
-    if notion_memory:
-        prompt = notion_memory + "\n\n---\n\n" + prompt
+    write_debug_log(comment_id, agent_type, prompt)
     thread = threading.Thread(target=run_agent, args=(comment_id, agent_type, prompt), daemon=True)
     thread.start()
     return {"message": f"已重新触发 @{agent_type} agent"}

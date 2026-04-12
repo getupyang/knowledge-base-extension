@@ -54,9 +54,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   .md-body code {{ background: #f4f4f4; padding: 2px 5px; border-radius: 4px; font-size: 12px; font-family: "SF Mono", monospace; }}
   .md-body pre {{ background: #1e1e2e; color: #cdd6f4; padding: 18px; border-radius: 8px; overflow-x: auto; margin: 14px 0; }}
   .md-body pre code {{ background: none; padding: 0; color: inherit; font-size: 13px; }}
-  .md-body table {{ width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 13px; }}
-  .md-body th {{ background: #f8f8f8; padding: 9px 12px; text-align: left; border: 1px solid #e8e8e8; font-weight: 600; }}
-  .md-body td {{ padding: 8px 12px; border: 1px solid #e8e8e8; }}
+  .md-body .table-wrap {{ overflow-x: auto; margin: 14px 0; }}
+  .md-body table {{ border-collapse: collapse; font-size: 13px; min-width: 100%; }}
+  .md-body th {{ background: #f8f8f8; padding: 9px 12px; text-align: left; border: 1px solid #e8e8e8; font-weight: 600; white-space: nowrap; }}
+  .md-body td {{ padding: 8px 12px; border: 1px solid #e8e8e8; white-space: nowrap; }}
   .md-body tr:hover td {{ background: #fafafa; }}
   .md-body a {{ color: #6366f1; text-decoration: none; }}
   .md-body a:hover {{ text-decoration: underline; }}
@@ -82,6 +83,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 def build_sidebar():
     html = '<a href="/" style="font-weight:600;color:#fff;">首页</a>'
+    html += '<div class="section-title">系统配置</div>'
+    html += '<a href="/claude" style="font-size:12px;">CLAUDE.md</a>'
+    html += '<a href="/skills" style="font-size:12px;">Skills</a>'
     topics_dir = os.path.join(ROOT, 'topics')
     if not os.path.exists(topics_dir):
         return html
@@ -134,6 +138,8 @@ def render_md(filepath, rel_path):
 
     md = markdown.Markdown(extensions=['tables', 'fenced_code', 'toc'])
     html_content = md.convert(content)
+    # 给 table 包一层 div 支持横向滚动
+    html_content = html_content.replace('<table>', '<div class="table-wrap"><table>').replace('</table>', '</table></div>')
 
     filename = os.path.basename(filepath).replace('.md', '')
     parts = rel_path.strip('/').split('/')
@@ -208,6 +214,77 @@ def render_index():
     )
 
 
+# ── CLAUDE.md 和 Skill 文档路径映射 ──
+CLAUDE_MD_PATHS = {
+    "全局 CLAUDE.md": os.path.expanduser("~/.claude/CLAUDE.md"),
+    "知识库助手 CLAUDE.md": os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "CLAUDE.md"),
+    "Research CLAUDE.md": os.path.join(ROOT, "CLAUDE.md"),
+}
+SKILLS_DIR = os.path.expanduser("~/.claude/skills")
+
+
+def render_claude_index():
+    """列出所有 CLAUDE.md 文件"""
+    cards = ''
+    for label, path in CLAUDE_MD_PATHS.items():
+        if os.path.exists(path):
+            mtime = datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y-%m-%d %H:%M")
+            size = os.path.getsize(path)
+            safe_key = urllib.parse.quote(label, safe='')
+            cards += f'''
+            <a href="/claude/{safe_key}" class="index-card">
+                <h3>{label}</h3>
+                <p style="font-size:12px;color:#888;">{size} bytes · 最后修改 {mtime}</p>
+            </a>'''
+    content_html = f'''
+    <style>
+    .index-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin-top: 24px; }}
+    .index-card {{ background: white; border-radius: 10px; padding: 20px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); cursor: pointer; text-decoration: none; color: inherit; display: block; transition: box-shadow 0.15s; }}
+    .index-card:hover {{ box-shadow: 0 4px 16px rgba(0,0,0,0.12); }}
+    .index-card h3 {{ font-size: 15px; font-weight: 600; margin-bottom: 8px; }}
+    </style>
+    <div style="font-size:22px;font-weight:700;margin-bottom:8px;">CLAUDE.md 文档</div>
+    <div style="font-size:13px;color:#888;margin-bottom:24px;">Claude 的行为指令和项目上下文</div>
+    <div class="index-grid">{cards}</div>
+    '''
+    return HTML_TEMPLATE.format(title="CLAUDE.md", sidebar=build_sidebar(), content=content_html)
+
+
+def render_skills_index():
+    """列出所有 skill 目录"""
+    cards = ''
+    if os.path.exists(SKILLS_DIR):
+        for name in sorted(os.listdir(SKILLS_DIR)):
+            skill_dir = os.path.join(SKILLS_DIR, name)
+            skill_md = os.path.join(skill_dir, "SKILL.md")
+            if os.path.isdir(skill_dir) and os.path.exists(skill_md):
+                # 读第一行非空非标题内容作为描述
+                desc = ''
+                with open(skill_md, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#') and not line.startswith('---') and not line.startswith('>'):
+                            desc = line[:100]
+                            break
+                cards += f'''
+                <a href="/skills/{name}" class="index-card">
+                    <h3>{name}</h3>
+                    <p style="font-size:12px;color:#888;">{desc or "点击查看"}</p>
+                </a>'''
+    content_html = f'''
+    <style>
+    .index-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; margin-top: 24px; }}
+    .index-card {{ background: white; border-radius: 10px; padding: 20px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); cursor: pointer; text-decoration: none; color: inherit; display: block; transition: box-shadow 0.15s; }}
+    .index-card:hover {{ box-shadow: 0 4px 16px rgba(0,0,0,0.12); }}
+    .index-card h3 {{ font-size: 15px; font-weight: 600; margin-bottom: 8px; }}
+    </style>
+    <div style="font-size:22px;font-weight:700;margin-bottom:8px;">Skills 文档</div>
+    <div style="font-size:13px;color:#888;margin-bottom:24px;">Claude Code 的 Skill 指令集</div>
+    <div class="index-grid">{cards}</div>
+    '''
+    return HTML_TEMPLATE.format(title="Skills", sidebar=build_sidebar(), content=content_html)
+
+
 BEHAVIOR_LOG = os.path.join(ROOT, '.behavior_log.jsonl')
 
 
@@ -234,6 +311,41 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if path == '/' or path == '/index.html':
             self.serve_html(render_index())
+            return
+
+        # ── CLAUDE.md 路由 ──
+        if path == '/claude' or path == '/claude/':
+            self.serve_html(render_claude_index())
+            return
+        if path.startswith('/claude/'):
+            label = urllib.parse.unquote(path[len('/claude/'):])
+            fpath = CLAUDE_MD_PATHS.get(label)
+            if fpath and os.path.exists(fpath):
+                self.serve_html(render_md(fpath, path))
+                return
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b'Not found')
+            return
+
+        # ── Skills 路由 ──
+        if path == '/skills' or path == '/skills/':
+            self.serve_html(render_skills_index())
+            return
+        if path.startswith('/skills/'):
+            parts = path[len('/skills/'):].strip('/').split('/')
+            skill_name = parts[0] if parts else ''
+            # 默认显示 SKILL.md，也支持 /skills/name/other.md
+            if len(parts) <= 1:
+                fpath = os.path.join(SKILLS_DIR, skill_name, 'SKILL.md')
+            else:
+                fpath = os.path.join(SKILLS_DIR, *parts)
+            if os.path.exists(fpath):
+                self.serve_html(render_md(fpath, path))
+                return
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b'Not found')
             return
 
         filepath = os.path.join(ROOT, path.lstrip('/'))

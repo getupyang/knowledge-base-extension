@@ -43,6 +43,57 @@ function truncate(str, max) {
   return str.length > max ? str.slice(0, max) + "..." : str;
 }
 
+// ─── 前后文截取：获取划线文本前后各200字，解决指代不清 ───
+// 优先用 _lastSelectionSurrounding（从 Range 精确获取），fallback 到 indexOf
+let _lastSelectionSurrounding = "";
+
+function captureSurroundingFromRange(range, chars = 200) {
+  // 从 Range 所在的容器节点取 textContent，然后定位 selection 在其中的位置
+  try {
+    // 往上找一个足够大的容器（段落或 section 级别），避免只拿到一个 span
+    let container = range.commonAncestorContainer;
+    if (container.nodeType === Node.TEXT_NODE) container = container.parentNode;
+    // 往上走最多5层找到足够大的文本块
+    for (let i = 0; i < 5 && container.parentNode && container.textContent.length < chars * 2; i++) {
+      container = container.parentNode;
+      if (container === document.body) break;
+    }
+    const fullText = container.textContent || "";
+    const selText = range.toString();
+    const idx = fullText.indexOf(selText);
+    if (idx === -1) return fullText.slice(0, chars * 2); // fallback：返回容器前400字
+    const start = Math.max(0, idx - chars);
+    const end = Math.min(fullText.length, idx + selText.length + chars);
+    return fullText.slice(start, end);
+  } catch {
+    return "";
+  }
+}
+
+function getSurroundingText(excerpt, chars = 200) {
+  // 优先用划线时捕获的精确前后文
+  if (_lastSelectionSurrounding) {
+    const result = _lastSelectionSurrounding;
+    _lastSelectionSurrounding = ""; // 用完清空
+    return result;
+  }
+  // fallback：用 indexOf（可能匹配到错误位置）
+  if (!excerpt) return "";
+  const bodyText = document.body.innerText || "";
+  const idx = bodyText.indexOf(excerpt);
+  if (idx === -1) return "";
+  const start = Math.max(0, idx - chars);
+  const end = Math.min(bodyText.length, idx + excerpt.length + chars);
+  return bodyText.slice(start, end);
+}
+
+// ─── 页面全文提取（首次评论时调用，按URL缓存到后端）───
+const _pageContentSent = new Set(); // 同一页面同一session只传一次
+function getPageContent(maxChars = 50000) {
+  const text = document.body.innerText || "";
+  return text.slice(0, maxChars);
+}
+
 function escapeHtml(str) {
   return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>");
 }
@@ -149,12 +200,15 @@ const selectionBar = (() => {
     barEl.querySelector("#kb-bar-highlight").addEventListener("click", (e) => {
       e.stopPropagation();
       hide();
+      if (savedRange) _lastSelectionSurrounding = captureSurroundingFromRange(savedRange);
       commentSystem.doHighlight(savedExcerpt, savedRange);
       commentSystem.saveHighlightToNotion(savedExcerpt, document.title, location.href, null);
     });
     barEl.querySelector("#kb-bar-comment").addEventListener("click", (e) => {
       e.stopPropagation();
       hide();
+      // 划线时用 Range 精确捕获前后文（在 Range 还有效的时候）
+      if (savedRange) _lastSelectionSurrounding = captureSurroundingFromRange(savedRange);
       commentSystem.doHighlightAndOpenComment(savedExcerpt, savedRange);
     });
 
@@ -284,7 +338,7 @@ const commentSystem = (() => {
   function insertMark(range, excerpt) {
     const mark = document.createElement("mark");
     mark.className = "kb-comment-highlight";
-    mark.style.cssText = "background:#e8e0ff;border-radius:2px;cursor:pointer;padding:1px 0;";
+    mark.style.cssText = "background:#e8e0ff !important;border-radius:2px;cursor:pointer;padding:1px 0;";
     mark.title = "点击查看评论";
     try {
       // surroundContents 在跨节点时会抛异常，先尝试，失败再用 extractContents
@@ -296,6 +350,8 @@ const commentSystem = (() => {
         mark.appendChild(fragment);
         range.insertNode(mark);
       }
+      // 验证 mark 确实包住了内容
+      if (!mark.textContent.trim()) return false;
       mark.addEventListener("click", (e) => {
         e.stopPropagation();
         currentExcerpt = excerpt;
@@ -335,9 +391,14 @@ const commentSystem = (() => {
   function doHighlight(excerpt, range) {
     if (!range) return;
     const position = serializeRange(range);
-    const ok = insertMark(range, excerpt); // 先插 mark，再清 selection
+    let ok = insertMark(range, excerpt); // 先插 mark，再清 selection
     window.getSelection()?.removeAllRanges();
-    if (ok && position) {
+    // 如果 range 方式失败（跨节点等），fallback 到文字匹配
+    if (!ok) {
+      highlightByText(excerpt);
+      return; // highlightByText 内部已处理 addHighlight
+    }
+    if (position) {
       addHighlight(excerpt, position);
     }
   }
@@ -713,9 +774,10 @@ const commentSystem = (() => {
           <div style="display:flex;gap:6px;margin-top:6px;align-items:center;flex-wrap:wrap;">
             ${!hasAI
               ? `<button class="kb-ai-btn" data-ask-ai="${c.id}">✨ 召唤 AI</button>`
-              : `<button class="kb-ai-btn" data-ask-ai="${c.id}" style="background:#e0e7ff;color:#4f46e5;font-size:10px;">🔄 再次召唤</button>`
+              : _askAIRunning.has(c.id)
+                ? `<span style="color:#6366f1;font-size:11px;">AI 回复中...</span>`
+                : `<button class="kb-reply-btn" data-open-reply="${c.id}">💬 追问</button>`
             }
-            <button class="kb-reply-btn" data-open-reply="${c.id}">↩ 追问</button>
           </div>
           <div class="kb-inline-reply kb-expand-hidden" id="kb-inline-reply-${c.id}">
             <textarea placeholder="追问 AI（Cmd+Enter 发送）..." id="kb-reply-ta-${c.id}"></textarea>
@@ -838,13 +900,24 @@ const commentSystem = (() => {
     // 同步写入 agent_api（source of truth），仅存储，不触发 agent
     // 用户点"召唤 AI 回复"时才真正触发，@xxx 只是意图标记
     try {
+      const excerpt = currentExcerpt || _savedSelection;
+      const surrounding = getSurroundingText(excerpt);
+      // 全文只在该URL首次提交时传（同session内去重）
+      const url = location.href.split("?")[0];
+      let pageContent = "";
+      if (!_pageContentSent.has(url)) {
+        pageContent = getPageContent();
+        _pageContentSent.add(url);
+      }
       const resp = await fetch("http://localhost:8766/comments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           page_url: location.href,
           page_title: document.title,
-          selected_text: currentExcerpt || _savedSelection,
+          selected_text: excerpt,
+          surrounding_text: surrounding,
+          page_content: pageContent,
           comment: text,
           no_agent: true,  // 告知后端不要立即触发 agent
         }),
@@ -867,11 +940,28 @@ const commentSystem = (() => {
 
     setTimeout(() => { status.textContent = ""; }, 3000);
     btn.disabled = false;
+    // 确保面板可见（用户可能在面板关闭时提交了评论）
+    if (panelEl && !panelOpen) {
+      panelOpen = true;
+      panelEl.classList.remove("kb-btn-hidden");
+      document.body.style.marginRight = "320px";
+      updateBadge();
+    }
     render();
   }
 
   // ── Notion upsert：每条划线/评论对应一个 Notion page，追加消息而非新建 ──
   function updateNotionPage(comment) {
+    // 先检查 extension context 是否有效（service worker 可能已卸载）
+    try {
+      if (!chrome.runtime?.id) {
+        showToast("✗ 插件已失效，请刷新页面后重试", "error");
+        return;
+      }
+    } catch {
+      showToast("✗ 插件已失效，请刷新页面后重试", "error");
+      return;
+    }
     const platform = (() => {
       const h = location.hostname;
       if (h.includes('localhost')) return '知识库';
@@ -920,19 +1010,49 @@ const commentSystem = (() => {
     });
   }
 
+  // ── 追问输入锁定（AI 回复中禁用，回复完成后解锁）──
+  function _lockReplyInput(commentId, locked) {
+    const box = document.getElementById("kb-inline-reply-" + commentId);
+    if (!box) return;
+    const ta = box.querySelector("textarea");
+    const sendBtn = box.querySelector("[data-send-reply]");
+    if (ta) { ta.disabled = locked; ta.placeholder = locked ? "AI 回复中，请稍候..." : "追问 AI（Cmd+Enter 发送）..."; }
+    if (sendBtn) { sendBtn.disabled = locked; sendBtn.textContent = locked ? "AI 回复中..." : "发送 + 召唤 AI"; }
+  }
+
   // ── AI 回复（via agent_api localhost:8766）──
-  // DEPRECATED: OpenRouter direct call (chrome.runtime.sendMessage CALL_AI) replaced by agent_api
+  const _askAIRunning = new Set(); // per-comment 锁，不同评论可以并行 // AI 回复中的 commentId，用于禁用追问输入
   async function askAI(commentId) {
+    if (_askAIRunning.has(commentId)) return; // AI 还在回复，忽略
+    _askAIRunning.add(commentId);
+    // 立即禁用追问输入（不等 render，直接操作 DOM）
+    _lockReplyInput(commentId, true);
+
     const comments = load();
     const c = comments.find(x => x.id === commentId);
-    if (!c) return;
-    const card = document.getElementById("kb-cmt-" + commentId);
-    const btn = card ? card.querySelector(".kb-ai-btn") : null;
-    if (btn) { btn.disabled = true; btn.textContent = "AI 思考中..."; }
-    const thinkingEl = document.createElement("div");
-    thinkingEl.className = "kb-thinking";
-    thinkingEl.textContent = "AI 思考中...";
-    if (card) card.appendChild(thinkingEl);
+    if (!c) { _askAIRunning.delete(commentId); _lockReplyInput(commentId, false); return; }
+
+    // thinkingEl 用固定 id，render() 重建 DOM 后能重新找到
+    const thinkingId = "kb-thinking-" + commentId;
+
+    function ensureThinking(text) {
+      let el = document.getElementById(thinkingId);
+      if (!el) {
+        const card = document.getElementById("kb-cmt-" + commentId);
+        if (!card) return;
+        el = document.createElement("div");
+        el.id = thinkingId;
+        el.className = "kb-thinking";
+        card.appendChild(el);
+      }
+      el.textContent = text;
+    }
+    function removeThinking() {
+      const el = document.getElementById(thinkingId);
+      if (el) el.remove();
+    }
+
+    ensureThinking("AI 思考中...");
 
     try {
       let agentCommentId = c.agentCommentId;
@@ -941,18 +1061,29 @@ const commentSystem = (() => {
       const allUserMessages = [c.text, ...c.replies.filter(r => !r.isAI).map(r => r.text)];
       const conversationComment = allUserMessages.join("\n\n---追问---\n\n");
 
+      // 记录 rerun 前已有的 agent reply 数量，轮询时等待新增
+      let existingAgentReplyCount = 0;
+
       // 如果已有 agentCommentId，rerun with latest conversation；否则新建
       if (agentCommentId) {
-        // 更新 comment 内容为完整对话再 rerun
+        // 先查当前有多少条 agent reply
         try {
-          await fetch(`http://localhost:8766/comments/${agentCommentId}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ comment: conversationComment }),
-          });
-        } catch { /* 旧版后端无此端点，静默 */ }
+          const preResp = await fetch(`http://localhost:8766/comments/${agentCommentId}`);
+          if (preResp.ok) {
+            const preData = await preResp.json();
+            existingAgentReplyCount = preData.replies.filter(r => r.author === "agent").length;
+          }
+        } catch { /* ignore */ }
+        // 更新 comment 内容为完整对话再 rerun
+        const patchResp = await fetch(`http://localhost:8766/comments/${agentCommentId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ comment: conversationComment }),
+        });
+        if (!patchResp.ok) console.warn("[KB] PATCH comment failed:", patchResp.status);
         await fetch(`http://localhost:8766/comments/${agentCommentId}/rerun`, { method: "POST" });
       } else {
+        const surrounding = getSurroundingText(c.excerpt || "");
         const resp = await fetch("http://localhost:8766/comments", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -960,6 +1091,7 @@ const commentSystem = (() => {
             page_url: location.href,
             page_title: document.title,
             selected_text: c.excerpt || "",
+            surrounding_text: surrounding,
             comment: conversationComment,
             no_agent: false,
           }),
@@ -1003,12 +1135,13 @@ const commentSystem = (() => {
         for (const [threshold, text] of phases) {
           if (elapsed >= threshold) phaseText = text;
         }
-        if (thinkingEl.parentNode) thinkingEl.textContent = `${phaseText} (${elapsed}s)`;
+        ensureThinking(`${phaseText} (${elapsed}s)`);
         const pollResp = await fetch(`http://localhost:8766/comments/${agentCommentId}`);
         if (!pollResp.ok) continue;
         const data = await pollResp.json();
         const agentReplies = data.replies.filter(r => r.author === "agent");
-        if (agentReplies.length > 0) {
+        // 等待新增的 reply（多轮追问时 rerun 前已有旧 reply）
+        if (agentReplies.length > existingAgentReplyCount) {
           const lastReply = agentReplies[agentReplies.length - 1];
           reply = lastReply.content;
           replyDebugMeta = lastReply.debug_meta || null;
@@ -1025,10 +1158,19 @@ const commentSystem = (() => {
         addReply(commentId, "AI 仍在处理中，请稍候刷新页面查看结果。", true);
       }
     } catch (err) {
-      addReply(commentId, "AI 回复失败：" + err.message, true);
+      const msg = err.message || String(err);
+      if (msg.includes("Extension context invalidated")) {
+        addReply(commentId, "AI 回复失败：插件已失效，请刷新页面后重试。", true);
+      } else if (msg.includes("Failed to fetch") || msg.includes("NetworkError")) {
+        addReply(commentId, "AI 回复失败：无法连接本地服务。请检查是否已运行 start.sh 启动后端（终端执行：bash start.sh）", true);
+      } else {
+        addReply(commentId, "AI 回复失败：" + msg, true);
+      }
     }
 
-    if (thinkingEl.parentNode) thinkingEl.remove();
+    removeThinking();
+    _askAIRunning.delete(commentId);
+    _lockReplyInput(commentId, false);
     render();
   }
 
