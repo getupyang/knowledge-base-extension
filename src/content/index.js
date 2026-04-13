@@ -46,6 +46,7 @@ function truncate(str, max) {
 // ─── 前后文截取：获取划线文本前后各200字，解决指代不清 ───
 // 优先用 _lastSelectionSurrounding（从 Range 精确获取），fallback 到 indexOf
 let _lastSelectionSurrounding = "";
+let _iframeHinted = false; // 受限iframe提示只弹一次
 
 function captureSurroundingFromRange(range, chars = 200) {
   // 从 Range 所在的容器节点取 textContent，然后定位 selection 在其中的位置
@@ -242,6 +243,7 @@ const selectionBar = (() => {
       const rect = range.getBoundingClientRect();
       show(rect, text, range);
     }, 200); // 200ms 延迟，避免与页面自带菜单冲突
+
   }, true);
 
   // 点击页面其他地方收起 bar
@@ -1270,16 +1272,24 @@ const commentSystem = (() => {
     // badge 响应式更新：有高亮或评论时常驻显示
     updateBadge();
 
-    // 检测受限 iframe（如 ChatGPT Deep Research），提示用户用右键菜单
-    setTimeout(() => {
-      const iframes = document.querySelectorAll("iframe");
-      for (const f of iframes) {
-        if ((f.title || "").includes("deep-research") || (f.src || "").startsWith("internal://")) {
-          showToast("当前页面部分内容受限，划线请使用右键菜单", "info");
-          break;
+    // 检测受限 iframe（如 ChatGPT Deep Research），DOM 动态插入时也能捕获
+    if (!_iframeHinted) {
+      const _checkIframe = () => {
+        if (_iframeHinted) return;
+        const found = [...document.querySelectorAll("iframe")].some(
+          f => (f.title || "").includes("deep-research")
+        );
+        if (found) {
+          _iframeHinted = true;
+          showToast("此页面内容在受限区域，划线请用右键菜单", "info");
         }
-      }
-    }, 2000); // 延迟2秒，等 SPA 渲染完
+      };
+      _checkIframe(); // 立即检查一次
+      const obs = new MutationObserver(_checkIframe);
+      obs.observe(document.body, { childList: true, subtree: true });
+      // 30秒后停止观察，避免长期性能开销
+      setTimeout(() => obs.disconnect(), 30000);
+    }
   }
 
   document.addEventListener("DOMContentLoaded", init);
