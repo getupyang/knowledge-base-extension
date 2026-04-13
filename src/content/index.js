@@ -1269,6 +1269,17 @@ const commentSystem = (() => {
     }
     // badge 响应式更新：有高亮或评论时常驻显示
     updateBadge();
+
+    // 检测受限 iframe（如 ChatGPT Deep Research），提示用户用右键菜单
+    setTimeout(() => {
+      const iframes = document.querySelectorAll("iframe");
+      for (const f of iframes) {
+        if ((f.title || "").includes("deep-research") || (f.src || "").startsWith("internal://")) {
+          showToast("当前页面部分内容受限，划线请使用右键菜单", "info");
+          break;
+        }
+      }
+    }, 2000); // 延迟2秒，等 SPA 渲染完
   }
 
   document.addEventListener("DOMContentLoaded", init);
