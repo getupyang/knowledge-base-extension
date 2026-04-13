@@ -75,16 +75,19 @@ function getSurroundingText(excerpt, chars = 200) {
   if (_lastSelectionSurrounding) {
     const result = _lastSelectionSurrounding;
     _lastSelectionSurrounding = ""; // 用完清空
+    console.log("[KB] getSurroundingText: 用 Range 精确捕获,", result.length, "字");
     return result;
   }
   // fallback：用 indexOf（可能匹配到错误位置）
-  if (!excerpt) return "";
+  if (!excerpt) { console.log("[KB] getSurroundingText: excerpt 为空, 返回空"); return ""; }
   const bodyText = document.body.innerText || "";
   const idx = bodyText.indexOf(excerpt);
-  if (idx === -1) return "";
+  if (idx === -1) { console.log("[KB] getSurroundingText: indexOf 未找到, excerpt前30字:", excerpt.slice(0, 30)); return ""; }
   const start = Math.max(0, idx - chars);
   const end = Math.min(bodyText.length, idx + excerpt.length + chars);
-  return bodyText.slice(start, end);
+  const result = bodyText.slice(start, end);
+  console.log("[KB] getSurroundingText: indexOf fallback,", result.length, "字");
+  return result;
 }
 
 // ─── 页面全文提取（首次评论时调用，按URL缓存到后端）───
@@ -224,6 +227,7 @@ const selectionBar = (() => {
   }
 
   // mouseup 监听：有选中文字时显示 bar
+  // 用 capture:true 在捕获阶段触发，避免 SPA（ChatGPT 等）在冒泡阶段 stopPropagation 导致事件丢失
   document.addEventListener("mouseup", (e) => {
     // 如果点击在 bar 自身上，不处理
     if (barEl && barEl.contains(e.target)) return;
@@ -238,12 +242,12 @@ const selectionBar = (() => {
       const rect = range.getBoundingClientRect();
       show(rect, text, range);
     }, 200); // 200ms 延迟，避免与页面自带菜单冲突
-  });
+  }, true);
 
   // 点击页面其他地方收起 bar
   document.addEventListener("mousedown", (e) => {
     if (barEl && !barEl.contains(e.target)) hide();
-  });
+  }, true);
 
   return { hide };
 })();
@@ -335,54 +339,108 @@ const commentSystem = (() => {
   }
 
   // ── 插入 <mark> 并绑定点击事件 ──
-  function insertMark(range, excerpt) {
+  function _bindMarkClick(mark, excerpt) {
+    mark.addEventListener("click", (e) => {
+      e.stopPropagation();
+      currentExcerpt = excerpt;
+      if (!panelEl) buildPanel();
+      const wasPanelClosed = !panelOpen;
+      if (!panelOpen) {
+        panelOpen = true;
+        panelEl.classList.remove("kb-btn-hidden");
+        document.body.style.marginRight = "320px";
+        updateBadge();
+      }
+      render();
+      const comments = load();
+      const match = comments.find(c => c.excerpt === excerpt);
+      if (match) {
+        const flashDelay = wasPanelClosed ? 400 : 100;
+        setTimeout(() => {
+          const card = document.getElementById("kb-cmt-" + match.id);
+          if (!card) return;
+          card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+          card.classList.remove("kb-flash");
+          void card.offsetWidth;
+          card.classList.add("kb-flash");
+          setTimeout(() => card.classList.remove("kb-flash"), 700);
+        }, flashDelay);
+      }
+    });
+  }
+
+  function _createMark(excerpt) {
     const mark = document.createElement("mark");
     mark.className = "kb-comment-highlight";
     mark.style.cssText = "background:#e8e0ff !important;border-radius:2px;cursor:pointer;padding:1px 0;";
     mark.title = "点击查看评论";
+    _bindMarkClick(mark, excerpt);
+    return mark;
+  }
+
+  // 检测 range 是否跨越表格单元格
+  function _rangeSpansTableCells(range) {
+    const ancestor = range.commonAncestorContainer;
+    const el = ancestor.nodeType === Node.TEXT_NODE ? ancestor.parentNode : ancestor;
+    // 如果公共祖先是 tr/tbody/table，说明跨了 td
+    return el && (el.tagName === "TR" || el.tagName === "TBODY" || el.tagName === "TABLE" || el.tagName === "THEAD");
+  }
+
+  // 跨表格单元格高亮：逐个 td 内的文字节点分别包 mark，不破坏表格结构
+  function _highlightAcrossTableCells(range, excerpt) {
+    const marks = [];
+    // 收集 range 内所有文字节点
+    const walker = document.createTreeWalker(range.commonAncestorContainer, NodeFilter.SHOW_TEXT);
+    const textNodes = [];
+    let node;
+    while ((node = walker.nextNode())) {
+      if (range.intersectsNode(node) && node.textContent.trim()) {
+        textNodes.push(node);
+      }
+    }
+    if (textNodes.length === 0) return false;
+    for (const tn of textNodes) {
+      try {
+        const nodeRange = document.createRange();
+        // 第一个节点可能只选了部分
+        if (tn === range.startContainer) {
+          nodeRange.setStart(tn, range.startOffset);
+        } else {
+          nodeRange.setStart(tn, 0);
+        }
+        // 最后一个节点可能只选了部分
+        if (tn === range.endContainer) {
+          nodeRange.setEnd(tn, range.endOffset);
+        } else {
+          nodeRange.setEnd(tn, tn.length);
+        }
+        if (nodeRange.toString().trim()) {
+          const mark = _createMark(excerpt);
+          nodeRange.surroundContents(mark);
+          marks.push(mark);
+        }
+      } catch { /* 单个节点包裹失败，跳过 */ }
+    }
+    return marks.length > 0;
+  }
+
+  function insertMark(range, excerpt) {
+    // 跨表格单元格时，逐 td 分别高亮，不破坏表格结构
+    if (_rangeSpansTableCells(range)) {
+      return _highlightAcrossTableCells(range, excerpt);
+    }
+    const mark = _createMark(excerpt);
     try {
-      // surroundContents 在跨节点时会抛异常，先尝试，失败再用 extractContents
       try {
         range.surroundContents(mark);
       } catch {
-        // 跨节点选区：提取内容包入 mark
+        // 跨节点选区（非表格）：提取内容包入 mark
         const fragment = range.extractContents();
         mark.appendChild(fragment);
         range.insertNode(mark);
       }
       // 验证 mark 确实包住了内容
       if (!mark.textContent.trim()) return false;
-      mark.addEventListener("click", (e) => {
-        e.stopPropagation();
-        currentExcerpt = excerpt;
-        // 确保面板打开，记录面板原本是否关闭（用于 flash 延迟计算）
-        if (!panelEl) buildPanel();
-        const wasPanelClosed = !panelOpen;
-        if (!panelOpen) {
-          panelOpen = true;
-          panelEl.classList.remove("kb-btn-hidden");
-          document.body.style.marginRight = "320px";
-          updateBadge();
-        }
-        render();
-        // 找对应卡片，等面板滑出动画结束后滚动 + flash
-        const comments = load();
-        const match = comments.find(c => c.excerpt === excerpt);
-        if (match) {
-          // 面板 slide 动画 250ms + buffer 100ms = 350ms 后再 flash
-          const flashDelay = wasPanelClosed ? 400 : 100;
-          setTimeout(() => {
-            const card = document.getElementById("kb-cmt-" + match.id);
-            if (!card) return;
-            card.scrollIntoView({ behavior: "smooth", block: "nearest" });
-            // flash 动画持续 600ms（更慢，用户能看清）
-            card.classList.remove("kb-flash");
-            void card.offsetWidth;
-            card.classList.add("kb-flash");
-            setTimeout(() => card.classList.remove("kb-flash"), 700);
-          }, flashDelay);
-        }
-      });
       return true;
     } catch { return false; }
   }
@@ -902,6 +960,7 @@ const commentSystem = (() => {
     try {
       const excerpt = currentExcerpt || _savedSelection;
       const surrounding = getSurroundingText(excerpt);
+      console.log("[KB] submitComment surrounding_text:", surrounding ? `${surrounding.length}字` : "空（bug: 前后文丢失）");
       // 全文只在该URL首次提交时传（同session内去重）
       const url = location.href.split("?")[0];
       let pageContent = "";
@@ -1181,8 +1240,13 @@ const commentSystem = (() => {
     // 更新输入区 quote 预览
     const qp = document.getElementById("kb-cp-quote-preview");
     if (qp) {
-      qp.textContent = `"${excerpt.slice(0, 80)}${excerpt.length > 80 ? "…" : ""}"`;
-      qp.style.display = "block";
+      if (excerpt && excerpt.trim()) {
+        qp.textContent = `"${excerpt.slice(0, 80)}${excerpt.length > 80 ? "…" : ""}"`;
+        qp.style.display = "block";
+      } else {
+        qp.textContent = "";
+        qp.style.display = "none";
+      }
     }
     // 清空输入框，聚焦
     const ta = document.getElementById("kb-cp-textarea");
