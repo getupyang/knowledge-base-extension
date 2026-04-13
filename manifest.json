@@ -23,8 +23,7 @@
     {
       "matches": ["<all_urls>"],
       "js": ["src/content/marked.min.js", "src/content/index.js"],
-      "world": "ISOLATED",
-      "all_frames": true
+      "world": "ISOLATED"
     },
     {
       "matches": ["https://claude.ai/*"],
