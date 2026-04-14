@@ -426,6 +426,41 @@ const commentSystem = (() => {
     return marks.length > 0;
   }
 
+  // 跨节点高亮：逐个文字节点分别包 mark，不破坏 DOM 结构（列表/段落等）
+  function _highlightAcrossNodes(range, excerpt) {
+    const marks = [];
+    const walker = document.createTreeWalker(range.commonAncestorContainer, NodeFilter.SHOW_TEXT);
+    const textNodes = [];
+    let node;
+    while ((node = walker.nextNode())) {
+      if (range.intersectsNode(node) && node.textContent.trim()) {
+        textNodes.push(node);
+      }
+    }
+    if (textNodes.length === 0) return false;
+    for (const tn of textNodes) {
+      try {
+        const nodeRange = document.createRange();
+        if (tn === range.startContainer) {
+          nodeRange.setStart(tn, range.startOffset);
+        } else {
+          nodeRange.setStart(tn, 0);
+        }
+        if (tn === range.endContainer) {
+          nodeRange.setEnd(tn, range.endOffset);
+        } else {
+          nodeRange.setEnd(tn, tn.length);
+        }
+        if (nodeRange.toString().trim()) {
+          const mark = _createMark(excerpt);
+          nodeRange.surroundContents(mark);
+          marks.push(mark);
+        }
+      } catch { /* 单个节点包裹失败，跳过 */ }
+    }
+    return marks.length > 0;
+  }
+
   function insertMark(range, excerpt) {
     // 跨表格单元格时，逐 td 分别高亮，不破坏表格结构
     if (_rangeSpansTableCells(range)) {
@@ -433,18 +468,14 @@ const commentSystem = (() => {
     }
     const mark = _createMark(excerpt);
     try {
-      try {
-        range.surroundContents(mark);
-      } catch {
-        // 跨节点选区（非表格）：提取内容包入 mark
-        const fragment = range.extractContents();
-        mark.appendChild(fragment);
-        range.insertNode(mark);
-      }
+      range.surroundContents(mark);
       // 验证 mark 确实包住了内容
       if (!mark.textContent.trim()) return false;
       return true;
-    } catch { return false; }
+    } catch {
+      // 跨节点选区（列表、多段落等）：逐文字节点分别包 mark，不破坏 DOM 结构
+      return _highlightAcrossNodes(range, excerpt);
+    }
   }
 
   // ── 高亮（由小bar或右键菜单触发，range 存在）──
@@ -501,25 +532,27 @@ const commentSystem = (() => {
     });
   }
 
-  // ── 高亮后静默保存 Notion ──
+  // ── 高亮后静默保存 Notion（直接走后端代理，不经过 Service Worker）──
   function saveHighlightToNotion(excerpt, title, url, platform) {
-    chrome.runtime.sendMessage({
-      type: "SAVE_TO_NOTION",
-      data: {
+    fetch("http://localhost:8766/notion/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
         title: title || document.title,
         url: url || location.href,
         platform: platform || detectLocalPlatform(),
         excerpt,
         thought: "",
         aiConversation: ""
-      }
-    }, (resp) => {
-      if (chrome.runtime.lastError) { showToast("✗ Notion 保存失败", "error"); return; }
-      if (resp && resp.success) {
+      })
+    }).then(r => r.json()).then(resp => {
+      if (resp.success) {
         showToast("✓ 已高亮并保存到 Notion", "success");
       } else {
-        showToast("✗ Notion 保存失败：" + (resp?.error || "未知错误"), "error");
+        showToast("✗ Notion 保存失败：" + (resp.detail || "未知错误"), "error");
       }
+    }).catch(() => {
+      showToast("✗ Notion 保存失败：后端未启动", "error");
     });
   }
 
@@ -1012,17 +1045,8 @@ const commentSystem = (() => {
   }
 
   // ── Notion upsert：每条划线/评论对应一个 Notion page，追加消息而非新建 ──
+  // 直接走后端代理，不经过 Service Worker，避免 SW 休眠导致静默失败
   function updateNotionPage(comment) {
-    // 先检查 extension context 是否有效（service worker 可能已卸载）
-    try {
-      if (!chrome.runtime?.id) {
-        showToast("✗ 插件已失效，请刷新页面后重试", "error");
-        return;
-      }
-    } catch {
-      showToast("✗ 插件已失效，请刷新页面后重试", "error");
-      return;
-    }
     const platform = (() => {
       const h = location.hostname;
       if (h.includes('localhost')) return '知识库';
@@ -1032,8 +1056,6 @@ const commentSystem = (() => {
       if (h.includes('twitter.com') || h.includes('x.com')) return 'Twitter';
       return '网页';
     })();
-    // 只有存在 AI 回复时才构建对话记录（首次纯用户评论不写对话字段）
-    // 格式：时间戳 + 角色 + 内容，按时间序
     const hasAIReply = comment.replies.some(r => r.isAI);
     const allMessages = hasAIReply ? [
       `[${new Date(comment.createdAt).toLocaleString("zh")}] 你: ${comment.text}`,
@@ -1043,31 +1065,31 @@ const commentSystem = (() => {
     ].join("\n\n") : "";
 
     const title = `[评论] ${document.title.slice(0, 60)}`;
-    chrome.runtime.sendMessage({
-      type: "UPSERT_NOTION_PAGE",
-      data: {
-        notionPageId: comment.notionPageId || null,  // 有则更新，无则新建
+    fetch("http://localhost:8766/notion/upsert", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        notionPageId: comment.notionPageId || null,
         title,
         url: location.href,
         platform,
         excerpt: comment.excerpt || "",
         thought: comment.text,
         aiConversation: allMessages,
-        commentId: comment.id,  // 用于把新建的 page_id 存回 localStorage
-      }
-    }, (resp) => {
-      if (chrome.runtime.lastError) { showToast("✗ Notion 保存失败", "error"); return; }
-      if (resp && resp.success) {
-        // 把 Notion page_id 存回 localStorage，下次直接更新同一条
+      })
+    }).then(r => r.json()).then(resp => {
+      if (resp.success) {
         if (resp.pageId && !comment.notionPageId) {
           const comments = load();
           const match = comments.find(x => x.id === comment.id);
           if (match) { match.notionPageId = resp.pageId; save(comments); }
         }
         showToast("✓ 已保存到 Notion", "success");
-      } else if (resp && !resp.success) {
-        showToast("✗ Notion 保存失败：" + (resp.error || "未知错误"), "error");
+      } else {
+        showToast("✗ Notion 保存失败：" + (resp.detail || resp.error || "未知错误"), "error");
       }
+    }).catch(() => {
+      showToast("✗ Notion 保存失败：后端未启动", "error");
     });
   }
 

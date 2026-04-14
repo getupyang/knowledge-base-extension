@@ -12,6 +12,7 @@ import os
 import re
 import threading
 from datetime import datetime
+from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -653,3 +654,118 @@ def get_config():
         "notionToken": os.environ.get("NOTION_TOKEN", ""),
         "databaseId": os.environ.get("NOTION_DATABASE_ID", ""),
     }
+
+# ──────────────────────────────────────────
+# Notion 代理端点（绕过 Service Worker 休眠问题）
+# ──────────────────────────────────────────
+
+def _split_rich_text(s: str, max_len: int = 1990) -> list:
+    if not s:
+        return [{"text": {"content": ""}}]
+    chunks = []
+    for i in range(0, len(s), max_len):
+        chunks.append({"text": {"content": s[i:i+max_len]}})
+    return chunks[:100]
+
+def _truncate(s: str, max_len: int) -> str:
+    if not s:
+        return ""
+    return s[:max_len] + "..." if len(s) > max_len else s
+
+class NotionSaveRequest(BaseModel):
+    title: str = ""
+    url: str = ""
+    platform: str = "网页"
+    excerpt: str = ""
+    thought: str = ""
+    aiConversation: str = ""
+
+class NotionUpsertRequest(BaseModel):
+    notionPageId: Optional[str] = None
+    title: str = ""
+    url: str = ""
+    platform: str = "网页"
+    excerpt: str = ""
+    thought: str = ""
+    aiConversation: str = ""
+
+@app.post("/notion/save")
+async def notion_save(req: NotionSaveRequest):
+    """高亮保存到 Notion（代理，不经过 Service Worker）"""
+    import urllib.request, urllib.error
+    token = os.environ.get("NOTION_TOKEN") or os.environ.get("KB_NOTION_TOKEN", "")
+    db_id = os.environ.get("NOTION_DATABASE_ID") or os.environ.get("KB_NOTION_DATABASE_ID", "")
+    if not token or not db_id:
+        raise HTTPException(status_code=500, detail="Notion 未配置")
+    body = json.dumps({
+        "parent": {"database_id": db_id},
+        "properties": {
+            "标题": {"title": [{"text": {"content": _truncate(req.title, 100)}}]},
+            "来源平台": {"select": {"name": req.platform}},
+            "来源URL": {"url": req.url},
+            "原文片段": {"rich_text": _split_rich_text(req.excerpt)},
+            "我的想法": {"rich_text": _split_rich_text(req.thought)},
+            "评论区对话": {"rich_text": _split_rich_text(req.aiConversation)},
+        }
+    }).encode()
+    r = urllib.request.Request(
+        "https://api.notion.com/v1/pages",
+        data=body,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "Notion-Version": "2022-06-28"},
+        method="POST"
+    )
+    try:
+        with urllib.request.urlopen(r, timeout=15) as resp:
+            data = json.loads(resp.read())
+        return {"success": True, "pageId": data.get("id")}
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode() if e.fp else str(e)
+        raise HTTPException(status_code=e.code, detail=detail)
+
+@app.post("/notion/upsert")
+async def notion_upsert(req: NotionUpsertRequest):
+    """评论 upsert 到 Notion（代理，不经过 Service Worker）"""
+    import urllib.request, urllib.error
+    token = os.environ.get("NOTION_TOKEN") or os.environ.get("KB_NOTION_TOKEN", "")
+    db_id = os.environ.get("NOTION_DATABASE_ID") or os.environ.get("KB_NOTION_DATABASE_ID", "")
+    if not token or not db_id:
+        raise HTTPException(status_code=500, detail="Notion 未配置")
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json", "Notion-Version": "2022-06-28"}
+
+    has_ai = req.aiConversation and "AI:" in req.aiConversation
+    conversation_field = {"评论区对话": {"rich_text": _split_rich_text(req.aiConversation)}} if has_ai else {}
+
+    if req.notionPageId:
+        body = json.dumps({
+            "properties": {
+                "我的想法": {"rich_text": _split_rich_text(req.thought)},
+                **conversation_field,
+            }
+        }).encode()
+        r = urllib.request.Request(
+            f"https://api.notion.com/v1/pages/{req.notionPageId}",
+            data=body, headers=headers, method="PATCH"
+        )
+    else:
+        body = json.dumps({
+            "parent": {"database_id": db_id},
+            "properties": {
+                "标题": {"title": [{"text": {"content": _truncate(req.title, 100)}}]},
+                "来源平台": {"select": {"name": req.platform}},
+                "来源URL": {"url": req.url},
+                "原文片段": {"rich_text": _split_rich_text(req.excerpt)},
+                "我的想法": {"rich_text": _split_rich_text(req.thought)},
+                **conversation_field,
+            }
+        }).encode()
+        r = urllib.request.Request(
+            "https://api.notion.com/v1/pages",
+            data=body, headers=headers, method="POST"
+        )
+    try:
+        with urllib.request.urlopen(r, timeout=15) as resp:
+            data = json.loads(resp.read())
+        return {"success": True, "pageId": data.get("id", req.notionPageId)}
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode() if e.fp else str(e)
+        raise HTTPException(status_code=e.code, detail=detail)
