@@ -21,6 +21,11 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(ROOT, "comments.db")
 PROJECT_CONTEXT_PATH = os.path.join(ROOT, "project_context.md")
 COMPANY_CULTURE_PATH = os.path.join(ROOT, "company_culture.md")
+# v2 新增路径
+PROMPTS_DIR = os.path.join(ROOT, "agent_prompts")
+AGENT_PRINCIPLES_PATH = os.path.join(ROOT, "agent_principles.md")
+USER_PROFILE_PATH = os.path.join(ROOT, "user_profile.md")
+LEARNED_RULES_PATH = os.path.join(ROOT, "learned_rules.json")
 
 # 启动时读取 ~/.kb_config，让 uvicorn 子进程也能拿到配置
 _config_file = os.path.expanduser("~/.kb_config")
@@ -116,134 +121,46 @@ def _startup_check():
 _startup_check()
 
 # ──────────────────────────────────────────
-# Agent 路由配置
+# v2: 文件加载工具
 # ──────────────────────────────────────────
 
-AGENT_PROMPTS = {
-    "竞品": """你是竞品调研专家。你的分析服务于一个一人公司创始人。
-
-命题方上下文（必须贯穿全文）：
-{project_context}
-
-命题方的具体约束：
-- 资源：1个人
-- 时间窗口：6个月内可执行
-- 目标用户：决策型知识工作者（管理者、研究者、独立创作者）
-所有差异化机会必须在这个约束下评估，不要给大公司视角的分析。
-
-当前页面：{page_url}
-用户划线内容：{selected_text}
-用户问题：{comment}
-
-**先判断这条批注在推进项目上下文里的哪个活跃问题（AQ），竞品分析要服务于该问题。**
-
-调研要求：
-1. 强制 WebSearch 搜索最新信息，禁止用训练数据填充。搜索覆盖：
-   - Product Hunt、Reddit 用户评价
-   - 36kr、少数派、量子位等中文媒体
-   - GitHub 开源项目
-2. 每个数据点必须标注：来源平台 + 数据日期 + 置信度（高/中/低）
-   没有来源的数据降级为「推测」
-3. 找10条+真实用户原声，格式：中文翻译 / 英文原文 / 来源平台 / 链接
-
-输出结构（必须包含）：
-## 产品定位与核心假设
-## 真实用户评价（10条+）
-## 竞品的失败/限制
-## 给命题方的机会缺口
-最后必须回答：「这个竞品给命题方留下的最大可执行机会是什么？请给出具体的产品切入点（不超过2个），并说明为什么命题方在6个月内能做到。」
-
-中文回答。引用英文内容时，必须附中文翻译，格式：中文翻译（英文原文）。""",
-
-    "思辨": """你是思辨讨论伙伴，熟悉这个项目的背景。
-
-项目上下文（含用户当前在想的问题）：
-{project_context}
-
-当前页面：{page_url}
-用户划线内容：{selected_text}
-用户观点：{comment}
-
-**意图判断（先做这一步再回复）：**
-用户批注可能有以下几种意图：
-1. 产品思考 — 文章激发了用户对自己项目的反思（最常见，也最容易被误读为"在评论文章"）
-2. 追问/深挖 — 信息不够，要深入
-3. 概念追问 — 不懂的概念需要解释
-4. 评价/反馈 — 对AI产出的评价（确认收到并说明改进即可，不需要长回复）
-
-**回复要求：**
-1. 先判断这条批注在推进项目上下文里的哪个活跃问题（AQ），基于该问题的上下文组织回复
-2. 如果和已有AQ都不相关，说明可能有新问题在涌现，指出来
-3. 认真对待用户的观点，先理解再回应
-4. 提供不同角度的思考，包括反驳和支持
-5. 结合项目实际情况给出判断
-6. 如果用户观点有重要缺漏，直接指出
-
-中文回答，不要说废话。""",
-
-    "调研": """你是创业调研专家。
-
-项目上下文（含用户当前在想的问题）：
-{project_context}
-
-当前页面：{page_url}
-用户划线内容：{selected_text}
-调研问题：{comment}
-
-**先判断这条批注在推进项目上下文里的哪个活跃问题（AQ），调研方向要服务于该问题。**
-
-要求：
-1. 强制 WebSearch，搜索 GitHub、ProductHunt、36kr、量子位等平台
-2. 找真实数据，不用训练数据填充
-3. 覆盖中英文市场
-4. 给出调研发现 + 对用户活跃问题的启发
-
-中文回答。引用英文内容时，必须附中文翻译，格式：中文翻译（英文原文）。""",
-
-    "解释": """你是知识讲解助手，熟悉这个项目背景。
-
-项目上下文（含用户当前在想的问题）：
-{project_context}
-
-用户划线内容：{selected_text}
-用户问题：{comment}
-
-**意图判断（先做这一步再回复）：**
-用户可能是：概念追问（不懂，要解释）、产品思考（文章激发了项目反思）、或追问深挖（想了解更多）。
-如果是产品思考，不要只解释概念，要说清楚和用户项目的关联。
-
-**回复要求：**
-1. 先判断这条批注在推进项目上下文里的哪个活跃问题（AQ）
-2. 直接解释，不绕弯
-3. 结合项目背景说明和我们方向的关联
-4. 如果有延伸价值，顺带提出
-
-中文回答。引用英文内容时，必须附中文翻译，格式：中文翻译（英文原文）。""",
-}
-
-DEFAULT_AGENT = "思辨"
-
-def parse_agent_type(comment: str) -> tuple[str, str]:
-    """从评论里解析 @agent 类型，返回 (agent_type, cleaned_comment)"""
-    pattern = r'@(竞品|思辨|调研|解释)'
-    match = re.search(pattern, comment)
-    if match:
-        agent_type = match.group(1)
-        cleaned = re.sub(pattern, '', comment).strip()
-        return agent_type, cleaned
-    return DEFAULT_AGENT, comment
+def _load_file(path: str, default: str = "") -> str:
+    if os.path.exists(path):
+        with open(path, 'r', encoding='utf-8') as f:
+            return f.read()
+    return default
 
 def load_project_context() -> str:
-    if os.path.exists(PROJECT_CONTEXT_PATH):
-        with open(PROJECT_CONTEXT_PATH, 'r', encoding='utf-8') as f:
-            return f.read()
-    return "项目：意图-行动缺口创业方向调研。目标：验证这个方向是否值得做，并开发Chrome评论区系统作为自用工具和产品原型。"
+    return _load_file(PROJECT_CONTEXT_PATH,
+        "项目：意图-行动缺口创业方向调研。目标：验证这个方向是否值得做，并开发Chrome评论区系统作为自用工具和产品原型。")
 
 def load_company_culture() -> str:
-    if os.path.exists(COMPANY_CULTURE_PATH):
-        with open(COMPANY_CULTURE_PATH, 'r', encoding='utf-8') as f:
-            return f.read()
-    return ""
+    return _load_file(COMPANY_CULTURE_PATH)
+
+def load_agent_principles() -> str:
+    return _load_file(AGENT_PRINCIPLES_PATH, load_company_culture())
+
+def load_user_profile() -> str:
+    return _load_file(USER_PROFILE_PATH, "[空白，新用户]")
+
+def load_learned_rules() -> str:
+    return _load_file(LEARNED_RULES_PATH, '{"rules": []}')
+
+def load_learned_rules_scoped(role: str) -> str:
+    """加载适用于指定角色的规则子集"""
+    raw = _load_file(LEARNED_RULES_PATH, '{"rules": []}')
+    try:
+        data = json.loads(raw)
+        applicable = [r for r in data.get("rules", [])
+                      if r.get("active", True) and r.get("scope") in ("all", f"role:{role}")]
+        if not applicable:
+            return "（暂无已学到的规则）"
+        return "\n".join(f"- {r['rule']}" for r in applicable)
+    except Exception:
+        return raw
+
+def load_prompt_template(name: str) -> str:
+    return _load_file(os.path.join(PROMPTS_DIR, f"{name}.md"))
 
 def fetch_notion_memory(limit: int = 15) -> str:
     """拉取 Notion 最近批注作为记忆上下文，失败时静默返回空字符串"""
@@ -293,87 +210,259 @@ def fetch_notion_memory(limit: int = 15) -> str:
         return ""
 
 # ──────────────────────────────────────────
-# 后台 Agent 调用
+# v2: @手动路由兼容 + 映射
 # ──────────────────────────────────────────
 
-def run_agent(comment_id: int, agent_type: str, prompt: str):
-    """后台线程：调用 claude -p，把结果写回 replies 表"""
+# v1 @语法 → v2 role 映射
+V1_TO_V2_ROLE = {
+    "竞品": ("task", "researcher"),
+    "调研": ("task", "researcher"),
+    "思辨": ("dialogue", "sparring_partner"),
+    "解释": ("dialogue", "explainer"),
+}
+DEFAULT_AGENT = "思辨"
+
+def parse_agent_type(comment: str) -> tuple:
+    """从评论里解析 @agent 类型，返回 (agent_type_v1, cleaned_comment)
+    agent_type_v1 为 None 时表示没有 @语法，应走 v2 路由器"""
+    pattern = r'@(竞品|思辨|调研|解释)'
+    match = re.search(pattern, comment)
+    if match:
+        agent_type = match.group(1)
+        cleaned = re.sub(pattern, '', comment).strip()
+        return agent_type, cleaned
+    return None, comment
+
+# ──────────────────────────────────────────
+# v2: 路由器（Step 1）
+# ──────────────────────────────────────────
+
+def _get_claude_bin():
+    return os.environ.get("KB_CLAUDE_BIN") or os.path.expanduser("~/.npm-global/bin/claude")
+
+def _get_child_env():
+    env = os.environ.copy()
+    env.setdefault("HOME", os.path.expanduser("~"))
+    return env
+
+def _call_claude(prompt: str, system_prompt: str, timeout: int = 1800) -> tuple:
+    """调用 claude -p，返回 (content_str, returncode)"""
+    result = subprocess.run(
+        [_get_claude_bin(), "-p", prompt, "--output-format", "json",
+         "--dangerously-skip-permissions", "--system-prompt", system_prompt],
+        capture_output=True, text=True, timeout=timeout, env=_get_child_env()
+    )
+    if result.returncode == 0:
+        try:
+            data = json.loads(result.stdout)
+            return data.get("result", ""), 0
+        except json.JSONDecodeError:
+            return result.stdout, 0
+    return (result.stderr or result.stdout or "")[:1000], result.returncode
+
+def _parse_router_json(text: str) -> dict:
+    """从路由器回复中提取 JSON，支持多层降级"""
+    text = text.strip()
+    # 去掉 markdown 代码块
+    text = re.sub(r'^```(?:json)?\s*', '', text)
+    text = re.sub(r'\s*```\s*$', '', text)
+    text = text.strip()
+
+    # 直接解析
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # 提取最大 {...}
+    m = re.search(r'\{.*\}', text, re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except json.JSONDecodeError:
+            pass
+
+    # 正则兜底
+    intent_m = re.search(r'"intent"\s*:\s*"(task|dialogue)"', text)
+    role_m = re.search(r'"role"\s*:\s*"(researcher|sparring_partner|explainer)"', text)
+    if intent_m and role_m:
+        return {
+            "intent": intent_m.group(1), "role": role_m.group(1),
+            "confidence": 0, "plan": "", "learned": [], "quick_response": "",
+            "_fallback_parse": True
+        }
+
+    return None  # 完全无法解析
+
+def run_router(page_url: str, page_title: str, selected_text: str,
+               surrounding_text: str, comment: str, last_ai_reply: str = "") -> dict:
+    """调用路由器 prompt（Step 1），返回解析后的 JSON dict"""
+    template = load_prompt_template("router")
+    if not template:
+        return None  # 路由器文件缺失，走 v1 fallback
+
+    prompt = template.replace("{user_profile}", load_user_profile())
+    prompt = prompt.replace("{project_context}", load_project_context())
+    prompt = prompt.replace("{learned_rules}", load_learned_rules())
+    prompt = prompt.replace("{last_ai_reply}", last_ai_reply or "")
+    prompt = prompt.replace("{page_url}", page_url or "")
+    prompt = prompt.replace("{page_title}", page_title or "")
+    prompt = prompt.replace("{surrounding_context}", surrounding_text or "")
+    prompt = prompt.replace("{selected_text}", selected_text or "")
+    prompt = prompt.replace("{comment}", comment or "")
+
+    system_prompt = "你是意图路由器。只输出 JSON，不要任何其他文字、解释或 markdown 代码块。"
+
+    try:
+        content, rc = _call_claude(prompt, system_prompt, timeout=30)
+        if rc != 0:
+            print(f"[agent_api] router error: rc={rc} content={content[:200]}")
+            return None
+        result = _parse_router_json(content)
+        if result:
+            print(f"[agent_api] router: intent={result.get('intent')} role={result.get('role')} confidence={result.get('confidence')}")
+        return result
+    except subprocess.TimeoutExpired:
+        print("[agent_api] router timeout (30s)")
+        return None
+    except Exception as e:
+        print(f"[agent_api] router exception: {e}")
+        return None
+
+# ──────────────────────────────────────────
+# v2: 角色 Prompt 构建（Step 2）
+# ──────────────────────────────────────────
+
+def build_role_prompt(role: str, page_url: str, page_title: str,
+                      selected_text: str, surrounding_text: str,
+                      comment: str, plan: str = "") -> str:
+    """根据 role 构建 Step 2 执行 prompt"""
+    template = load_prompt_template(role)
+    if not template:
+        # fallback: 用 sparring_partner 模板
+        template = load_prompt_template("sparring_partner") or ""
+
+    notion_memory = fetch_notion_memory(15)
+
+    prompt = template.replace("{agent_principles}", load_agent_principles())
+    prompt = prompt.replace("{user_profile}", load_user_profile())
+    prompt = prompt.replace("{project_context}", load_project_context())
+    prompt = prompt.replace("{learned_rules_scoped}", load_learned_rules_scoped(role))
+    prompt = prompt.replace("{notion_memory}", notion_memory)
+    prompt = prompt.replace("{page_url}", page_url or "")
+    prompt = prompt.replace("{surrounding_context}", surrounding_text or "")
+    prompt = prompt.replace("{selected_text}", selected_text or "")
+    prompt = prompt.replace("{comment}", comment or "")
+    prompt = prompt.replace("{plan}", plan or "")
+    return prompt
+
+# ──────────────────────────────────────────
+# v2: 学习信号写入
+# ──────────────────────────────────────────
+
+def save_learned_rules(new_rules: list, role: str = "all"):
+    """把路由器提取的学习信号写入 learned_rules.json"""
+    if not new_rules:
+        return
+    try:
+        raw = _load_file(LEARNED_RULES_PATH, '{"rules": []}')
+        data = json.loads(raw)
+        rules = data.get("rules", [])
+
+        # 备份当前版本
+        bak_path = LEARNED_RULES_PATH + ".bak"
+        with open(bak_path, 'w', encoding='utf-8') as f:
+            f.write(raw)
+
+        # 添加新规则
+        now = datetime.now().strftime("%Y-%m-%d")
+        max_id = max((int(r.get("id", "rule_0").split("_")[1]) for r in rules), default=0)
+        for i, rule_text in enumerate(new_rules):
+            if not rule_text or not rule_text.strip():
+                continue
+            max_id += 1
+            rules.append({
+                "id": f"rule_{max_id:03d}",
+                "rule": rule_text.strip(),
+                "scope": f"role:{role}" if role != "all" else "all",
+                "source": f"自动提取 {now}",
+                "created_at": now,
+                "last_used_at": now,
+                "active": True
+            })
+
+        # 活跃规则上限 20 条
+        active_rules = [r for r in rules if r.get("active", True)]
+        if len(active_rules) > 20:
+            # 按 last_used_at 排序，归档最旧的
+            active_rules.sort(key=lambda r: r.get("last_used_at", ""))
+            for r in active_rules[:len(active_rules) - 20]:
+                r["active"] = False
+            print(f"[agent_api] learned_rules: 归档 {len(active_rules) - 20} 条旧规则")
+
+        data["rules"] = rules
+        with open(LEARNED_RULES_PATH, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        print(f"[agent_api] learned_rules: 新增 {len(new_rules)} 条，总计 {len([r for r in rules if r.get('active', True)])} 条活跃")
+    except Exception as e:
+        print(f"[agent_api] save_learned_rules error: {e}")
+
+# ──────────────────────────────────────────
+# v2: 后台 Agent 调用
+# ──────────────────────────────────────────
+
+def run_agent_v2(comment_id: int, intent: str, role: str, prompt: str,
+                 plan: str = "", quick_response: str = "", learned: list = None):
+    """后台线程：v2 agent 执行，结果写回 replies 表"""
     import time
     start_time = time.time()
-    prompt_tokens_est = len(prompt) // 4
     status = "error"
     content = ""
-    print(f"[agent_api] 开始处理 comment_id={comment_id} agent_type=@{agent_type} prompt_len={len(prompt)}")
 
-    # 路径从环境变量读（由 start.sh 注入），fallback 到常见位置
-    CLAUDE_BIN = (
-        os.environ.get("KB_CLAUDE_BIN") or
-        os.path.expanduser("~/.npm-global/bin/claude")
-    )
-    # 确保子进程继承当前进程的完整环境（PATH、HOME、认证配置等）
-    child_env = os.environ.copy()
-    child_env.setdefault("HOME", os.path.expanduser("~"))
-    try:
-        result = subprocess.run(
-            [CLAUDE_BIN, "-p", prompt, "--output-format", "json", "--dangerously-skip-permissions",
-             "--system-prompt", "你是知识库助手的评论区 agent。直接回答用户的问题，不要执行任何 session 初始化流程（不要同步 Notion、不要读 todo、不要确认 session 阶段）。只根据下面的 prompt 内容回复。"],
-            capture_output=True,
-            text=True,
-            timeout=1800,  # 30分钟超时
-            env=child_env
-        )
-        if result.returncode == 0:
-            data = json.loads(result.stdout)
-            content = data.get("result", "（Agent 未返回内容）")
-            status = "success"
-        else:
-            # 同时捕获 stdout（可能有部分输出）和 stderr
-            err_detail = (result.stderr or result.stdout or "（无错误信息）")[:1000]
-            content = f"Agent 执行出错（returncode={result.returncode}）：{err_detail}"
-            print(f"[agent_api] run_agent error: rc={result.returncode} stderr={result.stderr[:200]} stdout={result.stdout[:200]}")
-    except subprocess.TimeoutExpired:
-        content = "Agent 超时（30分钟），深度调研仍未完成，请重试。"
-    except Exception as e:
-        content = f"Agent 调用失败：{str(e)}"
-        print(f"[agent_api] run_agent exception: {e}")
+    # 如果有 quick_response，直接用，不调 Step 2
+    if quick_response and quick_response.strip():
+        content = quick_response.strip()
+        status = "success"
+        print(f"[agent_api] v2 quick_response for comment_id={comment_id} role={role}")
+    elif intent == "task" and plan and not plan.startswith("用户已确认"):
+        # task 首轮：展示 plan，等用户确认
+        content = f"**执行计划：**\n{plan}\n\n---\n回复「可以」或「执行」确认，或告诉我怎么调整。"
+        status = "success"
+        print(f"[agent_api] v2 task plan for comment_id={comment_id}")
+    else:
+        # 需要调 Step 2
+        print(f"[agent_api] v2 Step 2: comment_id={comment_id} role={role} prompt_len={len(prompt)}")
+        system_prompt = "你是知识库助手的评论区 agent。直接回答用户的问题，不要执行任何 session 初始化流程（不要同步 Notion、不要读 todo、不要确认 session 阶段）。只根据下面的 prompt 内容回复。"
+        try:
+            content, rc = _call_claude(prompt, system_prompt, timeout=1800)
+            if rc == 0 and content:
+                status = "success"
+            else:
+                content = f"Agent 执行出错（returncode={rc}）：{content[:500]}"
+        except subprocess.TimeoutExpired:
+            content = "Agent 超时（30分钟），请重试或拆解任务。"
+        except Exception as e:
+            content = f"Agent 调用失败：{str(e)}"
 
     elapsed = round(time.time() - start_time, 1)
-    reply_tokens_est = len(content) // 4
-    print(f"[agent_api] 完成 comment_id={comment_id} status={status} elapsed={elapsed}s reply_len={len(content)}")
+    print(f"[agent_api] v2 完成 comment_id={comment_id} status={status} elapsed={elapsed}s role={role}")
 
-    # 从 comments 表查询原始数据，用于 debug_meta 上下文推断
-    try:
-        _conn = sqlite3.connect(DB_PATH)
-        _conn.row_factory = sqlite3.Row
-        _row = _conn.execute("SELECT selected_text FROM comments WHERE id = ?", (comment_id,)).fetchone()
-        _conn.close()
-        has_selected_text = bool(_row and _row["selected_text"] and _row["selected_text"].strip() and _row["selected_text"] != "（无划线内容）")
-    except Exception:
-        has_selected_text = False
+    # 学习信号写入
+    if learned:
+        save_learned_rules(learned, role)
 
-    # 检查是否有前后文
-    try:
-        _conn2 = sqlite3.connect(DB_PATH)
-        _conn2.row_factory = sqlite3.Row
-        _row2 = _conn2.execute("SELECT surrounding_text FROM comments WHERE id = ?", (comment_id,)).fetchone()
-        _conn2.close()
-        has_surrounding = bool(_row2 and _row2["surrounding_text"] and _row2["surrounding_text"].strip())
-    except Exception:
-        has_surrounding = False
-
+    # 构建 debug_meta
     debug_meta = json.dumps({
-        "agent_type": agent_type,
+        "version": "v2",
+        "intent": intent,
+        "role": role,
         "elapsed_s": elapsed,
-        "prompt_tokens_est": prompt_tokens_est,
-        "reply_tokens_est": reply_tokens_est,
-        "context_layers": {
-            "company_culture": True,
-            "project_context_with_aq": True,  # 含Active Questions
-            "notion_memory": True,
-            "selected_text": has_selected_text,
-            "surrounding_text": has_surrounding,
-            "article_context": False  # 全文摘要注入暂未实现
-        },
+        "prompt_tokens_est": len(prompt) // 4,
+        "reply_tokens_est": len(content) // 4,
+        "is_quick": bool(quick_response and quick_response.strip()),
+        "is_plan": bool(intent == "task" and plan and not plan.startswith("用户已确认")),
+        "rules_applied": [r["rule"] for r in json.loads(load_learned_rules()).get("rules", [])
+                          if r.get("active") and r.get("scope") in ("all", f"role:{role}")][:5],
         "status": status
     }, ensure_ascii=False)
 
@@ -382,49 +471,61 @@ def run_agent(comment_id: int, agent_type: str, prompt: str):
     now = datetime.now().isoformat()
     conn.execute(
         "INSERT INTO replies (comment_id, author, agent_type, content, created_at, debug_meta) VALUES (?, ?, ?, ?, ?, ?)",
+        (comment_id, "agent", role, content, now, debug_meta)
+    )
+    conn.execute("UPDATE comments SET updated_at = ? WHERE id = ?", (now, comment_id))
+    conn.commit()
+    conn.close()
+
+# v1 兼容：保留旧 run_agent 作为 fallback
+def run_agent_v1_fallback(comment_id: int, agent_type: str,
+                          page_url: str, selected_text: str,
+                          surrounding_text: str, comment: str):
+    """v1 fallback：用旧的硬编码 prompt 直接调用"""
+    import time
+    start_time = time.time()
+    # 用 v2 的角色 prompt 作为 fallback（比旧硬编码更好）
+    v1_role_map = {"竞品": "researcher", "调研": "researcher", "思辨": "sparring_partner", "解释": "explainer"}
+    role = v1_role_map.get(agent_type, "sparring_partner")
+    prompt = build_role_prompt(role, page_url, "", selected_text, surrounding_text, comment)
+
+    system_prompt = "你是知识库助手的评论区 agent。直接回答用户的问题，不要执行任何 session 初始化流程。"
+    status = "error"
+    content = ""
+    try:
+        content, rc = _call_claude(prompt, system_prompt, timeout=1800)
+        status = "success" if rc == 0 and content else "error"
+        if rc != 0:
+            content = f"Agent 执行出错：{content[:500]}"
+    except subprocess.TimeoutExpired:
+        content = "Agent 超时（30分钟），请重试。"
+    except Exception as e:
+        content = f"Agent 调用失败：{str(e)}"
+
+    elapsed = round(time.time() - start_time, 1)
+    debug_meta = json.dumps({
+        "version": "v1_fallback", "agent_type": agent_type, "role": role,
+        "elapsed_s": elapsed, "status": status
+    }, ensure_ascii=False)
+
+    conn = sqlite3.connect(DB_PATH)
+    now = datetime.now().isoformat()
+    conn.execute(
+        "INSERT INTO replies (comment_id, author, agent_type, content, created_at, debug_meta) VALUES (?, ?, ?, ?, ?, ?)",
         (comment_id, "agent", agent_type, content, now, debug_meta)
     )
-    conn.execute(
-        "UPDATE comments SET updated_at = ? WHERE id = ?",
-        (now, comment_id)
-    )
+    conn.execute("UPDATE comments SET updated_at = ? WHERE id = ?", (now, comment_id))
     conn.commit()
     conn.close()
 
 # ──────────────────────────────────────────
-# Prompt 构建 + Debug 日志
+# Debug 日志
 # ──────────────────────────────────────────
 
 DEBUG_LOG_DIR = os.path.join(ROOT, "debug-logs")
 os.makedirs(DEBUG_LOG_DIR, exist_ok=True)
 
-def build_agent_prompt(agent_type: str, page_url: str, selected_text: str, surrounding_text: str, comment: str) -> str:
-    """构建完整的agent prompt，注入所有context层"""
-    company_culture = load_company_culture()
-    project_context = load_project_context()
-    notion_memory = fetch_notion_memory(15)
-
-    prompt_template = AGENT_PROMPTS.get(agent_type, AGENT_PROMPTS[DEFAULT_AGENT])
-
-    # 构建划线上下文：如果有前后文，拼接成更完整的上下文
-    text_context = selected_text
-    if surrounding_text and surrounding_text.strip():
-        text_context = f"[前后文] ...{surrounding_text}...\n[用户划线部分] {selected_text}"
-
-    prompt = prompt_template.format(
-        project_context=project_context,
-        page_url=page_url,
-        selected_text=text_context,
-        comment=comment,
-    )
-    # L1 文化层放最前，作为全局行为约束
-    if company_culture:
-        prompt = company_culture + "\n\n---\n\n" + prompt
-    if notion_memory:
-        prompt = notion_memory + "\n\n---\n\n" + prompt
-    return prompt
-
-def write_debug_log(comment_id: int, agent_type: str, prompt: str):
+def write_debug_log(comment_id: int, agent_type: str, prompt: str, extra: dict = None):
     """把完整prompt写到debug-logs目录，方便排查"""
     try:
         now = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -433,10 +534,11 @@ def write_debug_log(comment_id: int, agent_type: str, prompt: str):
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(f"# Debug Log: Comment #{comment_id}\n")
             f.write(f"**时间：** {now}\n")
-            f.write(f"**Agent类型：** @{agent_type}\n")
-            f.write(f"**Prompt长度：** {len(prompt)} 字符 ≈ {len(prompt)//4} tokens\n\n")
-            f.write("---\n\n")
-            f.write("## 完整 Prompt\n\n")
+            f.write(f"**Agent类型：** {agent_type}\n")
+            f.write(f"**Prompt长度：** {len(prompt)} 字符 ≈ {len(prompt)//4} tokens\n")
+            if extra:
+                f.write(f"**路由结果：** {json.dumps(extra, ensure_ascii=False)}\n")
+            f.write("\n---\n\n## 完整 Prompt\n\n")
             f.write(prompt)
         print(f"[agent_api] debug log: {filepath}")
     except Exception as e:
@@ -463,19 +565,22 @@ class StatusUpdate(BaseModel):
 
 @app.post("/comments")
 def create_comment(body: CommentCreate):
-    """新建评论，自动解析 @agent 并后台触发"""
-    agent_type, cleaned_comment = parse_agent_type(body.comment)
+    """新建评论，v2 路由器自动判断 intent/role，保留 @手动路由兼容"""
+    v1_agent_type, cleaned_comment = parse_agent_type(body.comment)
     now = datetime.now().isoformat()
 
+    # 存储时 agent_type 先记录 v1 类型（兼容），后面会被 v2 覆盖
+    agent_type_for_db = v1_agent_type or "v2_pending"
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.execute(
         """INSERT INTO comments (page_url, page_title, selected_text, surrounding_text, comment, agent_type, status, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)""",
-        (body.page_url, body.page_title, body.selected_text, body.surrounding_text or "", cleaned_comment, agent_type, now, now)
+        (body.page_url, body.page_title, body.selected_text, body.surrounding_text or "",
+         cleaned_comment, agent_type_for_db, now, now)
     )
     comment_id = cursor.lastrowid
 
-    # 全文缓存：按URL去重，首次存，后续复用
+    # 全文缓存：按URL去重
     if body.page_content and body.page_content.strip():
         try:
             conn.execute(
@@ -484,36 +589,75 @@ def create_comment(body: CommentCreate):
                 (body.page_url, body.page_title, body.page_content, now, now)
             )
         except Exception:
-            pass  # 重复URL，静默忽略
+            pass
 
     conn.commit()
     conn.close()
 
-    # 构建 agent prompt
-    prompt = build_agent_prompt(
-        agent_type=agent_type,
-        page_url=body.page_url,
-        selected_text=body.selected_text or "（无划线内容）",
-        surrounding_text=body.surrounding_text or "",
-        comment=cleaned_comment,
-    )
+    # no_agent=True 时仅存储
+    if body.no_agent:
+        return {"id": comment_id, "agent_type": agent_type_for_db, "status": "open",
+                "message": "评论已存储，等待手动召唤 AI"}
 
-    # 写debug日志
-    write_debug_log(comment_id, agent_type, prompt)
+    # ── 分发逻辑 ──
+    def _dispatch():
+        selected = body.selected_text or "（无划线内容）"
+        surrounding = body.surrounding_text or ""
 
-    # no_agent=True 时仅存储，不触发后台 agent（用户手动召唤时再触发）
-    if not body.no_agent:
-        thread = threading.Thread(target=run_agent, args=(comment_id, agent_type, prompt), daemon=True)
-        thread.start()
-        message = f"评论已创建，@{agent_type} agent 正在处理中..."
-    else:
-        message = "评论已存储，等待手动召唤 AI"
+        # 路径 1：有 @手动路由 → 映射到 v2 role，跳过路由器
+        if v1_agent_type and v1_agent_type in V1_TO_V2_ROLE:
+            intent, role = V1_TO_V2_ROLE[v1_agent_type]
+            print(f"[agent_api] v1 @{v1_agent_type} → v2 intent={intent} role={role}")
+            prompt = build_role_prompt(role, body.page_url, body.page_title,
+                                      selected, surrounding, cleaned_comment)
+            write_debug_log(comment_id, f"v1→{role}", prompt, {"v1_agent_type": v1_agent_type})
+            # 更新 DB 的 agent_type
+            _conn = sqlite3.connect(DB_PATH)
+            _conn.execute("UPDATE comments SET agent_type = ? WHERE id = ?", (role, comment_id))
+            _conn.commit()
+            _conn.close()
+            run_agent_v2(comment_id, intent, role, prompt)
+            return
+
+        # 路径 2：v2 路由器
+        router_result = run_router(body.page_url, body.page_title,
+                                   selected, surrounding, cleaned_comment)
+
+        # 路由器失败 → v1 fallback
+        if not router_result:
+            print(f"[agent_api] router failed, falling back to v1 ({DEFAULT_AGENT})")
+            run_agent_v1_fallback(comment_id, DEFAULT_AGENT, body.page_url,
+                                 selected, surrounding, cleaned_comment)
+            return
+
+        intent = router_result.get("intent", "dialogue")
+        role = router_result.get("role", "sparring_partner")
+        plan = router_result.get("plan", "")
+        quick_response = router_result.get("quick_response", "")
+        learned = router_result.get("learned", [])
+
+        # 更新 DB 的 agent_type 为 v2 role
+        _conn = sqlite3.connect(DB_PATH)
+        _conn.execute("UPDATE comments SET agent_type = ? WHERE id = ?", (role, comment_id))
+        _conn.commit()
+        _conn.close()
+
+        # 构建 Step 2 prompt（即使有 quick_response 也构建，debug 用）
+        prompt = build_role_prompt(role, body.page_url, body.page_title,
+                                   selected, surrounding, cleaned_comment, plan)
+        write_debug_log(comment_id, f"v2_{role}", prompt, router_result)
+
+        run_agent_v2(comment_id, intent, role, prompt,
+                     plan=plan, quick_response=quick_response, learned=learned)
+
+    thread = threading.Thread(target=_dispatch, daemon=True)
+    thread.start()
 
     return {
         "id": comment_id,
-        "agent_type": agent_type,
+        "agent_type": agent_type_for_db,
         "status": "open",
-        "message": message
+        "message": "评论已创建，AI 正在思考中..."
     }
 
 @app.get("/comments")
@@ -607,27 +751,54 @@ def update_status(comment_id: int, body: StatusUpdate):
 
 @app.post("/comments/{comment_id}/rerun")
 def rerun_agent(comment_id: int):
-    """重新触发 agent（用于不满意结果时）"""
+    """重新触发 agent（v2 路由器重跑）"""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     row = conn.execute("SELECT * FROM comments WHERE id = ?", (comment_id,)).fetchone()
+
+    # 获取上一轮 AI 回复（多轮对话支持）
+    last_ai_reply = ""
+    replies = conn.execute(
+        "SELECT content FROM replies WHERE comment_id = ? AND author = 'agent' ORDER BY created_at DESC LIMIT 1",
+        (comment_id,)
+    ).fetchone()
+    if replies:
+        last_ai_reply = replies["content"][:500]  # 截断避免 prompt 太长
+
     conn.close()
     if not row:
         raise HTTPException(status_code=404, detail="Comment not found")
 
     c = dict(row)
-    agent_type = c["agent_type"] or DEFAULT_AGENT
-    prompt = build_agent_prompt(
-        agent_type=agent_type,
-        page_url=c["page_url"],
-        selected_text=c["selected_text"] or "（无划线内容）",
-        surrounding_text=c.get("surrounding_text", "") or "",
-        comment=c["comment"],
-    )
-    write_debug_log(comment_id, agent_type, prompt)
-    thread = threading.Thread(target=run_agent, args=(comment_id, agent_type, prompt), daemon=True)
+
+    def _rerun():
+        selected = c["selected_text"] or "（无划线内容）"
+        surrounding = c.get("surrounding_text", "") or ""
+        comment = c["comment"]
+
+        # 重跑走 v2 路由器
+        router_result = run_router(c["page_url"], c.get("page_title", ""),
+                                   selected, surrounding, comment, last_ai_reply)
+        if not router_result:
+            run_agent_v1_fallback(comment_id, DEFAULT_AGENT, c["page_url"],
+                                 selected, surrounding, comment)
+            return
+
+        intent = router_result.get("intent", "dialogue")
+        role = router_result.get("role", "sparring_partner")
+        plan = router_result.get("plan", "")
+        quick_response = router_result.get("quick_response", "")
+        learned = router_result.get("learned", [])
+
+        prompt = build_role_prompt(role, c["page_url"], c.get("page_title", ""),
+                                   selected, surrounding, comment, plan)
+        write_debug_log(comment_id, f"v2_rerun_{role}", prompt, router_result)
+        run_agent_v2(comment_id, intent, role, prompt,
+                     plan=plan, quick_response=quick_response, learned=learned)
+
+    thread = threading.Thread(target=_rerun, daemon=True)
     thread.start()
-    return {"message": f"已重新触发 @{agent_type} agent"}
+    return {"message": f"已重新触发 AI（v2 路由器）"}
 
 @app.get("/health")
 def health():
