@@ -816,6 +816,16 @@ const commentSystem = (() => {
   function render() {
     const body = document.getElementById("kb-cp-body");
     if (!body) return;
+    // 保存所有追问框的草稿内容和展开状态，render 后恢复
+    const drafts = {};
+    body.querySelectorAll("textarea[id^='kb-reply-ta-']").forEach(ta => {
+      const id = ta.id.replace("kb-reply-ta-", "");
+      const box = document.getElementById("kb-inline-reply-" + id);
+      const isOpen = box && !box.classList.contains("kb-expand-hidden");
+      if (ta.value || isOpen) {
+        drafts[id] = { text: ta.value, open: isOpen };
+      }
+    });
     const comments = load();
     if (!comments.length) {
       body.innerHTML = '<div class="kb-empty">选中文字「💬 评论」添加第一条评论</div>';
@@ -893,6 +903,13 @@ const commentSystem = (() => {
         expandBtn.classList.remove("kb-expand-hidden");
       }
     });
+    // 恢复追问框草稿和展开状态
+    for (const [id, draft] of Object.entries(drafts)) {
+      const ta = document.getElementById("kb-reply-ta-" + id);
+      const box = document.getElementById("kb-inline-reply-" + id);
+      if (ta && draft.text) ta.value = draft.text;
+      if (box && draft.open) box.classList.remove("kb-expand-hidden");
+    }
   }
 
   // 事件委托：折叠/展开 + 追问输入框
