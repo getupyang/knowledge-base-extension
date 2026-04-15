@@ -545,14 +545,25 @@ const commentSystem = (() => {
         thought: "",
         aiConversation: ""
       })
-    }).then(r => r.json()).then(resp => {
+    }).then(r => {
+      if (!r.ok) {
+        console.error("[KB] Notion save HTTP error:", r.status, r.statusText);
+        return r.text().then(t => { throw new Error(`HTTP ${r.status}: ${t.slice(0, 200)}`); });
+      }
+      return r.json();
+    }).then(resp => {
       if (resp.success) {
         showToast("✓ 已高亮并保存到 Notion", "success");
       } else {
-        showToast("✗ Notion 保存失败：" + (resp.detail || "未知错误"), "error");
+        const detail = resp.detail || "未知错误";
+        console.error("[KB] Notion save failed:", detail);
+        showToast("✗ Notion 保存失败：" + detail, "error");
       }
-    }).catch(() => {
-      showToast("✗ Notion 保存失败：后端未启动", "error");
+    }).catch(err => {
+      console.error("[KB] Notion save error:", err.message || err);
+      const msg = err.message || String(err);
+      const hint = msg.includes("Failed to fetch") ? "无法连接后端（localhost:8766）" : msg;
+      showToast("✗ Notion 保存失败：" + hint, "error");
     });
   }
 
@@ -1094,7 +1105,13 @@ const commentSystem = (() => {
         thought: comment.text,
         aiConversation: allMessages,
       })
-    }).then(r => r.json()).then(resp => {
+    }).then(r => {
+      if (!r.ok) {
+        console.error("[KB] Notion upsert HTTP error:", r.status, r.statusText);
+        return r.text().then(t => { throw new Error(`HTTP ${r.status}: ${t.slice(0, 200)}`); });
+      }
+      return r.json();
+    }).then(resp => {
       if (resp.success) {
         if (resp.pageId && !comment.notionPageId) {
           const comments = load();
@@ -1103,10 +1120,15 @@ const commentSystem = (() => {
         }
         showToast("✓ 已保存到 Notion", "success");
       } else {
-        showToast("✗ Notion 保存失败：" + (resp.detail || resp.error || "未知错误"), "error");
+        const detail = resp.detail || resp.error || "未知错误";
+        console.error("[KB] Notion upsert failed:", detail);
+        showToast("✗ Notion 保存失败：" + detail, "error");
       }
-    }).catch(() => {
-      showToast("✗ Notion 保存失败：后端未启动", "error");
+    }).catch(err => {
+      console.error("[KB] Notion upsert error:", err.message || err);
+      const msg = err.message || String(err);
+      const hint = msg.includes("Failed to fetch") ? "无法连接后端（localhost:8766）" : msg;
+      showToast("✗ Notion 保存失败：" + hint, "error");
     });
   }
 
