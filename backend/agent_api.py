@@ -243,6 +243,12 @@ def _get_claude_bin():
 def _get_child_env():
     env = os.environ.copy()
     env.setdefault("HOME", os.path.expanduser("~"))
+    # 确保 PATH 包含 node 和 claude 所在目录，防止从缺少完整 PATH 的环境启动时找不到
+    path = env.get("PATH", "")
+    for extra in ["/usr/local/bin", os.path.expanduser("~/.npm-global/bin"), "/opt/homebrew/bin"]:
+        if extra not in path:
+            path = extra + ":" + path
+    env["PATH"] = path
     return env
 
 def _call_claude(prompt: str, system_prompt: str, timeout: int = 1800) -> tuple:
@@ -408,11 +414,229 @@ def save_learned_rules(new_rules: list, role: str = "all"):
         print(f"[agent_api] save_learned_rules error: {e}")
 
 # ──────────────────────────────────────────
+# v2: 学习层 — 画像 & 项目上下文自动维护
+# ──────────────────────────────────────────
+
+_PROFILE_REVIEW_INTERVAL = 20   # 每 20 次交互触发画像审视
+_COLD_START_THRESHOLD = 5       # 前 5 条评论后触发冷启动
+
+def _get_interaction_count() -> int:
+    """从 DB 查询总交互数（有 agent 回复的评论数）"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        count = conn.execute(
+            "SELECT COUNT(DISTINCT comment_id) FROM replies WHERE author = 'agent'"
+        ).fetchone()[0]
+        conn.close()
+        return count
+    except Exception:
+        return 0
+
+def _get_recent_interactions(limit: int = 20) -> str:
+    """拉最近 N 条交互摘要，用于画像/上下文审视"""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute("""
+            SELECT c.selected_text, c.comment, r.content, c.page_title, c.agent_type
+            FROM comments c
+            JOIN replies r ON r.comment_id = c.id AND r.author = 'agent'
+            ORDER BY r.created_at DESC
+            LIMIT ?
+        """, (limit,)).fetchall()
+        conn.close()
+
+        if not rows:
+            return ""
+        summaries = []
+        for selected, comment, reply, title, role in rows:
+            summaries.append(
+                f"- 页面「{title or '?'}」，角色={role}\n"
+                f"  划线：{(selected or '')[:80]}\n"
+                f"  评论：{(comment or '')[:100]}\n"
+                f"  AI回复：{(reply or '')[:150]}"
+            )
+        return "\n".join(summaries)
+    except Exception as e:
+        print(f"[learning] _get_recent_interactions error: {e}")
+        return ""
+
+def _review_user_profile(interaction_count: int):
+    """异步审视用户画像，有变化则更新 user_profile.md"""
+    try:
+        current_profile = _load_file(USER_PROFILE_PATH, "")
+        recent = _get_recent_interactions(20)
+        if not recent:
+            return
+
+        is_cold_start = interaction_count <= _COLD_START_THRESHOLD
+        is_empty = "[空白，待 AI 填充]" in current_profile or not current_profile.strip()
+
+        if is_cold_start and is_empty:
+            task = "冷启动"
+            instruction = (
+                "这是新用户的前几条交互。请根据评论内容推断用户画像，填充以下模板的每个字段。\n"
+                "注意：只根据实际交互内容推断，不确定的写「待观察」。\n"
+            )
+        else:
+            task = "定期审视"
+            instruction = (
+                "请对比现有画像和最近 20 条交互，判断画像是否需要更新。\n"
+                "- 如果没有实质变化：直接输出原文，不做任何修改\n"
+                "- 如果有变化：更新相关字段，保持格式不变\n"
+                "注意：只更新有证据支持的字段，不要猜测。\n"
+            )
+
+        prompt = f"""你是知识库助手的学习系统。任务：{task}
+
+{instruction}
+
+## 当前画像
+{current_profile or '（空白，首次填充）'}
+
+## 画像模板格式（必须严格保持）
+## 角色
+[描述用户的职业/身份]
+
+## 知识水平
+[描述用户的技术/领域知识程度]
+
+## 思维偏好
+[描述用户的思考风格、关注什么]
+
+## 当前关注领域
+[描述用户最近在研究什么]
+
+## 最近 {len(recent.split(chr(10)))} 条交互摘要
+{recent}
+
+直接输出更新后的 markdown 内容，不要任何额外解释或代码块包裹。"""
+
+        system_prompt = "你是用户画像维护系统。只输出 markdown 格式的画像内容，不要任何其他文字。"
+
+        content, rc = _call_claude(prompt, system_prompt, timeout=60)
+        if rc != 0 or not content.strip():
+            print(f"[learning] profile review failed: rc={rc}")
+            return
+
+        # 清理可能的 markdown 代码块包裹
+        content = content.strip()
+        content = re.sub(r'^```(?:markdown)?\s*', '', content)
+        content = re.sub(r'\s*```\s*$', '', content)
+        content = content.strip()
+
+        # 只有内容真的变了才写入
+        if content != current_profile.strip():
+            with open(USER_PROFILE_PATH, 'w', encoding='utf-8') as f:
+                f.write(content + "\n")
+            print(f"[learning] user_profile.md 已更新 ({task})")
+        else:
+            print(f"[learning] user_profile.md 无变化")
+
+    except Exception as e:
+        print(f"[learning] _review_user_profile error: {e}")
+
+def _review_project_context(agent_reply: str, user_comment: str):
+    """检测 agent 回复中是否有项目状态变化信号，有则更新 project_context.md"""
+    try:
+        current_context = _load_file(PROJECT_CONTEXT_PATH, "")
+        if not current_context.strip():
+            return  # 没有现有上下文，不处理
+
+        # 先快速判断：用户评论中是否有项目状态变化的信号词
+        change_signals = [
+            "上线了", "已部署", "已发布", "方向改了", "不做了", "决定",
+            "已经", "改成", "换成", "砍掉", "新增了", "完成了",
+            "launched", "shipped", "deployed", "pivoted", "decided"
+        ]
+        has_signal = any(s in user_comment for s in change_signals)
+        if not has_signal:
+            return
+
+        prompt = f"""你是知识库助手的项目上下文维护系统。
+
+用户刚才的评论中可能包含项目状态变化的信号。请对比现有上下文和用户评论，判断是否需要更新。
+
+## 现有项目上下文
+{current_context}
+
+## 用户评论
+{user_comment}
+
+## 规则
+1. 只有"项目方向/阶段/假设/技术栈/竞品格局"等核心状态真的变了才更新
+2. 日常评论（提问、讨论、调研请求）不算状态变化
+3. 如果需要更新：输出完整的更新后 markdown（保持所有原有结构）
+4. 如果不需要更新：只输出 NO_CHANGE
+
+直接输出结果，不要任何额外解释。"""
+
+        system_prompt = "你是项目上下文维护系统。判断是否需要更新，输出结果。"
+
+        content, rc = _call_claude(prompt, system_prompt, timeout=60)
+        if rc != 0 or not content.strip():
+            return
+
+        content = content.strip()
+        if content == "NO_CHANGE" or "NO_CHANGE" in content[:50]:
+            print(f"[learning] project_context.md 无需更新")
+            return
+
+        # 清理 markdown 包裹
+        content = re.sub(r'^```(?:markdown)?\s*', '', content)
+        content = re.sub(r'\s*```\s*$', '', content)
+        content = content.strip()
+
+        if content and content != current_context.strip() and len(content) > 100:
+            # 备份
+            bak_path = PROJECT_CONTEXT_PATH + ".bak"
+            with open(bak_path, 'w', encoding='utf-8') as f:
+                f.write(current_context)
+            # 写入
+            with open(PROJECT_CONTEXT_PATH, 'w', encoding='utf-8') as f:
+                f.write(content + "\n")
+            print(f"[learning] project_context.md 已更新")
+        else:
+            print(f"[learning] project_context.md 内容无实质变化")
+
+    except Exception as e:
+        print(f"[learning] _review_project_context error: {e}")
+
+def _trigger_learning_layer(comment_id: int, user_comment: str, agent_reply: str):
+    """Agent 成功回复后，检查是否需要触发学习层更新"""
+    try:
+        count = _get_interaction_count()
+        print(f"[learning] interaction_count={count}")
+
+        # 冷启动：第 5 条时触发首次画像推断
+        if count == _COLD_START_THRESHOLD:
+            print(f"[learning] 触发冷启动画像推断 (count={count})")
+            thread = threading.Thread(
+                target=_review_user_profile, args=(count,), daemon=True)
+            thread.start()
+
+        # 定期审视：每 20 条触发
+        elif count > 0 and count % _PROFILE_REVIEW_INTERVAL == 0:
+            print(f"[learning] 触发定期画像审视 (count={count})")
+            thread = threading.Thread(
+                target=_review_user_profile, args=(count,), daemon=True)
+            thread.start()
+
+        # 项目上下文：每次都检查信号词（快速，不调 API）
+        # 只有命中信号词才会真正调 API
+        thread = threading.Thread(
+            target=_review_project_context, args=(agent_reply, user_comment), daemon=True)
+        thread.start()
+
+    except Exception as e:
+        print(f"[learning] _trigger_learning_layer error: {e}")
+
+# ──────────────────────────────────────────
 # v2: 后台 Agent 调用
 # ──────────────────────────────────────────
 
 def run_agent_v2(comment_id: int, intent: str, role: str, prompt: str,
-                 plan: str = "", quick_response: str = "", learned: list = None):
+                 plan: str = "", quick_response: str = "", learned: list = None,
+                 user_comment: str = ""):
     """后台线程：v2 agent 执行，结果写回 replies 表"""
     import time
     start_time = time.time()
@@ -476,6 +700,10 @@ def run_agent_v2(comment_id: int, intent: str, role: str, prompt: str,
     conn.execute("UPDATE comments SET updated_at = ? WHERE id = ?", (now, comment_id))
     conn.commit()
     conn.close()
+
+    # 学习层：成功时触发画像/上下文审视
+    if status == "success":
+        _trigger_learning_layer(comment_id, user_comment, content)
 
 # v1 兼容：保留旧 run_agent 作为 fallback
 def run_agent_v1_fallback(comment_id: int, agent_type: str,
@@ -624,7 +852,7 @@ def create_comment(body: CommentCreate):
             _conn.execute("UPDATE comments SET agent_type = ? WHERE id = ?", (role, comment_id))
             _conn.commit()
             _conn.close()
-            run_agent_v2(comment_id, intent, role, prompt)
+            run_agent_v2(comment_id, intent, role, prompt, user_comment=cleaned_comment)
             return
 
         # 路径 2：v2 路由器
@@ -656,7 +884,8 @@ def create_comment(body: CommentCreate):
         write_debug_log(comment_id, f"v2_{role}", prompt, router_result)
 
         run_agent_v2(comment_id, intent, role, prompt,
-                     plan=plan, quick_response=quick_response, learned=learned)
+                     plan=plan, quick_response=quick_response, learned=learned,
+                     user_comment=cleaned_comment)
 
     thread = threading.Thread(target=_dispatch, daemon=True)
     thread.start()
@@ -800,7 +1029,8 @@ def rerun_agent(comment_id: int):
             write_debug_log(comment_id, f"v2_plan_exec_{role}", prompt,
                            {"plan_confirmed": True, "plan": plan_text})
             run_agent_v2(comment_id, "task", role, prompt,
-                         plan=f"用户已确认，执行计划：{plan_text}")
+                         plan=f"用户已确认，执行计划：{plan_text}",
+                         user_comment=comment)
             return
 
         # ── 正常路径：走 v2 路由器 ──
@@ -821,7 +1051,8 @@ def rerun_agent(comment_id: int):
                                    selected, surrounding, comment, plan)
         write_debug_log(comment_id, f"v2_rerun_{role}", prompt, router_result)
         run_agent_v2(comment_id, intent, role, prompt,
-                     plan=plan, quick_response=quick_response, learned=learned)
+                     plan=plan, quick_response=quick_response, learned=learned,
+                     user_comment=comment)
 
     thread = threading.Thread(target=_rerun, daemon=True)
     thread.start()
@@ -830,6 +1061,32 @@ def rerun_agent(comment_id: int):
 @app.get("/health")
 def health():
     return {"status": "ok", "db": DB_PATH}
+
+@app.get("/learning/status")
+def learning_status():
+    """学习层状态：查看当前画像、交互计数、下次触发时间"""
+    count = _get_interaction_count()
+    next_profile_review = _PROFILE_REVIEW_INTERVAL - (count % _PROFILE_REVIEW_INTERVAL)
+    profile = _load_file(USER_PROFILE_PATH, "")
+    rules_raw = _load_file(LEARNED_RULES_PATH, '{"rules": []}')
+    rules = json.loads(rules_raw).get("rules", [])
+    active_rules = [r for r in rules if r.get("active", True)]
+    return {
+        "interaction_count": count,
+        "next_profile_review_in": next_profile_review,
+        "profile_is_empty": "[空白，待 AI 填充]" in profile or not profile.strip(),
+        "active_learned_rules": len(active_rules),
+        "total_learned_rules": len(rules),
+        "user_profile_preview": profile[:300] if profile else "(empty)",
+    }
+
+@app.post("/learning/review-profile")
+def trigger_profile_review():
+    """手动触发画像审视"""
+    count = _get_interaction_count()
+    thread = threading.Thread(target=_review_user_profile, args=(count,), daemon=True)
+    thread.start()
+    return {"message": f"画像审视已触发 (interaction_count={count})"}
 
 @app.get("/debug-env")
 def debug_env():
