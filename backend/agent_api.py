@@ -504,8 +504,16 @@ def run_agent_v1_fallback(comment_id: int, agent_type: str,
 
     elapsed = round(time.time() - start_time, 1)
     debug_meta = json.dumps({
-        "version": "v1_fallback", "agent_type": agent_type, "role": role,
-        "elapsed_s": elapsed, "status": status
+        "version": "v1_fallback",
+        "intent": "dialogue",
+        "role": role,
+        "elapsed_s": elapsed,
+        "prompt_tokens_est": len(prompt) // 4,
+        "reply_tokens_est": len(content) // 4,
+        "is_quick": False,
+        "is_plan": False,
+        "rules_applied": [],
+        "status": status
     }, ensure_ascii=False)
 
     conn = sqlite3.connect(DB_PATH)
@@ -751,19 +759,24 @@ def update_status(comment_id: int, body: StatusUpdate):
 
 @app.post("/comments/{comment_id}/rerun")
 def rerun_agent(comment_id: int):
-    """重新触发 agent（v2 路由器重跑）"""
+    """重新触发 agent（v2 路由器重跑，plan 确认后直接执行 Step 2）"""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     row = conn.execute("SELECT * FROM comments WHERE id = ?", (comment_id,)).fetchone()
 
-    # 获取上一轮 AI 回复（多轮对话支持）
+    # 获取上一轮 AI 回复 + debug_meta
     last_ai_reply = ""
-    replies = conn.execute(
-        "SELECT content FROM replies WHERE comment_id = ? AND author = 'agent' ORDER BY created_at DESC LIMIT 1",
+    last_debug_meta = {}
+    last_reply = conn.execute(
+        "SELECT content, debug_meta FROM replies WHERE comment_id = ? AND author = 'agent' ORDER BY created_at DESC LIMIT 1",
         (comment_id,)
     ).fetchone()
-    if replies:
-        last_ai_reply = replies["content"][:500]  # 截断避免 prompt 太长
+    if last_reply:
+        last_ai_reply = last_reply["content"][:500]
+        try:
+            last_debug_meta = json.loads(last_reply["debug_meta"] or "{}")
+        except Exception:
+            pass
 
     conn.close()
     if not row:
@@ -776,7 +789,21 @@ def rerun_agent(comment_id: int):
         surrounding = c.get("surrounding_text", "") or ""
         comment = c["comment"]
 
-        # 重跑走 v2 路由器
+        # ── 快捷路径：上一轮是 plan，用户确认后直接执行 Step 2 ──
+        if last_debug_meta.get("is_plan"):
+            role = last_debug_meta.get("role", "researcher")
+            # 从上一轮 plan 内容中提取执行计划（去掉 markdown 包装）
+            plan_text = last_ai_reply.replace("**执行计划：**\n", "").split("\n---")[0].strip()
+            print(f"[agent_api] rerun: plan confirmed, skip router → {role} with plan")
+            prompt = build_role_prompt(role, c["page_url"], c.get("page_title", ""),
+                                       selected, surrounding, comment, plan_text)
+            write_debug_log(comment_id, f"v2_plan_exec_{role}", prompt,
+                           {"plan_confirmed": True, "plan": plan_text})
+            run_agent_v2(comment_id, "task", role, prompt,
+                         plan=f"用户已确认，执行计划：{plan_text}")
+            return
+
+        # ── 正常路径：走 v2 路由器 ──
         router_result = run_router(c["page_url"], c.get("page_title", ""),
                                    selected, surrounding, comment, last_ai_reply)
         if not router_result:
@@ -798,7 +825,7 @@ def rerun_agent(comment_id: int):
 
     thread = threading.Thread(target=_rerun, daemon=True)
     thread.start()
-    return {"message": f"已重新触发 AI（v2 路由器）"}
+    return {"message": f"已重新触发 AI（v2）"}
 
 @app.get("/health")
 def health():

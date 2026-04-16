@@ -850,18 +850,39 @@ const commentSystem = (() => {
         if (DEBUG_MODE && r.isAI && r.debugMeta) {
           try {
             const dm = typeof r.debugMeta === "string" ? JSON.parse(r.debugMeta) : r.debugMeta;
-            const ctx = dm.context_layers || {};
-            const notionOk = ctx.notion_memory ? "✓" : "✗";
-            const selOk = ctx.selected_text ? "✓" : "✗";
-            debugHtml = `
-              <details class="kb-debug">
-                <summary>▶ Debug</summary>
-                <div class="kb-debug-body">
-                  Agent: @${dm.agent_type} · 耗时: ${dm.elapsed_s}s · Prompt ~${dm.prompt_tokens_est} tokens<br>
-                  Context: project✓ notion${notionOk} selected_text${selOk} 文章上下文✗<br>
-                  状态: ${dm.status}
-                </div>
-              </details>`;
+            // v2 格式
+            if (dm.version) {
+              const ver = dm.version === "v1_fallback" ? "v1↓" : "v2";
+              const roleLabel = dm.role || "?";
+              const intentLabel = dm.intent || "?";
+              const quickLabel = dm.is_quick ? " ⚡quick" : "";
+              const planLabel = dm.is_plan ? " 📋plan" : "";
+              const rulesHtml = (dm.rules_applied || []).length > 0
+                ? `<br>Rules: ${dm.rules_applied.map(r => `「${r}」`).join(" ")}`
+                : "";
+              debugHtml = `
+                <details class="kb-debug">
+                  <summary>▶ Debug</summary>
+                  <div class="kb-debug-body">
+                    [${ver}] ${intentLabel}/${roleLabel}${quickLabel}${planLabel} · ${dm.elapsed_s}s · ~${dm.prompt_tokens_est || "?"} tokens<br>
+                    状态: ${dm.status}${rulesHtml}
+                  </div>
+                </details>`;
+            } else {
+              // v1 旧格式兼容
+              const ctx = dm.context_layers || {};
+              const notionOk = ctx.notion_memory ? "✓" : "✗";
+              const selOk = ctx.selected_text ? "✓" : "✗";
+              debugHtml = `
+                <details class="kb-debug">
+                  <summary>▶ Debug</summary>
+                  <div class="kb-debug-body">
+                    [v1] @${dm.agent_type} · ${dm.elapsed_s}s · ~${dm.prompt_tokens_est} tokens<br>
+                    Context: project✓ notion${notionOk} selected_text${selOk}<br>
+                    状态: ${dm.status}
+                  </div>
+                </details>`;
+            }
           } catch (e) { /* 解析失败静默 */ }
         }
         const safeText = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
