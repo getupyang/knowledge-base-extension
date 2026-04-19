@@ -648,11 +648,6 @@ def run_agent_v2(comment_id: int, intent: str, role: str, prompt: str,
         content = quick_response.strip()
         status = "success"
         print(f"[agent_api] v2 quick_response for comment_id={comment_id} role={role}")
-    elif intent == "task" and plan and not plan.startswith("用户已确认"):
-        # task 首轮：展示 plan，等用户确认
-        content = f"**执行计划：**\n{plan}\n\n---\n回复「可以」或「执行」确认，或告诉我怎么调整。"
-        status = "success"
-        print(f"[agent_api] v2 task plan for comment_id={comment_id}")
     else:
         # 需要调 Step 2
         print(f"[agent_api] v2 Step 2: comment_id={comment_id} role={role} prompt_len={len(prompt)}")
@@ -675,6 +670,10 @@ def run_agent_v2(comment_id: int, intent: str, role: str, prompt: str,
     if learned:
         save_learned_rules(learned, role)
 
+    # 判断是否为 plan 回复（researcher 规划阶段的产出）
+    is_plan_response = (intent == "task" and not plan and status == "success"
+                        and ("确认" in content or "执行」" in content))
+
     # 构建 debug_meta
     debug_meta = json.dumps({
         "version": "v2",
@@ -684,7 +683,7 @@ def run_agent_v2(comment_id: int, intent: str, role: str, prompt: str,
         "prompt_tokens_est": len(prompt) // 4,
         "reply_tokens_est": len(content) // 4,
         "is_quick": bool(quick_response and quick_response.strip()),
-        "is_plan": bool(intent == "task" and plan and not plan.startswith("用户已确认")),
+        "is_plan": is_plan_response,
         "rules_applied": [r["rule"] for r in json.loads(load_learned_rules()).get("rules", [])
                           if r.get("active") and r.get("scope") in ("all", f"role:{role}")][:5],
         "status": status
@@ -868,7 +867,6 @@ def create_comment(body: CommentCreate):
 
         intent = router_result.get("intent", "dialogue")
         role = router_result.get("role", "sparring_partner")
-        plan = router_result.get("plan", "")
         quick_response = router_result.get("quick_response", "")
         learned = router_result.get("learned", [])
 
@@ -878,13 +876,13 @@ def create_comment(body: CommentCreate):
         _conn.commit()
         _conn.close()
 
-        # 构建 Step 2 prompt（即使有 quick_response 也构建，debug 用）
+        # 构建 Step 2 prompt（task 时 plan 为空，researcher 会进入规划模式）
         prompt = build_role_prompt(role, body.page_url, body.page_title,
-                                   selected, surrounding, cleaned_comment, plan)
+                                   selected, surrounding, cleaned_comment)
         write_debug_log(comment_id, f"v2_{role}", prompt, router_result)
 
         run_agent_v2(comment_id, intent, role, prompt,
-                     plan=plan, quick_response=quick_response, learned=learned,
+                     quick_response=quick_response, learned=learned,
                      user_comment=cleaned_comment)
 
     thread = threading.Thread(target=_dispatch, daemon=True)
@@ -1021,15 +1019,16 @@ def rerun_agent(comment_id: int):
         # ── 快捷路径：上一轮是 plan，用户确认后直接执行 Step 2 ──
         if last_debug_meta.get("is_plan"):
             role = last_debug_meta.get("role", "researcher")
-            # 从上一轮 plan 内容中提取执行计划（去掉 markdown 包装）
-            plan_text = last_ai_reply.replace("**执行计划：**\n", "").split("\n---")[0].strip()
+            # 上一轮 AI 回复就是 researcher 生成的完整 plan，直接传入
+            plan_text = last_ai_reply
             print(f"[agent_api] rerun: plan confirmed, skip router → {role} with plan")
             prompt = build_role_prompt(role, c["page_url"], c.get("page_title", ""),
-                                       selected, surrounding, comment, plan_text)
+                                       selected, surrounding, comment,
+                                       f"用户已确认以下方案，直接执行：\n\n{plan_text}")
             write_debug_log(comment_id, f"v2_plan_exec_{role}", prompt,
-                           {"plan_confirmed": True, "plan": plan_text})
+                           {"plan_confirmed": True, "plan": plan_text[:500]})
             run_agent_v2(comment_id, "task", role, prompt,
-                         plan=f"用户已确认，执行计划：{plan_text}",
+                         plan=f"用户已确认",
                          user_comment=comment)
             return
 
@@ -1043,15 +1042,14 @@ def rerun_agent(comment_id: int):
 
         intent = router_result.get("intent", "dialogue")
         role = router_result.get("role", "sparring_partner")
-        plan = router_result.get("plan", "")
         quick_response = router_result.get("quick_response", "")
         learned = router_result.get("learned", [])
 
         prompt = build_role_prompt(role, c["page_url"], c.get("page_title", ""),
-                                   selected, surrounding, comment, plan)
+                                   selected, surrounding, comment)
         write_debug_log(comment_id, f"v2_rerun_{role}", prompt, router_result)
         run_agent_v2(comment_id, intent, role, prompt,
-                     plan=plan, quick_response=quick_response, learned=learned,
+                     quick_response=quick_response, learned=learned,
                      user_comment=comment)
 
     thread = threading.Thread(target=_rerun, daemon=True)

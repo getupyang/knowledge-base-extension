@@ -124,7 +124,6 @@ def parse_router_json(text: str) -> dict:
             "intent": intent_m.group(1),
             "role": role_m.group(1),
             "confidence": 0,
-            "plan": "",
             "learned": [],
             "quick_response": "",
             "_fallback_parse": True
@@ -156,7 +155,6 @@ def evaluate(case: dict, result: dict) -> dict:
     role_match = result.get("role") == case["expected_role"]
 
     has_quick = bool(result.get("quick_response", "").strip())
-    has_plan = bool(result.get("plan", "").strip())
     has_learned = bool(result.get("learned", []))
 
     return {
@@ -169,12 +167,10 @@ def evaluate(case: dict, result: dict) -> dict:
         "expected_role": case["expected_role"],
         "has_quick": has_quick,
         "expected_quick": case.get("expected_quick", False),
-        "has_plan": has_plan,
         "has_learned": has_learned,
         "expected_learned": case.get("expected_learned", False),
         "confidence": result.get("confidence", 0),
         "quick_response_preview": (result.get("quick_response", "") or "")[:80],
-        "plan_preview": (result.get("plan", "") or "")[:80],
         "learned_preview": str(result.get("learned", []))[:80],
         "error": result.get("error"),
     }
