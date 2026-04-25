@@ -836,6 +836,15 @@ def create_comment(body: CommentCreate):
 
     # ── 分发逻辑 ──
     def _dispatch():
+        try:
+            _dispatch_inner()
+        except Exception as e:
+            log_failure(comment_id, "dispatch_outer", e)
+            write_system_reply(comment_id,
+                f"召唤失败：{type(e).__name__}: {str(e)[:200]}。错误已记录，可重试。",
+                phase="dispatch_outer")
+
+    def _dispatch_inner():
         selected = body.selected_text or "（无划线内容）"
         surrounding = body.surrounding_text or ""
 
@@ -1012,6 +1021,15 @@ def rerun_agent(comment_id: int):
     c = dict(row)
 
     def _rerun():
+        try:
+            _rerun_inner()
+        except Exception as e:
+            log_failure(comment_id, "rerun_outer", e)
+            write_system_reply(comment_id,
+                f"召唤失败：{type(e).__name__}: {str(e)[:200]}。错误已记录，可重试。",
+                phase="rerun_outer")
+
+    def _rerun_inner():
         selected = c["selected_text"] or "（无划线内容）"
         surrounding = c.get("surrounding_text", "") or ""
         comment = c["comment"]
@@ -1087,6 +1105,83 @@ def client_error(body: ClientErrorReport):
     except Exception:
         pass  # 诊断端点自身绝不报错
     return {"ok": True}
+
+# ──────────────────────────────────────────
+# Reliability：兜底失败可见 + 结构化失败日志
+#
+# 设计原则（详见 ~/mem-ai/docs/reliability_design.md）：
+#   1. 任何用户提交的"召唤"必须在 UI 上呈现一个结果，不能"消失"
+#   2. 状态变化必须可观测（写 DB + 写日志，双写）
+#   3. 所有失败必须可见：兜底 handler 把错误变成用户可见的 reply
+# ──────────────────────────────────────────
+
+FAILURE_LOG = os.environ.get("KB_FAILURE_LOG") or os.path.join(ROOT, ".logs", "failures.jsonl")
+
+
+def log_failure(comment_id: int, phase: str, error: Exception, **extra):
+    """结构化记录后端失败：grep comment_id 即可还原现场。"""
+    import traceback as _tb
+    try:
+        os.makedirs(os.path.dirname(FAILURE_LOG), exist_ok=True)
+        entry = {
+            "ts": datetime.now().isoformat(),
+            "comment_id": comment_id,
+            "phase": phase,
+            "error_type": type(error).__name__,
+            "error_msg": str(error)[:1000],
+            "traceback": _tb.format_exc()[:4000],
+            **extra,
+        }
+        with open(FAILURE_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        pass  # 失败日志自身绝不抛错
+
+
+def write_system_reply(comment_id: int, message: str, phase: str = "unknown"):
+    """兜底回复：把失败做成一条用户可见的 reply，不让请求"消失"。"""
+    try:
+        now = datetime.now().isoformat()
+        debug_meta = json.dumps({
+            "version": "system_fallback",
+            "phase": phase,
+            "is_system_message": True,
+        }, ensure_ascii=False)
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute(
+            "INSERT INTO replies (comment_id, author, agent_type, content, created_at, debug_meta) VALUES (?, ?, ?, ?, ?, ?)",
+            (comment_id, "agent", "系统", f"⚠️ {message}", now, debug_meta)
+        )
+        conn.execute("UPDATE comments SET updated_at = ? WHERE id = ?", (now, comment_id))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass  # 兜底自身不能再炸
+
+
+@app.get("/failures")
+def get_failures(since: Optional[str] = None, limit: int = 50):
+    """读取最近失败日志，方便排查。since 是 ISO 时间戳。"""
+    if not os.path.exists(FAILURE_LOG):
+        return {"failures": [], "total": 0}
+    out = []
+    try:
+        with open(FAILURE_LOG, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        for line in reversed(lines):
+            try:
+                entry = json.loads(line)
+            except Exception:
+                continue
+            if since and entry.get("ts", "") < since:
+                continue
+            out.append(entry)
+            if len(out) >= limit:
+                break
+    except Exception as e:
+        return {"failures": [], "total": 0, "error": str(e)}
+    return {"failures": out, "total": len(out)}
+
 
 @app.get("/learning/status")
 def learning_status():
