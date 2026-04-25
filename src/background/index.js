@@ -25,6 +25,27 @@ async function autoLoadConfig() {
 chrome.runtime.onStartup.addListener(autoLoadConfig);
 chrome.runtime.onInstalled.addListener(autoLoadConfig);
 
+// 把插件侧失败上报给本地后端，便于排查。失败静默，不阻塞主流程。
+async function reportClientError(source, err, context = {}) {
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 3000);
+    await fetch("http://localhost:8766/client-error", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source,
+        message: (err && err.message) ? String(err.message) : String(err),
+        stack: (err && err.stack) ? String(err.stack) : "",
+        context,
+        ts: new Date().toISOString()
+      }),
+      signal: ctrl.signal
+    });
+    clearTimeout(t);
+  } catch { /* 诊断失败绝不影响主流程 */ }
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
@@ -81,19 +102,34 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "SAVE_TO_NOTION") {
     saveToNotion(msg.data)
       .then(() => sendResponse({ success: true }))
-      .catch(err => sendResponse({ success: false, error: err.message }));
+      .catch(err => {
+        reportClientError("saveToNotion", err, { url: msg.data?.url, title: msg.data?.title });
+        sendResponse({ success: false, error: err.message });
+      });
     return true;
   }
   if (msg.type === "UPSERT_NOTION_PAGE") {
     upsertNotionPage(msg.data)
       .then(pageId => sendResponse({ success: true, pageId }))
-      .catch(err => sendResponse({ success: false, error: err.message }));
+      .catch(err => {
+        reportClientError("upsertNotionPage", err, {
+          url: msg.data?.url,
+          notionPageId: msg.data?.notionPageId,
+          hasAI: !!(msg.data?.aiConversation)
+        });
+        sendResponse({ success: false, error: err.message });
+      });
     return true;
   }
   if (msg.type === "CALL_AI") {
     callAIViaAgent(msg.data.systemPrompt, msg.data.messages)
       .then(reply => sendResponse({ success: true, reply }))
-      .catch(err => sendResponse({ success: false, error: err.message }));
+      .catch(err => {
+        reportClientError("callAIViaAgent", err, {
+          msg_count: msg.data?.messages?.length || 0
+        });
+        sendResponse({ success: false, error: err.message });
+      });
     return true;
   }
 });

@@ -1060,6 +1060,34 @@ def rerun_agent(comment_id: int):
 def health():
     return {"status": "ok", "db": DB_PATH}
 
+class ClientErrorReport(BaseModel):
+    source: str = "unknown"       # callAIViaAgent / upsertNotionPage / saveToNotion ...
+    message: str = ""
+    stack: str = ""
+    context: dict = {}             # 任意上下文：url / comment_id / agent_type / etc.
+    ts: str = ""                   # 客户端时间戳，缺失由后端补
+
+CLIENT_ERROR_LOG = os.environ.get("KB_CLIENT_ERROR_LOG") or os.path.join(ROOT, ".logs", "client_errors.log")
+
+@app.post("/client-error")
+def client_error(body: ClientErrorReport):
+    """收集插件侧失败，追加到 .logs/client_errors.log。失败静默，不阻塞客户端。"""
+    try:
+        os.makedirs(os.path.dirname(CLIENT_ERROR_LOG), exist_ok=True)
+        entry = {
+            "ts_server": datetime.now().isoformat(),
+            "ts_client": body.ts or "",
+            "source": body.source,
+            "message": body.message[:2000],
+            "stack": body.stack[:4000],
+            "context": body.context,
+        }
+        with open(CLIENT_ERROR_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        pass  # 诊断端点自身绝不报错
+    return {"ok": True}
+
 @app.get("/learning/status")
 def learning_status():
     """学习层状态：查看当前画像、交互计数、下次触发时间"""

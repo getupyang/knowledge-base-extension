@@ -190,13 +190,12 @@ const selectionBar = (() => {
 
     document.body.appendChild(barEl);
 
-    // 定位到选区上方
+    // 定位到选区下方
     const scrollX = window.scrollX || window.pageXOffset;
     const scrollY = window.scrollY || window.pageYOffset;
     const barW = 160; // 估算宽度，实际渲染后会自适应
     let left = rect.left + scrollX + rect.width / 2 - barW / 2;
-    let top = rect.top + scrollY - 44;
-    if (top < scrollY + 8) top = rect.bottom + scrollY + 8; // 空间不够则显示在下方
+    let top = rect.bottom + scrollY + 8;
     if (left < 8) left = 8;
     barEl.style.left = left + "px";
     barEl.style.top = top + "px";
