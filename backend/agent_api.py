@@ -841,7 +841,10 @@ def create_comment(body: CommentCreate):
         except Exception as e:
             log_failure(comment_id, "dispatch_outer", e)
             write_system_reply(comment_id,
-                f"召唤失败：{type(e).__name__}: {str(e)[:200]}。错误已记录，可重试。",
+                f"召唤 AI 时出错了，请重试。\n\n"
+                f"如果反复出现，把这条消息的时间戳（{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}）"
+                f"和 comment_id={comment_id} 告诉 Claude，让它查 .logs/failures.jsonl 排查。\n\n"
+                f"内部错误：{type(e).__name__}: {str(e)[:200]}",
                 phase="dispatch_outer")
 
     def _dispatch_inner():
@@ -1026,7 +1029,10 @@ def rerun_agent(comment_id: int):
         except Exception as e:
             log_failure(comment_id, "rerun_outer", e)
             write_system_reply(comment_id,
-                f"召唤失败：{type(e).__name__}: {str(e)[:200]}。错误已记录，可重试。",
+                f"召唤 AI 时出错了，请重试。\n\n"
+                f"如果反复出现，把这条消息的时间戳（{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}）"
+                f"和 comment_id={comment_id} 告诉 Claude，让它查 .logs/failures.jsonl 排查。\n\n"
+                f"内部错误：{type(e).__name__}: {str(e)[:200]}",
                 phase="rerun_outer")
 
     def _rerun_inner():
