@@ -1,0 +1,231 @@
+#!/usr/bin/env python3
+"""
+kb-health — mem-ai 飞轮健康自检
+
+设计目标：让 Claude 在动手之前 30 秒内拿到"系统现在到底正不正常"的真实状态。
+不是给用户跑的 dashboard，是 Claude 行动前的强制现实检查。
+
+输出两套：
+  - 默认：人类可读，每项一行 + 状态符号（✓ ⚠ ✗）
+  - --json：结构化输出，方便 Claude 解析后做后续判断
+
+退出码：0=全绿，1=有 ⚠ 警告，2=有 ✗ 严重故障
+
+约定：mem-ai 后端动手前必跑一次。任何 ✗ 必须先解决。
+"""
+
+import os
+import sys
+import json
+import sqlite3
+import urllib.request
+import urllib.error
+import subprocess
+from datetime import datetime, timedelta
+from pathlib import Path
+
+BACKEND_DIR = Path.home() / "Documents" / "ai" / "coding" / "knowledge-base-extension" / "backend"
+DB_PATH = BACKEND_DIR / "comments.db"
+LOG_DIR = BACKEND_DIR / ".logs"
+FAILURE_LOG = LOG_DIR / "failures.jsonl"
+AGENT_LOG = LOG_DIR / "agent_api.log"
+SERVER_LOG = LOG_DIR / "server.log"
+
+OK, WARN, FAIL = "ok", "warn", "fail"
+SYM = {OK: "✓", WARN: "⚠", FAIL: "✗"}
+
+
+def check(name, status, detail):
+    return {"name": name, "status": status, "detail": detail}
+
+
+def port_listening(port):
+    """Check if a TCP port is being listened on locally."""
+    try:
+        out = subprocess.check_output(
+            ["lsof", "-iTCP:%d" % port, "-sTCP:LISTEN", "-P", "-n"],
+            stderr=subprocess.DEVNULL,
+        ).decode()
+        for line in out.splitlines():
+            if "LISTEN" in line:
+                parts = line.split()
+                return int(parts[1])  # pid
+    except Exception:
+        pass
+    return None
+
+
+def http_get(url, timeout=3):
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return r.status, r.read().decode()
+    except urllib.error.HTTPError as e:
+        return e.code, ""
+    except Exception:
+        return None, ""
+
+
+def proc_uptime(pid):
+    try:
+        out = subprocess.check_output(
+            ["ps", "-p", str(pid), "-o", "etime="], stderr=subprocess.DEVNULL
+        ).decode().strip()
+        return out
+    except Exception:
+        return "unknown"
+
+
+def run_checks():
+    results = []
+
+    # 1. 进程 & 端口
+    server_pid = port_listening(8765)
+    agent_pid = port_listening(8766)
+    if server_pid:
+        results.append(check("MD 浏览器 (8765)", OK,
+                             f"pid={server_pid}, 已运行 {proc_uptime(server_pid)}"))
+    else:
+        results.append(check("MD 浏览器 (8765)", FAIL,
+                             "端口未监听 — server.py 没在跑，运行 start.sh 启动"))
+    if agent_pid:
+        results.append(check("Agent API (8766)", OK,
+                             f"pid={agent_pid}, 已运行 {proc_uptime(agent_pid)}"))
+    else:
+        results.append(check("Agent API (8766)", FAIL,
+                             "端口未监听 — agent_api.py 没在跑，运行 start.sh 启动"))
+
+    # 2. 后端 health 端点（确认进程不只是活着，还能响应）
+    status, body = http_get("http://127.0.0.1:8766/health")
+    if status == 200:
+        results.append(check("后端 /health 响应", OK, body.strip()))
+    elif status is None:
+        results.append(check("后端 /health 响应", FAIL, "无响应（端口在听但服务无回应）"))
+    else:
+        results.append(check("后端 /health 响应", FAIL, f"HTTP {status}"))
+
+    # 3. /failures 端点存在（验证当前是 reliability-aware 版本，不是旧版）
+    status, body = http_get("http://127.0.0.1:8766/failures?limit=1")
+    if status == 200:
+        results.append(check("后端是 reliability 版本", OK,
+                             "/failures 端点已上线（commit ad39c3a 之后的版本）"))
+    elif status == 404:
+        results.append(check("后端是 reliability 版本", FAIL,
+                             "/failures 返回 404 — 跑的是旧版！需要重启 uvicorn 加载最新代码"))
+    else:
+        results.append(check("后端是 reliability 版本", WARN, f"/failures 返回 {status}"))
+
+    # 4. DB 可读 + 最近活跃
+    if not DB_PATH.exists():
+        results.append(check("批注 DB", FAIL, f"不存在: {DB_PATH}"))
+    else:
+        try:
+            conn = sqlite3.connect(str(DB_PATH))
+            cutoff = (datetime.now() - timedelta(hours=24)).isoformat()
+            comments_24h = conn.execute(
+                "SELECT COUNT(*) FROM comments WHERE created_at > ?", (cutoff,)
+            ).fetchone()[0]
+            replies_24h = conn.execute(
+                "SELECT COUNT(*) FROM replies WHERE created_at > ?", (cutoff,)
+            ).fetchone()[0]
+            conn.close()
+            results.append(check(
+                "批注 DB 24h 活跃",
+                OK,
+                f"近 24h: {comments_24h} 评论 / {replies_24h} reply"
+            ))
+        except Exception as e:
+            results.append(check("批注 DB", FAIL, str(e)))
+
+    # 5. 失败日志（24h 失败统计）
+    if not FAILURE_LOG.exists():
+        results.append(check("失败日志 24h", OK, "0 失败（日志文件未创建）"))
+    else:
+        cutoff_iso = (datetime.now() - timedelta(hours=24)).isoformat()
+        failures_24h = []
+        try:
+            with open(FAILURE_LOG) as f:
+                for line in f:
+                    try:
+                        e = json.loads(line)
+                        if e.get("ts", "") > cutoff_iso:
+                            failures_24h.append(e)
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        n = len(failures_24h)
+        if n == 0:
+            results.append(check("失败日志 24h", OK, "0 失败"))
+        elif n <= 3:
+            phases = ", ".join(f["phase"] for f in failures_24h)
+            results.append(check("失败日志 24h", WARN,
+                                 f"{n} 次失败，phase: {phases} — 看 .logs/failures.jsonl"))
+        else:
+            results.append(check("失败日志 24h", FAIL,
+                                 f"{n} 次失败！系统不稳定，立即排查 .logs/failures.jsonl"))
+
+    # 6. Claude CLI 可用（subprocess 调得通）
+    claude_bin = os.path.expanduser("~/.npm-global/bin/claude")
+    if not os.path.exists(claude_bin):
+        results.append(check("Claude CLI", FAIL, f"找不到 {claude_bin}"))
+    else:
+        # 不真实跑 prompt（要钱要时间），只验证 --version 类即时响应
+        try:
+            r = subprocess.run([claude_bin, "--version"],
+                               capture_output=True, timeout=10, text=True)
+            if r.returncode == 0:
+                results.append(check("Claude CLI", OK, r.stdout.strip()))
+            else:
+                results.append(check("Claude CLI", WARN,
+                                     f"--version 返回非 0: {r.stderr[:200]}"))
+        except subprocess.TimeoutExpired:
+            results.append(check("Claude CLI", FAIL, "--version 10秒内未响应"))
+        except Exception as e:
+            results.append(check("Claude CLI", FAIL, str(e)))
+
+    # 7. 飞轮入口：~/research/topics 可访问
+    topics = Path.home() / "research" / "topics"
+    if topics.is_dir():
+        n_md = len(list(topics.rglob("*.md")))
+        results.append(check("阅读层 ~/research/topics", OK, f"{n_md} 篇 MD 在飞轮"))
+    else:
+        results.append(check("阅读层 ~/research/topics", FAIL, "目录不存在"))
+
+    return results
+
+
+def main():
+    json_mode = "--json" in sys.argv
+    results = run_checks()
+
+    if json_mode:
+        print(json.dumps({
+            "ts": datetime.now().isoformat(),
+            "checks": results,
+            "summary": {
+                "ok": sum(1 for r in results if r["status"] == OK),
+                "warn": sum(1 for r in results if r["status"] == WARN),
+                "fail": sum(1 for r in results if r["status"] == FAIL),
+            }
+        }, ensure_ascii=False, indent=2))
+    else:
+        print(f"=== mem-ai 飞轮健康自检  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+        for r in results:
+            print(f"  {SYM[r['status']]}  {r['name']:<32}  {r['detail']}")
+        n_fail = sum(1 for r in results if r["status"] == FAIL)
+        n_warn = sum(1 for r in results if r["status"] == WARN)
+        print()
+        if n_fail:
+            print(f"❌ {n_fail} 项故障，需要立即解决")
+        elif n_warn:
+            print(f"⚠️  {n_warn} 项警告，留意但不阻塞")
+        else:
+            print("✅ 全部正常")
+
+    n_fail = sum(1 for r in results if r["status"] == FAIL)
+    n_warn = sum(1 for r in results if r["status"] == WARN)
+    sys.exit(2 if n_fail else (1 if n_warn else 0))
+
+
+if __name__ == "__main__":
+    main()
