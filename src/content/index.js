@@ -141,12 +141,12 @@ const selectionBar = (() => {
         position: absolute;
         z-index: 2147483647;
         display: flex;
-        gap: 4px;
-        background: #1a1a1a;
-        border-radius: 8px;
-        padding: 5px 7px;
-        box-shadow: 0 4px 16px rgba(0,0,0,0.28);
-        font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+        gap: 2px;
+        background: oklch(0.18 0.01 60);
+        border-radius: 4px;
+        padding: 4px 5px;
+        box-shadow: 0 6px 20px rgba(40,30,20,0.22);
+        font-family: "Inter Tight", "Inter", -apple-system, sans-serif;
         pointer-events: all;
         white-space: nowrap;
         transition: opacity 0.15s;
@@ -154,20 +154,21 @@ const selectionBar = (() => {
       #kb-sel-bar button {
         background: none;
         border: none;
-        color: #fff;
-        font-size: 13px;
-        padding: 3px 8px;
-        border-radius: 5px;
+        color: oklch(0.985 0.008 75);
+        font-size: 12px;
+        padding: 4px 10px;
+        border-radius: 3px;
         cursor: pointer;
         display: flex;
         align-items: center;
         gap: 4px;
-        transition: background 0.1s;
+        transition: background 0.12s;
+        letter-spacing: 0.04em;
       }
-      #kb-sel-bar button:hover { background: rgba(255,255,255,0.15); }
+      #kb-sel-bar button:hover { background: oklch(0.32 0.01 60); }
       #kb-sel-bar .kb-bar-divider {
-        width: 1px; background: rgba(255,255,255,0.2);
-        margin: 2px 2px; border-radius: 1px;
+        width: 1px; background: oklch(0.32 0.01 60);
+        margin: 3px 1px; border-radius: 1px;
       }
     `;
     document.head.appendChild(s);
@@ -183,9 +184,9 @@ const selectionBar = (() => {
     barEl = document.createElement("div");
     barEl.id = "kb-sel-bar";
     barEl.innerHTML = `
-      <button id="kb-bar-highlight" title="高亮保存">🖊️ 高亮</button>
+      <button id="kb-bar-highlight" title="仅保存高亮">高亮</button>
       <div class="kb-bar-divider"></div>
-      <button id="kb-bar-comment" title="添加评论">💬 评论</button>
+      <button id="kb-bar-comment" title="高亮并评注">评注</button>
     `;
 
     document.body.appendChild(barEl);
@@ -339,8 +340,56 @@ const commentSystem = (() => {
     } catch { return null; }
   }
 
-  // ── 插入 <mark> 并绑定点击事件 ──
-  function _bindMarkClick(mark, excerpt) {
+  // ── 划线 ↔ 卡片：点击锚点 + hover 联动 ──
+  // PDF 第 1 页：hover 划线 → 右侧对应卡片高亮，且因为可能错位，需要锚点动效把卡片滚到视觉中心
+  // 反向：hover 卡片 → 左侧对应划线脉冲
+
+  // hover excerpt → 卡片 anchor 高亮（不滚动，避免 hover 误触）
+  function _anchorCardForExcerpt(excerpt, opts = {}) {
+    const comments = load();
+    const match = comments.find(c => c.excerpt === excerpt);
+    if (!match) return null;
+    const card = document.getElementById("kb-cmt-" + match.id);
+    if (!card) return null;
+    if (opts.scroll) {
+      // 锚点滚动：把卡片滚到面板可视区中央
+      card.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    if (opts.flash) {
+      card.classList.remove("kb-flash");
+      void card.offsetWidth;
+      card.classList.add("kb-flash");
+      setTimeout(() => card.classList.remove("kb-flash"), 700);
+    }
+    if (opts.anchor) {
+      card.classList.add("kb-anchor");
+    }
+    return card;
+  }
+  function _unanchorAllCards() {
+    document.querySelectorAll(".kb-cmt-card.kb-anchor").forEach(el => el.classList.remove("kb-anchor"));
+  }
+
+  // 给同组 mark 一起加/去 active class，让多段 mark 视觉上像一整段
+  function _setMarkGroupActive(excerpt, active) {
+    const id = _excerptId(excerpt);
+    document.querySelectorAll('mark.kb-comment-highlight[data-excerpt-id="' + id + '"]').forEach(m => {
+      if (active) m.classList.add("kb-mark-active");
+      else m.classList.remove("kb-mark-active");
+    });
+  }
+
+  function _bindMarkInteractions(mark, excerpt) {
+    // hover mark：整组同 excerpt 的 mark 一起变深 + 右侧对应卡片浮起锚点 + 滚到视区中央
+    mark.addEventListener("mouseenter", () => {
+      _setMarkGroupActive(excerpt, true);
+      if (panelOpen) _anchorCardForExcerpt(excerpt, { anchor: true, scroll: true });
+    });
+    mark.addEventListener("mouseleave", () => {
+      _setMarkGroupActive(excerpt, false);
+      _unanchorAllCards();
+    });
+    // 点击：打开面板 + 锚定 + 闪一下
     mark.addEventListener("click", (e) => {
       e.stopPropagation();
       currentExcerpt = excerpt;
@@ -349,33 +398,34 @@ const commentSystem = (() => {
       if (!panelOpen) {
         panelOpen = true;
         panelEl.classList.remove("kb-btn-hidden");
-        document.body.style.marginRight = "320px";
+        document.body.style.marginRight = "360px";
         updateBadge();
       }
       render();
-      const comments = load();
-      const match = comments.find(c => c.excerpt === excerpt);
-      if (match) {
-        const flashDelay = wasPanelClosed ? 400 : 100;
-        setTimeout(() => {
-          const card = document.getElementById("kb-cmt-" + match.id);
-          if (!card) return;
-          card.scrollIntoView({ behavior: "smooth", block: "nearest" });
-          card.classList.remove("kb-flash");
-          void card.offsetWidth;
-          card.classList.add("kb-flash");
-          setTimeout(() => card.classList.remove("kb-flash"), 700);
-        }, flashDelay);
-      }
+      const flashDelay = wasPanelClosed ? 350 : 80;
+      setTimeout(() => _anchorCardForExcerpt(excerpt, { scroll: true, flash: true }), flashDelay);
     });
+  }
+
+  // 用 excerpt 文本生成稳定 hash，作为 mark 的 data-excerpt-id，让多段 mark 视觉上联动成一整体
+  function _excerptId(excerpt) {
+    let h = 0;
+    const s = (excerpt || "").trim();
+    for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
+    return "ex" + (h >>> 0).toString(36);
   }
 
   function _createMark(excerpt) {
     const mark = document.createElement("mark");
     mark.className = "kb-comment-highlight";
-    mark.style.cssText = "background:#e8e0ff !important;border-radius:2px;cursor:pointer;padding:1px 0;";
-    mark.title = "点击查看评论";
-    _bindMarkClick(mark, excerpt);
+    mark.dataset.excerptId = _excerptId(excerpt);
+    // 兜底底色：即使 stylesheet 还没注入也能看到划线（页面 CSS 可能 reset mark 样式）
+    // hover/active 由 stylesheet 接管（class 切换覆盖 inline）
+    mark.style.background = "oklch(0.94 0.04 35)";
+    mark.style.borderRadius = "2px";
+    mark.style.cursor = "pointer";
+    mark.title = "点击查看评注 / hover 在右栏定位";
+    _bindMarkInteractions(mark, excerpt);
     return mark;
   }
 
@@ -595,16 +645,17 @@ const commentSystem = (() => {
       document.body.appendChild(badgeEl);
     }
     badgeEl.innerHTML = panelOpen
-      ? `<span>›</span>`
-      : `<span style="font-size:16px">💬</span><span style="font-size:12px;margin-top:3px">${total}</span>`;
+      ? `<span style="font-size:14px">›</span>`
+      : `<span style="font-family:'Source Han Serif SC','Noto Serif SC',serif;font-size:13px;letter-spacing:0.04em">评注</span><span style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:11px;margin-top:3px;opacity:0.85">${total}</span>`;
     badgeEl.style.cssText = `
       position: fixed; right: 0; top: 50%; transform: translateY(-50%);
-      z-index: 2147483646; width: 32px; padding: 8px 0;
-      background: #6366f1; color: white; border: none;
-      border-radius: 8px 0 0 8px; font-size: 13px; line-height: 1.4;
+      z-index: 2147483646; width: 28px; padding: 10px 0;
+      background: oklch(0.18 0.01 60); color: oklch(0.985 0.008 75);
+      border: none;
+      border-radius: 4px 0 0 4px; line-height: 1.3;
       cursor: pointer; display: flex; flex-direction: column; align-items: center;
-      box-shadow: -2px 0 8px rgba(99,102,241,0.3);
-      font-family: -apple-system, sans-serif;
+      box-shadow: -3px 0 12px rgba(40,30,20,0.18);
+      font-family: "Inter Tight", "Inter", -apple-system, sans-serif;
       transition: background 0.15s;
     `;
   }
@@ -614,7 +665,7 @@ const commentSystem = (() => {
     panelOpen = !panelOpen;
     if (panelOpen) {
       panelEl.classList.remove("kb-btn-hidden");
-      document.body.style.marginRight = "320px";
+      document.body.style.marginRight = "360px";
       render();
     } else {
       panelEl.classList.add("kb-btn-hidden");
@@ -623,160 +674,307 @@ const commentSystem = (() => {
     updateBadge();
   }
 
-  // ── 注入样式 ──
+  // ── 注入样式（v3 视觉系统：暖纸 + 衬线 + JetBrains Mono + oklch）──
   function injectStyles() {
     if (document.getElementById("kb-comment-style")) return;
     const s = document.createElement("style");
     s.id = "kb-comment-style";
     s.textContent = `
+      :root {
+        --kb-paper: oklch(0.985 0.008 75);
+        --kb-paper-2: oklch(0.97 0.01 75);
+        --kb-ink: oklch(0.18 0.01 60);
+        --kb-ink-2: oklch(0.32 0.01 60);
+        --kb-ink-mute: oklch(0.55 0.02 60);
+        --kb-ink-faint: oklch(0.72 0.015 60);
+        --kb-line: oklch(0.86 0.01 60);
+        --kb-line-2: oklch(0.92 0.008 60);
+        --kb-terra: oklch(0.62 0.12 35);
+        --kb-terra-soft: oklch(0.93 0.04 35);
+        --kb-blue: oklch(0.55 0.12 240);
+        --kb-blue-soft: oklch(0.95 0.03 240);
+      }
       @keyframes kb-card-flash {
-        0%   { border-color: transparent; box-shadow: none; }
-        20%  { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,0.25); }
-        70%  { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,0.25); }
-        100% { border-color: transparent; box-shadow: none; }
+        0%   { box-shadow: 0 1px 2px rgba(60,40,20,0.05); border-color: var(--kb-line); }
+        25%  { box-shadow: 0 0 0 3px oklch(0.62 0.12 35 / 0.18); border-color: var(--kb-terra); }
+        100% { box-shadow: 0 1px 2px rgba(60,40,20,0.05); border-color: var(--kb-line); }
+      }
+      mark.kb-comment-highlight {
+        background: oklch(0.94 0.04 35) !important;
+        color: inherit;
+        border-radius: 2px;
+        cursor: pointer;
+        padding: 1px 1px;
+        transition: background 0.2s;
+        box-decoration-break: clone;
+        -webkit-box-decoration-break: clone;
+      }
+      mark.kb-comment-highlight.kb-mark-active {
+        background: oklch(0.86 0.10 35) !important;
+      }
+      @keyframes kb-mark-pulse-anim {
+        0%   { background: oklch(0.94 0.04 35) !important; box-shadow: 0 0 0 0 oklch(0.62 0.12 35 / 0.0); }
+        30%  { background: oklch(0.78 0.14 35) !important; box-shadow: 0 0 0 4px oklch(0.62 0.12 35 / 0.35); }
+        100% { background: oklch(0.94 0.04 35) !important; box-shadow: 0 0 0 0 oklch(0.62 0.12 35 / 0.0); }
+      }
+      mark.kb-comment-highlight.kb-mark-pulse {
+        animation: kb-mark-pulse-anim 0.85s ease-in-out 1;
       }
       .kb-cmt-card.kb-flash {
-        animation: kb-card-flash 0.6s ease-in-out 1;
+        animation: kb-card-flash 0.7s ease-in-out 1;
+      }
+      .kb-cmt-card.kb-anchor {
+        border-color: var(--kb-terra) !important;
+        box-shadow: 0 0 0 3px oklch(0.62 0.12 35 / 0.14) !important;
       }
       #kb-comment-panel {
-        position: fixed; top: 0; right: 0; width: 320px; height: 100vh;
-        background: #fafafa; border-left: 1px solid #e8e8e8;
+        position: fixed; top: 0; right: 0; width: 360px; height: 100vh;
+        background: var(--kb-paper);
+        border-left: 1px solid var(--kb-line);
         display: flex; flex-direction: column; z-index: 2147483645;
-        font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
-        font-size: 14px; color: #333; box-shadow: -4px 0 20px rgba(0,0,0,0.08);
-        transform: translateX(0); transition: transform 0.25s ease;
+        font-family: "Inter Tight", "Inter", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+        font-size: 14px; color: var(--kb-ink);
+        box-shadow: -8px 0 28px rgba(60,40,20,0.06);
+        transform: translateX(0); transition: transform 0.28s ease;
         overflow: hidden;
+        background-image:
+          radial-gradient(oklch(0.92 0.012 60) 0.5px, transparent 0.5px);
+        background-size: 20px 20px;
       }
       #kb-comment-panel.kb-btn-hidden { transform: translateX(100%); }
       #kb-cp-header {
-        padding: 12px 14px; border-bottom: 1px solid #e8e8e8;
-        display: flex; align-items: center; justify-content: space-between;
-        background: white; flex-shrink: 0;
+        padding: 14px 16px 12px; border-bottom: 1px solid var(--kb-line);
+        display: flex; align-items: baseline; justify-content: space-between;
+        background: var(--kb-paper); flex-shrink: 0;
       }
-      #kb-cp-header h3 { font-size: 13px; font-weight: 600; margin: 0; }
+      #kb-cp-header h3 {
+        font-size: 16px; font-weight: 500; margin: 0;
+        font-family: "Source Han Serif SC", "Noto Serif SC", "Songti SC", serif;
+        color: var(--kb-ink); letter-spacing: 0.02em;
+      }
+      #kb-cp-header .kb-cp-count {
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-size: 11px; color: var(--kb-ink-mute);
+        margin-left: 6px; font-weight: 400;
+      }
       #kb-cp-close {
-        background: none; border: 1px solid #e0e0e0; border-radius: 6px;
-        padding: 3px 10px; font-size: 12px; cursor: pointer; color: #666;
+        background: none; border: none; padding: 4px 8px;
+        font-size: 12px; cursor: pointer; color: var(--kb-ink-mute);
+        font-family: inherit; letter-spacing: 0.04em;
       }
-      #kb-cp-close:hover { border-color: #6366f1; color: #6366f1; }
+      #kb-cp-close:hover { color: var(--kb-terra); }
       #kb-cp-body {
-        flex: 1; overflow-y: auto; padding: 10px;
+        flex: 1; overflow-y: auto; padding: 12px 14px;
         position: relative;
       }
       .kb-cmt-card {
-        background: white; border-radius: 10px; padding: 12px 14px;
-        border: 2px solid transparent;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.07);
-        margin-bottom: 8px;
-        transition: border-color 0.15s;
+        background: var(--kb-paper);
+        border: 1px solid var(--kb-line-2);
+        border-radius: 6px;
+        padding: 12px 14px 10px;
+        box-shadow: 0 1px 2px rgba(60,40,20,0.04);
+        margin-bottom: 10px;
+        transition: border-color 0.18s, box-shadow 0.18s;
       }
-      .kb-cmt-card.kb-flash {
-        animation: kb-card-flash 0.15s ease-out 1;
-      }
+      .kb-cmt-card:hover { border-color: var(--kb-line); }
       .kb-cmt-content {
-        max-height: 300px; overflow: hidden; position: relative;
+        max-height: 320px; overflow: hidden; position: relative;
         transition: max-height 0.3s ease;
       }
       .kb-cmt-content.expanded { max-height: none; overflow: visible; }
       .kb-cmt-content.overflowing:not(.expanded)::after {
         content: ''; position: absolute; bottom: 0; left: 0; right: 0;
-        height: 40px;
-        background: linear-gradient(transparent, white);
+        height: 36px;
+        background: linear-gradient(transparent, var(--kb-paper));
       }
       .kb-cmt-expand {
-        font-size: 11px; color: #6366f1; cursor: pointer; margin-top: 4px;
+        font-size: 11px; color: var(--kb-terra); cursor: pointer; margin-top: 4px;
         background: none; border: none; padding: 0; text-align: left;
+        font-family: inherit; letter-spacing: 0.03em;
       }
       .kb-cmt-expand:hover { text-decoration: underline; }
       .kb-cmt-quote {
-        font-size: 11px; color: #888; font-style: italic;
-        background: #fef9c3; border-left: 2px solid #fbbf24;
-        padding: 4px 8px; border-radius: 0 4px 4px 0;
-        margin-bottom: 7px; line-height: 1.4;
-        overflow: hidden; text-overflow: ellipsis;
+        font-size: 12px; color: var(--kb-ink-2);
+        font-family: "Source Han Serif SC", "Noto Serif SC", serif;
+        font-style: italic;
+        border-left: 2px solid var(--kb-terra);
+        padding: 2px 0 2px 10px;
+        margin-bottom: 8px; line-height: 1.5;
+        overflow: hidden;
         display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
       }
-      .kb-cmt-text { font-size: 13px; line-height: 1.6; color: #333; margin-bottom: 8px; }
-      .kb-cmt-meta { font-size: 11px; color: #bbb; margin-bottom: 8px; }
+      .kb-cmt-text {
+        font-size: 14px; line-height: 1.65; color: var(--kb-ink);
+        margin-bottom: 6px;
+        font-family: "Source Han Serif SC", "Noto Serif SC", serif;
+      }
+      .kb-cmt-meta {
+        font-size: 10px; color: var(--kb-ink-faint);
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        margin-bottom: 8px; letter-spacing: 0.04em;
+      }
       .kb-reply {
-        border-radius: 6px; padding: 7px 9px; font-size: 12px;
-        line-height: 1.5; margin-bottom: 5px;
-        /* 不能加 white-space:pre-wrap，内部有 HTML（marked 解析），会撑出大量空白 */
+        border-radius: 4px;
+        padding: 8px 10px; font-size: 13px;
+        line-height: 1.55; margin-bottom: 6px;
       }
-      .kb-reply.ai { background: #f8f7ff; border: 1px solid #ede9fe; color: #444; }
-      .kb-reply.user { background: #f0fdf4; border: 1px solid #d1fae5; color: #444; }
-      .kb-reply-label { font-size: 10px; color: #9ca3af; margin-bottom: 2px; font-weight: 600; }
-      .kb-reply-body { font-size: 12px; line-height: 1.5; margin: 0; }
+      .kb-reply.ai {
+        background: var(--kb-paper-2);
+        border-left: 2px solid var(--kb-blue);
+        color: var(--kb-ink);
+      }
+      .kb-reply.user {
+        background: oklch(0.97 0.015 130);
+        border-left: 2px solid oklch(0.65 0.1 130);
+        color: var(--kb-ink);
+      }
+      .kb-reply-label {
+        font-size: 10px; color: var(--kb-ink-mute); margin-bottom: 4px;
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        font-weight: 500; letter-spacing: 0.06em;
+      }
+      .kb-reply-label .kb-reply-tag {
+        display: inline-block;
+        background: var(--kb-ink); color: var(--kb-paper);
+        font-size: 9px; padding: 1px 5px; border-radius: 2px;
+        margin-right: 6px; letter-spacing: 0.08em; font-weight: 600;
+      }
+      .kb-reply-body { font-size: 13px; line-height: 1.6; margin: 0; }
       .kb-reply.ai .kb-reply-body > p:first-child { margin-top: 0; }
-      .kb-reply.ai .kb-reply-body p { margin: 0 0 3px 0; }
+      .kb-reply.ai .kb-reply-body p { margin: 0 0 4px 0; }
       .kb-reply.ai .kb-reply-body p:last-child { margin-bottom: 0; }
-      /* 用户回复用 pre-wrap 保留换行，但要包裹在 span 里避免影响 AI 的 HTML */
       .kb-reply.user .kb-reply-body { white-space: pre-wrap; }
-      .kb-reply.ai .kb-reply-body ul, .kb-reply.ai .kb-reply-body ol { margin: 2px 0 4px 0; padding-left: 14px; }
-      .kb-reply.ai .kb-reply-body li { margin-bottom: 1px; }
-      .kb-reply.ai .kb-reply-body h1, .kb-reply.ai .kb-reply-body h2 { font-size: 12px; font-weight: 700; margin: 6px 0 2px; }
-      .kb-reply.ai .kb-reply-body h3, .kb-reply.ai .kb-reply-body h4 { font-size: 12px; font-weight: 600; margin: 4px 0 2px; }
-      .kb-reply.ai .kb-reply-body strong { font-weight: 700; }
+      .kb-reply.ai .kb-reply-body ul, .kb-reply.ai .kb-reply-body ol { margin: 3px 0 5px 0; padding-left: 16px; }
+      .kb-reply.ai .kb-reply-body li { margin-bottom: 2px; }
+      .kb-reply.ai .kb-reply-body h1, .kb-reply.ai .kb-reply-body h2 { font-size: 13px; font-weight: 600; margin: 6px 0 3px; }
+      .kb-reply.ai .kb-reply-body h3, .kb-reply.ai .kb-reply-body h4 { font-size: 13px; font-weight: 600; margin: 5px 0 3px; }
+      .kb-reply.ai .kb-reply-body strong { font-weight: 600; }
       .kb-reply.ai .kb-reply-body em { font-style: italic; }
-      .kb-reply.ai .kb-reply-body code { font-family: monospace; background: #f0eeff; padding: 1px 3px; border-radius: 3px; font-size: 11px; }
-      .kb-reply.ai .kb-reply-body pre { background: #f5f5f5; padding: 6px 8px; border-radius: 6px; overflow-x: auto; margin: 4px 0; }
-      .kb-reply.ai .kb-reply-body table { border-collapse: collapse; width: 100%; font-size: 11px; margin: 4px 0; }
-      .kb-reply.ai .kb-reply-body th, .kb-reply.ai .kb-reply-body td { border: 1px solid #e0e0e0; padding: 3px 5px; text-align: left; }
-      .kb-reply.ai .kb-reply-body th { background: #f8f8f8; font-weight: 600; }
-      .kb-reply.ai .kb-reply-body blockquote { border-left: 2px solid #c7d2fe; padding-left: 6px; margin: 3px 0; color: #6b7280; }
-      .kb-reply.ai .kb-reply-body a { color: #6366f1; text-decoration: none; }
-      .kb-reply.ai .kb-reply-body a:hover { text-decoration: underline; }
-      .kb-reply + .kb-reply { margin-top: 4px; }
-      .kb-inline-reply { margin-top: 6px; }
+      .kb-reply.ai .kb-reply-body code {
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        background: var(--kb-paper); border: 1px solid var(--kb-line-2);
+        padding: 1px 4px; border-radius: 2px; font-size: 11px;
+      }
+      .kb-reply.ai .kb-reply-body pre {
+        background: var(--kb-paper); border: 1px solid var(--kb-line-2);
+        padding: 8px 10px; border-radius: 4px; overflow-x: auto; margin: 5px 0;
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+      }
+      .kb-reply.ai .kb-reply-body table { border-collapse: collapse; width: 100%; font-size: 11px; margin: 5px 0; }
+      .kb-reply.ai .kb-reply-body th, .kb-reply.ai .kb-reply-body td { border: 1px solid var(--kb-line); padding: 3px 6px; text-align: left; }
+      .kb-reply.ai .kb-reply-body th { background: var(--kb-paper-2); font-weight: 600; }
+      .kb-reply.ai .kb-reply-body blockquote { border-left: 2px solid var(--kb-line); padding-left: 8px; margin: 4px 0; color: var(--kb-ink-mute); }
+      .kb-reply.ai .kb-reply-body a { color: var(--kb-blue); text-decoration: none; border-bottom: 1px solid oklch(0.55 0.12 240 / 0.4); }
+      .kb-reply.ai .kb-reply-body a:hover { border-bottom-color: var(--kb-blue); }
+      .kb-reply + .kb-reply { margin-top: 5px; }
+      .kb-inline-reply { margin-top: 8px; }
       .kb-inline-reply textarea {
-        width: 100%; border: 1px solid #e0e0e0; border-radius: 6px;
-        padding: 6px 8px; font-size: 12px; font-family: inherit;
-        height: 54px; resize: none; outline: none; display: block;
-        background: #fff; color: #333; box-sizing: border-box;
+        width: 100%; border: 1px solid var(--kb-line); border-radius: 4px;
+        padding: 8px 10px; font-size: 13px;
+        font-family: "Source Han Serif SC", "Noto Serif SC", "Inter Tight", sans-serif;
+        height: 60px; resize: none; outline: none; display: block;
+        background: var(--kb-paper); color: var(--kb-ink); box-sizing: border-box;
+        line-height: 1.5;
       }
-      .kb-inline-reply textarea:focus { border-color: #6366f1; }
-      .kb-inline-reply-actions { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
-      .kb-reply-send { background: #333; color: white; border: none; border-radius: 5px; padding: 4px 10px; font-size: 11px; cursor: pointer; }
-      .kb-reply-send:hover { background: #111; }
-      .kb-reply-btn { background: none; border: none; color: #9ca3af; font-size: 11px; cursor: pointer; padding: 0; }
-      .kb-reply-btn:hover { color: #6366f1; }
+      .kb-inline-reply textarea:focus { border-color: var(--kb-terra); }
+      .kb-inline-reply-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+      .kb-reply-send {
+        background: var(--kb-ink); color: var(--kb-paper);
+        border: none; border-radius: 3px; padding: 5px 12px;
+        font-size: 11px; cursor: pointer; letter-spacing: 0.04em;
+        font-family: inherit;
+      }
+      .kb-reply-send:hover { background: oklch(0.28 0.01 60); }
+      .kb-reply-btn {
+        background: none; border: none;
+        color: var(--kb-ink-mute); font-size: 11px;
+        cursor: pointer; padding: 0; font-family: inherit;
+      }
+      .kb-reply-btn:hover { color: var(--kb-terra); }
       .kb-ai-btn {
-        background: #6366f1; color: white; border: none; border-radius: 6px;
-        padding: 5px 12px; font-size: 11px; cursor: pointer; margin-top: 4px;
+        background: var(--kb-ink); color: var(--kb-paper);
+        border: none; border-radius: 3px;
+        padding: 6px 14px; font-size: 11px; cursor: pointer; margin-top: 6px;
+        font-family: inherit; letter-spacing: 0.04em;
       }
-      .kb-ai-btn:hover { background: #4f46e5; }
-      .kb-ai-btn:disabled { background: #c7d2fe; cursor: not-allowed; }
+      .kb-ai-btn:hover { background: oklch(0.28 0.01 60); }
+      .kb-ai-btn:disabled { background: var(--kb-ink-faint); cursor: not-allowed; }
       .kb-thinking {
-        font-size: 11px; color: #6366f1; padding: 8px 10px; font-style: normal;
-        background: #f5f3ff; border-radius: 6px; margin-top: 6px; line-height: 1.6;
-        border-left: 2px solid #c7d2fe;
+        font-size: 12px; color: var(--kb-ink-2); padding: 8px 10px;
+        background: var(--kb-paper-2); border-radius: 4px; margin-top: 6px;
+        line-height: 1.6; border-left: 2px solid var(--kb-blue);
+        font-family: "Source Han Serif SC", "Noto Serif SC", serif;
       }
+      .kb-thinking::before {
+        content: '·'; margin-right: 4px;
+        animation: kb-dot 1.4s ease-in-out infinite;
+      }
+      @keyframes kb-dot { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
       #kb-cp-input-area {
-        border-top: 1px solid #e8e8e8; padding: 12px; background: white; flex-shrink: 0;
+        border-top: 1px solid var(--kb-line); padding: 12px 14px;
+        background: var(--kb-paper); flex-shrink: 0;
+        max-height: 240px; overflow: hidden;
+        transition: max-height 0.22s ease, padding 0.22s ease, opacity 0.18s;
       }
+      #kb-cp-input-area.kb-input-collapsed {
+        max-height: 0; padding-top: 0; padding-bottom: 0;
+        opacity: 0; pointer-events: none;
+        border-top-color: transparent;
+      }
+      #kb-cp-new-btn {
+        background: none; border: 1px dashed var(--kb-line);
+        color: var(--kb-ink-mute); padding: 4px 10px;
+        border-radius: 3px; font-size: 11px; cursor: pointer;
+        font-family: inherit; letter-spacing: 0.04em;
+      }
+      #kb-cp-new-btn:hover { border-color: var(--kb-terra); color: var(--kb-terra); border-style: solid; }
+      #kb-cp-new-btn.kb-hidden { display: none; }
       #kb-cp-quote-preview {
-        font-size: 11px; color: #888; font-style: italic;
-        background: #fef9c3; border-left: 2px solid #fbbf24;
-        padding: 4px 8px; border-radius: 0 4px 4px 0;
-        margin-bottom: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        font-size: 11px; color: var(--kb-ink-2);
+        font-family: "Source Han Serif SC", "Noto Serif SC", serif;
+        font-style: italic;
+        border-left: 2px solid var(--kb-terra);
+        padding: 2px 0 2px 8px;
+        margin-bottom: 8px; white-space: nowrap;
+        overflow: hidden; text-overflow: ellipsis;
       }
       #kb-cp-textarea {
-        width: 100%; border: 1px solid #e0e0e0; border-radius: 8px;
-        padding: 8px 10px; font-size: 13px; font-family: inherit;
-        height: 68px; resize: none; outline: none; display: block;
-        background: #fff; color: #333; box-sizing: border-box;
+        width: 100%; border: 1px solid var(--kb-line); border-radius: 4px;
+        padding: 10px 12px; font-size: 14px;
+        font-family: "Source Han Serif SC", "Noto Serif SC", "Inter Tight", sans-serif;
+        height: 76px; resize: none; outline: none; display: block;
+        background: var(--kb-paper); color: var(--kb-ink); box-sizing: border-box;
+        line-height: 1.55;
       }
-      #kb-cp-textarea:focus { border-color: #6366f1; }
+      #kb-cp-textarea:focus { border-color: var(--kb-terra); }
       #kb-cp-send-btn {
-        margin-top: 8px; background: #333; color: white; border: none;
-        border-radius: 6px; padding: 6px 16px; font-size: 12px; cursor: pointer;
+        margin-top: 8px; background: var(--kb-ink); color: var(--kb-paper);
+        border: none; border-radius: 3px;
+        padding: 7px 18px; font-size: 12px; cursor: pointer;
+        font-family: inherit; letter-spacing: 0.04em;
       }
-      #kb-cp-send-btn:hover { background: #111; }
-      #kb-cp-send-status { font-size: 11px; color: #888; margin-left: 8px; }
-      .kb-empty { text-align: center; color: #ccc; padding: 40px 0; font-size: 13px; }
+      #kb-cp-send-btn:hover { background: oklch(0.28 0.01 60); }
+      #kb-cp-send-status {
+        font-size: 11px; color: var(--kb-ink-mute); margin-left: 10px;
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+      }
+      .kb-empty {
+        text-align: center; color: var(--kb-ink-faint);
+        padding: 60px 20px; font-size: 13px;
+        font-family: "Source Han Serif SC", "Noto Serif SC", serif;
+        font-style: italic; line-height: 1.7;
+      }
       .kb-debug { margin-top: 6px; }
-      .kb-debug summary { font-size: 10px; color: #9ca3af; cursor: pointer; user-select: none; }
-      .kb-debug-body { font-size: 10px; color: #9ca3af; line-height: 1.8; padding: 4px 0 0 8px; font-family: monospace; }
+      .kb-debug summary {
+        font-size: 10px; color: var(--kb-ink-faint); cursor: pointer;
+        user-select: none;
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+      }
+      .kb-debug-body {
+        font-size: 10px; color: var(--kb-ink-faint); line-height: 1.8;
+        padding: 4px 0 0 8px;
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+      }
       .kb-expand-hidden { display: none !important; }
     `;
     document.head.appendChild(s);
@@ -790,13 +988,16 @@ const commentSystem = (() => {
     panelEl.id = "kb-comment-panel";
     panelEl.innerHTML = `
       <div id="kb-cp-header">
-        <h3>💬 评论</h3>
-        <button id="kb-cp-close">收起 ›</button>
+        <h3>评注<span class="kb-cp-count" id="kb-cp-count"></span></h3>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button id="kb-cp-new-btn" class="kb-hidden" title="无划线时手动写一条">+ 新评注</button>
+          <button id="kb-cp-close">收起 ›</button>
+        </div>
       </div>
       <div id="kb-cp-body"></div>
-      <div id="kb-cp-input-area">
+      <div id="kb-cp-input-area" class="kb-input-collapsed">
         <div id="kb-cp-quote-preview"></div>
-        <textarea id="kb-cp-textarea" placeholder="写评论...（Enter 换行，Cmd+Enter 发送）"></textarea>
+        <textarea id="kb-cp-textarea" placeholder="写下你的判断…（Cmd+Enter 发送）"></textarea>
         <div style="display:flex;align-items:center;">
           <button id="kb-cp-send-btn">发送</button>
           <span id="kb-cp-send-status"></span>
@@ -814,12 +1015,105 @@ const commentSystem = (() => {
     document.getElementById("kb-cp-send-btn").addEventListener("click", submitComment);
     document.getElementById("kb-cp-textarea").addEventListener("keydown", (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "Enter") submitComment();
+      // Esc 收起输入区
+      if (e.key === "Escape") collapseInputArea();
+    });
+    document.getElementById("kb-cp-new-btn").addEventListener("click", () => {
+      // 用户手动展开：清空 quote（这是无关联的新评注）
+      currentExcerpt = "";
+      const qp = document.getElementById("kb-cp-quote-preview");
+      if (qp) { qp.textContent = ""; qp.style.display = "none"; }
+      expandInputArea(true);
     });
     // 事件委托：处理评论卡片里的按钮（避免 onclick 属性跨 world 问题）
     document.getElementById("kb-cp-body").addEventListener("click", (e) => {
       const btn = e.target.closest("[data-ask-ai]");
       if (btn) askAI(parseInt(btn.dataset.askAi, 10));
     });
+
+    // 反向联动：用 data-excerpt-id 找同组 mark，避免多段 mark 文本拼接问题
+    const cpBody = document.getElementById("kb-cp-body");
+    function _findMarksForExcerpt(excerpt) {
+      const id = _excerptId(excerpt);
+      return Array.from(document.querySelectorAll('mark.kb-comment-highlight[data-excerpt-id="' + id + '"]'));
+    }
+    // 找 mark 所在的"段落容器"（用于点击卡片时锚定整段，而非 mark 本身）
+    function _findParagraphFor(mark) {
+      let n = mark.parentElement;
+      const blockTags = new Set(["P","LI","BLOCKQUOTE","SECTION","ARTICLE","TD","TH","DIV","H1","H2","H3","H4","H5","H6"]);
+      while (n && n !== document.body) {
+        if (blockTags.has(n.tagName)) return n;
+        n = n.parentElement;
+      }
+      return mark;
+    }
+
+    // hover 卡片 → 左侧整组 mark 一起变深（仅视觉，不滚正文，避免鼠标乱晃跳动）
+    cpBody.addEventListener("mouseover", (e) => {
+      const card = e.target.closest(".kb-cmt-card");
+      if (!card) return;
+      const cid = card.id.replace("kb-cmt-", "");
+      const c = load().find(x => String(x.id) === cid);
+      if (!c || !c.excerpt) return;
+      _setMarkGroupActive(c.excerpt, true);
+    });
+    cpBody.addEventListener("mouseout", (e) => {
+      const card = e.target.closest(".kb-cmt-card");
+      if (!card) return;
+      const related = e.relatedTarget;
+      if (related && card.contains(related)) return; // 还在卡片内部移动
+      const cid = card.id.replace("kb-cmt-", "");
+      const c = load().find(x => String(x.id) === cid);
+      if (!c || !c.excerpt) return;
+      _setMarkGroupActive(c.excerpt, false);
+    });
+
+    // 点击卡片 → 左侧锚定到划线所在段落（不是只看 mark），整组 mark 脉冲
+    cpBody.addEventListener("click", (e) => {
+      if (e.target.closest("button, textarea, summary, a, [data-expand], [data-open-reply], [data-close-reply], [data-send-reply], [data-ask-ai]")) return;
+      const card = e.target.closest(".kb-cmt-card");
+      if (!card) return;
+      const cid = card.id.replace("kb-cmt-", "");
+      const c = load().find(x => String(x.id) === cid);
+      if (!c || !c.excerpt) return;
+      const marks = _findMarksForExcerpt(c.excerpt);
+      if (!marks.length) return;
+      // 滚到段落容器顶部偏上一点，让上下文一起出现
+      const para = _findParagraphFor(marks[0]);
+      try { para.scrollIntoView({ behavior: "smooth", block: "center" }); } catch {}
+      // 脉冲所有同 excerpt 的 mark
+      marks.forEach(m => {
+        m.classList.remove("kb-mark-pulse");
+        void m.offsetWidth;
+        m.classList.add("kb-mark-pulse");
+        setTimeout(() => m.classList.remove("kb-mark-pulse"), 900);
+      });
+    });
+  }
+
+  // ── 输入区展开/收起 ──
+  function expandInputArea(focusTextarea = true) {
+    const area = document.getElementById("kb-cp-input-area");
+    const newBtn = document.getElementById("kb-cp-new-btn");
+    if (!area) return;
+    area.classList.remove("kb-input-collapsed");
+    if (newBtn) newBtn.classList.add("kb-hidden");
+    if (focusTextarea) {
+      const ta = document.getElementById("kb-cp-textarea");
+      if (ta) setTimeout(() => ta.focus(), 80);
+    }
+  }
+  function collapseInputArea() {
+    const area = document.getElementById("kb-cp-input-area");
+    const newBtn = document.getElementById("kb-cp-new-btn");
+    const ta = document.getElementById("kb-cp-textarea");
+    const qp = document.getElementById("kb-cp-quote-preview");
+    if (!area) return;
+    area.classList.add("kb-input-collapsed");
+    if (newBtn) newBtn.classList.remove("kb-hidden");
+    if (ta) ta.value = "";
+    if (qp) { qp.textContent = ""; qp.style.display = "none"; }
+    currentExcerpt = "";
   }
 
   // ── 渲染评论列表 ──
@@ -837,8 +1131,11 @@ const commentSystem = (() => {
       }
     });
     const comments = load();
+    // 更新顶部计数
+    const countEl = document.getElementById("kb-cp-count");
+    if (countEl) countEl.textContent = comments.length ? ` · ${comments.length} 条` : "";
     if (!comments.length) {
-      body.innerHTML = '<div class="kb-empty">选中文字「💬 评论」添加第一条评论</div>';
+      body.innerHTML = '<div class="kb-empty">选中文字 → 点「评论」<br>留下你的判断、疑问或偏好</div>';
       return;
     }
     body.innerHTML = comments.map(c => {
@@ -888,9 +1185,17 @@ const commentSystem = (() => {
         const bodyHtml = r.isAI
           ? (typeof marked !== "undefined" ? marked.parse(r.text) : safeText(r.text))
           : `<span>${safeText(r.text)}</span>`; // pre-wrap 来自 CSS，不需要 <br>
+        const ageS = Math.max(1, Math.round((Date.now() - new Date(r.createdAt).getTime()) / 1000));
+        const ageStr = ageS < 60 ? `${ageS} 秒前`
+                     : ageS < 3600 ? `${Math.round(ageS/60)} 分钟前`
+                     : ageS < 86400 ? `${Math.round(ageS/3600)} 小时前`
+                     : new Date(r.createdAt).toLocaleString("zh",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"});
+        const labelHtml = r.isAI
+          ? `<span class="kb-reply-tag">AI</span>响应 · ${ageStr}`
+          : `你 · ${ageStr}`;
         return `
         <div class="kb-reply ${r.isAI ? "ai" : "user"}">
-          <div class="kb-reply-label">${r.isAI ? "🤖 AI" : "你"} · ${new Date(r.createdAt).toLocaleTimeString("zh",{hour:"2-digit",minute:"2-digit"})}</div>
+          <div class="kb-reply-label">${labelHtml}</div>
           <div class="kb-reply-body">${bodyHtml}</div>
           ${debugHtml}
         </div>`;
@@ -905,18 +1210,18 @@ const commentSystem = (() => {
             ${repliesHtml}
           </div>
           <button class="kb-cmt-expand kb-expand-hidden" id="kb-cmt-expand-${c.id}" data-expand="${c.id}">展开全部 ↓</button>
-          <div style="display:flex;gap:6px;margin-top:6px;align-items:center;flex-wrap:wrap;">
+          <div style="display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap;">
             ${!hasAI
-              ? `<button class="kb-ai-btn" data-ask-ai="${c.id}">✨ 召唤 AI</button>`
+              ? `<button class="kb-ai-btn" data-ask-ai="${c.id}">请 AI 回复</button>`
               : _askAIRunning.has(c.id)
-                ? `<span style="color:#6366f1;font-size:11px;">AI 回复中...</span>`
-                : `<button class="kb-reply-btn" data-open-reply="${c.id}">💬 追问</button>`
+                ? `<span style="color:var(--kb-blue);font-size:11px;font-family:'JetBrains Mono',monospace;letter-spacing:0.04em;">AI 思考中…</span>`
+                : `<button class="kb-reply-btn" data-open-reply="${c.id}">继续追问</button>`
             }
           </div>
           <div class="kb-inline-reply kb-expand-hidden" id="kb-inline-reply-${c.id}">
-            <textarea placeholder="追问 AI（Cmd+Enter 发送）..." id="kb-reply-ta-${c.id}"></textarea>
+            <textarea placeholder="继续追问…（Cmd+Enter 发送）" id="kb-reply-ta-${c.id}"></textarea>
             <div class="kb-inline-reply-actions">
-              <button class="kb-reply-send" data-send-reply="${c.id}">发送 + 召唤 AI</button>
+              <button class="kb-reply-send" data-send-reply="${c.id}">发送</button>
               <button class="kb-reply-btn" data-close-reply="${c.id}">取消</button>
             </div>
           </div>
@@ -1086,10 +1391,12 @@ const commentSystem = (() => {
     if (panelEl && !panelOpen) {
       panelOpen = true;
       panelEl.classList.remove("kb-btn-hidden");
-      document.body.style.marginRight = "320px";
+      document.body.style.marginRight = "360px";
       updateBadge();
     }
     render();
+    // 评论已发送 → 收回底部输入区，避免常驻挡视线
+    collapseInputArea();
   }
 
   // ── Notion upsert：每条划线/评论对应一个 Notion page，追加消息而非新建 ──
@@ -1317,6 +1624,7 @@ const commentSystem = (() => {
   }
 
   // ── 对外接口：打开评论面板（高亮由调用方处理）──
+  // 划线后调用此函数：展开输入区，让用户写一条评论
   function open(excerpt, url, title) {
     currentExcerpt = excerpt;
     buildPanel();
@@ -1331,18 +1639,22 @@ const commentSystem = (() => {
         qp.style.display = "none";
       }
     }
-    // 清空输入框，聚焦
+    // 清空输入框
     const ta = document.getElementById("kb-cp-textarea");
-    if (ta) { ta.value = ""; ta.focus(); }
+    if (ta) ta.value = "";
     panelOpen = true;
     panelEl.classList.remove("kb-btn-hidden");
-    document.body.style.marginRight = "320px";
+    document.body.style.marginRight = "360px";
     render();
     updateBadge();
+    // 展开输入区 + 聚焦（这是划线触发的）
+    expandInputArea(true);
   }
 
   // 页面加载时恢复高亮 + 渲染已有评论
   function init() {
+    // 关键：stylesheet 必须先注入，否则 restoreHighlights 重建出来的 mark 会失去 .kb-comment-highlight 的样式（淡橙底）
+    injectStyles();
     restoreHighlights();
     const comments = load();
     if (comments.length > 0) {
