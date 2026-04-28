@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>记忆笔记本</title>
+  <link rel="stylesheet" href="theme.css">
+</head>
+<body>
+  <div id="app">
+    <!-- 顶栏 -->
+    <header id="kb-nb-header">
+      <div class="kb-nb-brand">
+        <span class="kb-nb-brand-mono">NOTEBOOK</span>
+        <h1>笔记本</h1>
+        <div class="kb-nb-brand-meta" id="kb-nb-overview-meta">读取中…</div>
+      </div>
+      <div class="kb-nb-header-right">
+        <span id="kb-nb-overview-sync" class="kb-nb-mono-soft">同步 — · — 条评注 · — 篇文章</span>
+        <button id="kb-nb-export-btn" title="导出全部记忆为可粘贴的上下文">导出 ↗</button>
+      </div>
+    </header>
+
+    <!-- 双栏：左导航 + 右内容 -->
+    <div id="kb-nb-main">
+      <nav id="kb-nb-nav">
+        <div class="kb-nb-nav-group">
+          <div class="kb-nb-nav-group-title">知识记忆 · 关于你和你的项目</div>
+          <a class="kb-nb-nav-item active" data-tab="profile-project" href="#profile-project">
+            <span>你 &amp; 项目</span><span class="kb-nb-nav-count" id="kb-nb-count-profile">—</span>
+          </a>
+        </div>
+        <div class="kb-nb-nav-group">
+          <div class="kb-nb-nav-group-title">程序记忆 · Agent 在学什么</div>
+          <a class="kb-nb-nav-item" data-tab="rules" href="#rules">
+            <span>养成的习惯</span><span class="kb-nb-nav-count" id="kb-nb-count-rules">—</span>
+          </a>
+          <a class="kb-nb-nav-item" data-tab="thinking" href="#thinking">
+            <span>最近你在想的事</span><span class="kb-nb-nav-count" id="kb-nb-count-thinking">—</span>
+          </a>
+        </div>
+        <div class="kb-nb-nav-group">
+          <div class="kb-nb-nav-group-title">时间线</div>
+          <a class="kb-nb-nav-item" data-tab="diary" href="#diary">
+            <span>共同日记</span><span class="kb-nb-nav-count" id="kb-nb-count-diary">—</span>
+          </a>
+        </div>
+        <div class="kb-nb-nav-callout" id="kb-nb-callout">
+          <div class="kb-nb-callout-tag">AGENT 观察</div>
+          <div class="kb-nb-callout-body" id="kb-nb-callout-body">…</div>
+        </div>
+      </nav>
+
+      <!-- 内容区域 -->
+      <main id="kb-nb-content">
+        <!-- 你 & 项目 -->
+        <section class="kb-nb-page" id="kb-tab-profile-project">
+          <div class="kb-nb-page-header">
+            <span class="kb-nb-page-mono">● 知识记忆 · 关于你</span>
+            <button class="kb-nb-page-export" data-export="profile">导出 ↗</button>
+          </div>
+          <h2 class="kb-nb-page-title">此刻的你</h2>
+          <p class="kb-nb-page-subtitle">这里记录的是「你是谁、你在哪儿」 — 项目阶段、身份、近期最关心的事。</p>
+          <div class="kb-nb-md" id="kb-nb-profile-md">读取中…</div>
+
+          <div class="kb-nb-divider"></div>
+
+          <div class="kb-nb-page-header">
+            <span class="kb-nb-page-mono">● 知识记忆 · 项目</span>
+          </div>
+          <h2 class="kb-nb-page-title">当前项目</h2>
+          <p class="kb-nb-page-subtitle">关于你手上的项目 — 状态、决议、悬而未决。</p>
+          <div class="kb-nb-md" id="kb-nb-project-md">读取中…</div>
+        </section>
+
+        <!-- 养成的习惯 -->
+        <section class="kb-nb-page kb-nb-hidden" id="kb-tab-rules">
+          <div class="kb-nb-page-header">
+            <span class="kb-nb-page-mono">● 程序记忆 · AGENT 在学什么</span>
+            <button class="kb-nb-page-export" data-export="rules">导出 ↗</button>
+          </div>
+          <h2 class="kb-nb-page-title">跟你打交道的方式</h2>
+          <p class="kb-nb-page-subtitle">这些不是「关于你」的事实，而是 AGENT 通过你的反馈学到的「下次该怎么响应你」。每条都来自一次具体的修正。</p>
+          <div class="kb-nb-stats" id="kb-nb-rules-stats">
+            <div class="kb-nb-stat"><div class="kb-nb-stat-num" id="kb-nb-rules-week">—</div><div class="kb-nb-stat-label">本周新增</div></div>
+            <div class="kb-nb-stat"><div class="kb-nb-stat-num" id="kb-nb-rules-active">—</div><div class="kb-nb-stat-label">累计</div></div>
+            <div class="kb-nb-stat"><div class="kb-nb-stat-num kb-nb-stat-mute" id="kb-nb-rules-hit">—</div><div class="kb-nb-stat-label">命中率（M3 启用）</div></div>
+            <div class="kb-nb-stat-quote">"请用我的判断方式收敛 — 这样你越变了，我也越省心。"</div>
+          </div>
+          <div class="kb-nb-rules-list" id="kb-nb-rules-list">读取中…</div>
+        </section>
+
+        <!-- 最近你在想的事 -->
+        <section class="kb-nb-page kb-nb-hidden" id="kb-tab-thinking">
+          <div class="kb-nb-page-header">
+            <span class="kb-nb-page-mono">● 程序记忆 · 思辨</span>
+            <button class="kb-nb-page-export" data-export="thinking">导出 ↗</button>
+          </div>
+          <div class="kb-nb-thinking-header">
+            <h2 class="kb-nb-page-title">最近你在想的事</h2>
+            <button id="kb-nb-thinking-refresh" class="kb-nb-soft-btn">立刻整理一次 →</button>
+          </div>
+          <p class="kb-nb-page-subtitle">用 Opus 级别模型对你最近的批注做一次深度反思 — 不靠词云，靠把你脑子里反复在转的问题说出来。</p>
+          <div id="kb-nb-thinking-active" class="kb-nb-thinking-active">读取中…</div>
+          <div class="kb-nb-divider-soft"></div>
+          <div class="kb-nb-thinking-bottom">
+            <div class="kb-nb-page-mono kb-nb-mono-soft">主题热度</div>
+            <div class="kb-nb-empty">主题热度需要 worker 跑出 theme_signals — M3 后启用。</div>
+          </div>
+        </section>
+
+        <!-- 共同日记 -->
+        <section class="kb-nb-page kb-nb-hidden" id="kb-tab-diary">
+          <div class="kb-nb-page-header">
+            <span class="kb-nb-page-mono">● 时间线 · 共同日记</span>
+            <button class="kb-nb-page-export" data-export="diary">导出 ↗</button>
+          </div>
+          <h2 class="kb-nb-page-title">你做了什么 · AGENT 做了什么</h2>
+          <p class="kb-nb-page-subtitle">每次你的行为后紧跟一条 AGENT 行为 — 让你看到机器在身后悄悄做的所有事。M2 仅展示你的批注流，AGENT 流 M3 启用。</p>
+          <div id="kb-nb-diary-list">读取中…</div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="kb-nb-toast"></div>
+
+  <script src="../content/marked.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

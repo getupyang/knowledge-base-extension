@@ -89,6 +89,47 @@ def init_db():
             FOREIGN KEY (comment_id) REFERENCES comments(id)
         )
     """)
+    # ── M2 新增：jobs 异步任务表（durable + crash recovery）──
+    # 设计见 ~/mem-ai/docs/memory-backend-design.md §2.10
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,                    -- 'synthesize_thinking' | (M3+ 更多)
+            payload_json TEXT,
+            status TEXT NOT NULL DEFAULT 'queued', -- 'queued' | 'running' | 'done' | 'failed'
+            attempts INTEGER NOT NULL DEFAULT 0,
+            max_attempts INTEGER NOT NULL DEFAULT 3,
+            error TEXT,
+            created_at TEXT NOT NULL,
+            started_at TEXT,
+            finished_at TEXT,
+            lease_expires_at TEXT,                 -- worker 拿任务时 = now + 5min
+            heartbeat_at TEXT,                     -- worker 长任务每 30s 续约
+            recovery_count INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_lease ON jobs(status, lease_expires_at)")
+
+    # ── M2 新增：thinking_summaries 思考整理（笔记本核心 Aha 产物）──
+    # 设计见 ~/mem-ai/docs/memory-backend-design.md §2.6
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS thinking_summaries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            window_start TEXT,
+            window_end TEXT,
+            title TEXT,
+            synthesis_md TEXT,                     -- Opus 4.7 输出的 markdown 整理
+            evidence_comment_ids TEXT,             -- JSON array of comment.id
+            trigger_reason TEXT,                   -- 'threshold_10_comments' | 'weekly_timeout' | 'user_request' | 'first_open'
+            comments_since_last INTEGER,
+            status TEXT NOT NULL DEFAULT 'active', -- 'active'（最新） | 'archived'（历史版本）
+            produced_by_job_id INTEGER,
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_thinking_status_created ON thinking_summaries(status, created_at DESC)")
+
     # 兼容已有数据库：如果列不存在则添加
     for col, table in [
         ("debug_meta TEXT", "replies"),
@@ -98,7 +139,6 @@ def init_db():
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {col}")
         except Exception:
             pass  # 列已存在，忽略
-    # page_cache 表可能是新建的，上面 CREATE IF NOT EXISTS 已处理
     conn.commit()
     conn.close()
 
@@ -1351,3 +1391,215 @@ async def notion_upsert(req: NotionUpsertRequest):
     except urllib.error.HTTPError as e:
         detail = e.read().decode() if e.fp else str(e)
         raise HTTPException(status_code=e.code, detail=detail)
+
+
+# ──────────────────────────────────────────
+# M2: 笔记本 endpoints（详见 ~/mem-ai/docs/memory-backend-design.md §4）
+# ──────────────────────────────────────────
+
+@app.get("/notebook/overview")
+def notebook_overview():
+    """顶部计数 + 底部 AGENT 观察 callout"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        c_count = conn.execute("SELECT COUNT(*) FROM comments").fetchone()[0]
+        page_count = conn.execute("SELECT COUNT(DISTINCT page_url) FROM comments").fetchone()[0]
+        latest_sync = conn.execute(
+            "SELECT MAX(created_at) FROM comments"
+        ).fetchone()[0]
+        # 最近一条 active thinking_summary（用作底部 callout）
+        latest_thinking = conn.execute(
+            "SELECT id, title, synthesis_md, created_at FROM thinking_summaries "
+            "WHERE status='active' ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        # 学到的规则数
+        try:
+            with open(LEARNED_RULES_PATH, 'r', encoding='utf-8') as f:
+                rules_data = json.loads(f.read() or '{"rules":[]}')
+            active_rules = sum(1 for r in rules_data.get("rules", []) if r.get("active", True))
+        except Exception:
+            active_rules = 0
+        return {
+            "comment_count": c_count,
+            "page_count": page_count,
+            "latest_sync": latest_sync,
+            "active_rules": active_rules,
+            "latest_thinking": dict(latest_thinking) if latest_thinking else None,
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/notebook/profile")
+def notebook_profile():
+    """B 类记忆：user_profile.md + project_context.md（markdown 真理）"""
+    return {
+        "user_profile_md": _load_file(USER_PROFILE_PATH, ""),
+        "project_context_md": _load_file(PROJECT_CONTEXT_PATH, ""),
+    }
+
+
+@app.get("/notebook/rules")
+def notebook_rules():
+    """C 类记忆：learned_rules.json（M3 后切到 working_rules 表）"""
+    try:
+        with open(LEARNED_RULES_PATH, 'r', encoding='utf-8') as f:
+            data = json.loads(f.read() or '{"rules":[]}')
+    except Exception:
+        data = {"rules": []}
+    rules = data.get("rules", [])
+    # 按 last_used_at desc 排序，未使用的放后面
+    rules.sort(key=lambda r: (r.get("last_used_at") or r.get("created_at") or ""), reverse=True)
+    active = [r for r in rules if r.get("active", True)]
+    archived = [r for r in rules if not r.get("active", True)]
+    # 本周新增数（粗算：created_at 在最近 7 天）
+    from datetime import timedelta
+    one_week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+    week_new = sum(1 for r in active if (r.get("created_at") or "") >= one_week_ago)
+    return {
+        "active": active,
+        "archived": archived,
+        "stats": {
+            "active_count": len(active),
+            "week_new": week_new,
+            # 命中率 M3 才有真实数据，M2 占位
+            "hit_rate": None,
+        }
+    }
+
+
+@app.get("/notebook/thinking")
+def notebook_thinking():
+    """最近你在想的事 上栏：最新一条 active thinking_summary"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        active = conn.execute(
+            "SELECT id, window_start, window_end, title, synthesis_md, "
+            "evidence_comment_ids, trigger_reason, comments_since_last, created_at "
+            "FROM thinking_summaries WHERE status='active' ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        archived_count = conn.execute(
+            "SELECT COUNT(*) FROM thinking_summaries WHERE status='archived'"
+        ).fetchone()[0]
+        # 是否有正在跑的 thinking job
+        running_job = conn.execute(
+            "SELECT id, status, created_at FROM jobs "
+            "WHERE kind='synthesize_thinking' AND status IN ('queued','running') "
+            "ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        return {
+            "active": dict(active) if active else None,
+            "archived_count": archived_count,
+            "running_job": dict(running_job) if running_job else None,
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/notebook/thinking/history")
+def notebook_thinking_history(limit: int = 20):
+    """历史 thinking_summaries 列表（archived）"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT id, window_start, window_end, title, synthesis_md, created_at "
+            "FROM thinking_summaries WHERE status='archived' ORDER BY created_at DESC LIMIT ?",
+            (limit,)
+        ).fetchall()
+        return {"items": [dict(r) for r in rows]}
+    finally:
+        conn.close()
+
+
+@app.get("/notebook/diary")
+def notebook_diary(limit: int = 50, before: str = None):
+    """共同日记：comments + replies 时间线（M2 仅"你做了什么"流；M3 后会 join agent_actions）"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        # 取最近 limit 条 comments
+        if before:
+            rows = conn.execute(
+                "SELECT id, page_url, page_title, selected_text, comment, created_at "
+                "FROM comments WHERE created_at < ? ORDER BY created_at DESC LIMIT ?",
+                (before, limit)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, page_url, page_title, selected_text, comment, created_at "
+                "FROM comments ORDER BY created_at DESC LIMIT ?",
+                (limit,)
+            ).fetchall()
+        items = []
+        for r in rows:
+            replies = conn.execute(
+                "SELECT id, author, content, created_at FROM replies "
+                "WHERE comment_id=? ORDER BY created_at ASC",
+                (r["id"],)
+            ).fetchall()
+            items.append({
+                **dict(r),
+                "replies": [dict(rep) for rep in replies],
+            })
+        return {"items": items, "has_more": len(items) >= limit}
+    finally:
+        conn.close()
+
+
+# ──────────────────────────────────────────
+# M2: jobs endpoints（异步任务队列）
+# ──────────────────────────────────────────
+
+class JobCreate(BaseModel):
+    kind: str
+    payload: dict = {}
+
+@app.post("/jobs")
+def create_job(req: JobCreate):
+    """queue 一个后台任务（worker.py 会 lease 并执行）"""
+    allowed_kinds = {"synthesize_thinking"}  # M3 后会扩展
+    if req.kind not in allowed_kinds:
+        raise HTTPException(status_code=400, detail=f"unknown kind: {req.kind}")
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        # 防止重复 queue：如果已有同 kind 的 queued/running 任务，直接返回它
+        existing = conn.execute(
+            "SELECT id, status, created_at FROM jobs "
+            "WHERE kind=? AND status IN ('queued','running') "
+            "ORDER BY created_at DESC LIMIT 1",
+            (req.kind,)
+        ).fetchone()
+        if existing:
+            return {"id": existing[0], "status": existing[1], "deduped": True}
+        now = datetime.now().isoformat()
+        cursor = conn.execute(
+            "INSERT INTO jobs (kind, payload_json, status, created_at) "
+            "VALUES (?, ?, 'queued', ?)",
+            (req.kind, json.dumps(req.payload, ensure_ascii=False), now)
+        )
+        job_id = cursor.lastrowid
+        conn.commit()
+        return {"id": job_id, "status": "queued", "deduped": False}
+    finally:
+        conn.close()
+
+
+@app.get("/jobs/{job_id}")
+def get_job(job_id: int):
+    """查 job 状态（前端首次打开笔记本时轮询）"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT id, kind, status, attempts, error, created_at, started_at, finished_at "
+            "FROM jobs WHERE id=?",
+            (job_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="job not found")
+        return dict(row)
+    finally:
+        conn.close()

@@ -33,5 +33,11 @@
   "action": {
     "default_popup": "src/popup/index.html",
     "default_title": "知识库助手"
-  }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["src/notebook/*"],
+      "matches": ["<all_urls>"]
+    }
+  ]
 }
