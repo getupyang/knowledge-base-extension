@@ -207,7 +207,7 @@ def fetch_recent_comments(conn: sqlite3.Connection, limit: int = 50) -> list:
     return [dict(r) for r in rows]
 
 
-def fetch_last_thinking_summary(conn: sqlite3.Connection) -> dict | None:
+def fetch_last_thinking_summary(conn: sqlite3.Connection):
     conn.row_factory = sqlite3.Row
     row = conn.execute(
         "SELECT id, title, synthesis_md, created_at FROM thinking_summaries "
