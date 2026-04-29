@@ -107,6 +107,7 @@ async function loadOverview() {
 
 // ─── 2. 你 & 项目 ───
 async function loadProfile() {
+  // 先加载完整 markdown（折叠展示）
   try {
     const data = await api("/notebook/profile");
     const profileEl = $("kb-nb-profile-md");
@@ -114,7 +115,7 @@ async function loadProfile() {
     if (data.user_profile_md && data.user_profile_md.trim()) {
       profileEl.innerHTML = md(data.user_profile_md);
     } else {
-      profileEl.innerHTML = `<div class="kb-nb-empty">user_profile.md 还是空的。<br>多批注几篇文章，AI 会替你写一稿。</div>`;
+      profileEl.innerHTML = `<div class="kb-nb-empty">user_profile.md 还是空的。</div>`;
     }
     if (data.project_context_md && data.project_context_md.trim()) {
       projectEl.innerHTML = md(data.project_context_md);
@@ -125,12 +126,116 @@ async function loadProfile() {
     $("kb-nb-profile-md").innerHTML = `<div class="kb-nb-empty">读取失败</div>`;
     $("kb-nb-project-md").innerHTML = `<div class="kb-nb-empty">读取失败</div>`;
   }
+  // 然后看有没有 curated 缓存
+  loadProfileCurated();
+}
+
+// Curated 缓存：localStorage，24h
+const CURATED_TTL_MS = 24 * 60 * 60 * 1000;
+
+function readCuratedCache(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const obj = JSON.parse(raw);
+    if (!obj || !obj.ts || Date.now() - obj.ts > CURATED_TTL_MS) return null;
+    return obj;
+  } catch { return null; }
+}
+function writeCuratedCache(key, data) {
+  try { localStorage.setItem(key, JSON.stringify({ ts: Date.now(), data })); } catch {}
+}
+function clearCuratedCache(key) {
+  try { localStorage.removeItem(key); } catch {}
+}
+
+function renderProfileCurated(data, ts) {
+  const box = $("kb-nb-profile-curated");
+  const f = data.fields || {};
+  const ageStr = ts ? fmtTimeAgo(new Date(ts).toISOString()) : "刚刚";
+  box.innerHTML = `
+    <div class="kb-nb-profile-oneliner">
+      <div class="kb-nb-profile-oneliner-text">${escapeHtml(data.one_liner || "")}</div>
+      <div class="kb-nb-profile-oneliner-meta">
+        <span>${escapeHtml(data.since_last_check || "")}</span>
+        <button class="kb-nb-profile-oneliner-refresh" id="kb-nb-profile-recurate">重新整理 · 上次 ${ageStr}</button>
+      </div>
+    </div>
+    <div class="kb-nb-profile-fields">
+      <div class="kb-nb-profile-field">
+        <div class="kb-nb-profile-field-label">身份</div>
+        <div class="kb-nb-profile-field-value">${escapeHtml(f.identity || "—")}</div>
+      </div>
+      <div class="kb-nb-profile-field">
+        <div class="kb-nb-profile-field-label">当前 PROJECT</div>
+        <div class="kb-nb-profile-field-value">${escapeHtml(f.current_project || "—")}</div>
+      </div>
+      <div class="kb-nb-profile-field">
+        <div class="kb-nb-profile-field-label">北极星</div>
+        <div class="kb-nb-profile-field-value">${escapeHtml(f.north_star || "—")}</div>
+      </div>
+      <div class="kb-nb-profile-field">
+        <div class="kb-nb-profile-field-label">悬而未决</div>
+        <div class="kb-nb-profile-field-value">${escapeHtml(f.pending || "—")}</div>
+      </div>
+    </div>
+  `;
+  const btn = document.getElementById("kb-nb-profile-recurate");
+  if (btn) btn.addEventListener("click", () => triggerProfileCurated(true));
+}
+
+async function loadProfileCurated() {
+  const cached = readCuratedCache("kb_nb_curated_profile");
+  if (cached && cached.data && cached.data._status === "ok") {
+    renderProfileCurated(cached.data, cached.ts);
+    return;
+  }
+  // 没缓存：保留 empty 状态等用户点击
+  const btn = document.getElementById("kb-nb-profile-curate-btn");
+  if (btn) {
+    btn.onclick = () => triggerProfileCurated(false);
+  }
+}
+
+async function triggerProfileCurated(isRefresh) {
+  const box = $("kb-nb-profile-curated");
+  box.innerHTML = `<div class="kb-nb-curated-running">让 Opus 读你最近 30 条批注 + 资料，约 30 秒…</div>`;
+  try {
+    const data = await api("/notebook/profile/curated", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: "{}",
+    });
+    if (data._status !== "ok") {
+      box.innerHTML = `
+        <div class="kb-nb-curated-empty">
+          <div class="kb-nb-mono-soft">数据不足</div>
+          <div style="margin-top:6px;color:var(--kb-ink-mute);">${escapeHtml(data._message || "user_profile.md / project_context.md 还是空的")}</div>
+        </div>`;
+      return;
+    }
+    writeCuratedCache("kb_nb_curated_profile", data);
+    renderProfileCurated(data, Date.now());
+    toast(isRefresh ? "重新整理完成" : "整理完成");
+  } catch (e) {
+    box.innerHTML = `
+      <div class="kb-nb-curated-failed">
+        <div style="font-weight:500;margin-bottom:6px;">这次没整理出来</div>
+        <div style="font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--kb-ink-mute);">${escapeHtml((e && e.message) || "未知错误")}</div>
+        <button class="kb-nb-soft-btn" id="kb-nb-profile-retry" style="margin-top:10px;">再试一次 →</button>
+      </div>`;
+    const r = document.getElementById("kb-nb-profile-retry");
+    if (r) r.addEventListener("click", () => triggerProfileCurated(isRefresh));
+  }
 }
 
 // ─── 3. 养成的习惯（rules）───
+let _rulesAllCache = null; // 存全量 rules，curated 渲染要查 rule_id 对应原文
+
 async function loadRules() {
   try {
     const data = await api("/notebook/rules");
+    _rulesAllCache = data.active.concat(data.archived || []);
     $("kb-nb-rules-week").textContent = data.stats.week_new ?? 0;
     $("kb-nb-rules-active").textContent = data.stats.active_count ?? 0;
     $("kb-nb-rules-hit").textContent = data.stats.hit_rate == null ? "—" : (Math.round(data.stats.hit_rate * 100) + "%");
@@ -142,6 +247,95 @@ async function loadRules() {
     }
   } catch (e) {
     $("kb-nb-rules-list").innerHTML = `<div class="kb-nb-empty">读取失败</div>`;
+  }
+  // 然后看 curated
+  loadRulesCurated();
+}
+
+function _findRuleById(rid) {
+  if (!_rulesAllCache) return null;
+  return _rulesAllCache.find(r => r.id === rid) || null;
+}
+
+function renderRulesCurated(data, ts) {
+  const box = $("kb-nb-rules-curated");
+  const ageStr = ts ? fmtTimeAgo(new Date(ts).toISOString()) : "刚刚";
+  const top3 = (data.top3 || []).map(t => {
+    const orig = _findRuleById(t.rule_id);
+    const sourceStr = orig ? (orig.source || orig.created_at || "") : "";
+    return `
+      <div class="kb-nb-top3-card">
+        <div class="kb-nb-top3-wow">${escapeHtml(t.wow_text || (orig && orig.rule) || "")}</div>
+        ${t.why_wow ? `<div class="kb-nb-top3-why">${escapeHtml(t.why_wow)}</div>` : ""}
+        <div class="kb-nb-top3-meta">${escapeHtml(t.rule_id || "")}${sourceStr ? " · " + escapeHtml(sourceStr) : ""}</div>
+      </div>
+    `;
+  }).join("");
+
+  const groups = (data.groups || []).map(g => `
+    <div class="kb-nb-rules-group">
+      <div class="kb-nb-group-theme">${escapeHtml(g.theme || "")}</div>
+      ${g.summary ? `<div class="kb-nb-group-summary">${escapeHtml(g.summary)}</div>` : ""}
+      <div class="kb-nb-group-ids">${(g.rule_ids || []).map(id => escapeHtml(id)).join(" · ")}</div>
+    </div>
+  `).join("");
+
+  box.innerHTML = `
+    <div class="kb-nb-rules-top3-header">
+      <span>AI 挑出的 3 条 · 最有"你"的特征</span>
+      <button class="kb-nb-profile-oneliner-refresh" id="kb-nb-rules-recurate">重新挑选 · 上次 ${ageStr}</button>
+    </div>
+    <div class="kb-nb-rules-top3">${top3 || '<div class="kb-nb-empty">挑选结果为空</div>'}</div>
+    ${groups ? `
+      <div class="kb-nb-rules-top3-header" style="margin-top:14px;">
+        <span>剩余 ${data._total_rules ? data._total_rules - 3 : "?"} 条 · 按主题合并</span>
+      </div>
+      <div class="kb-nb-rules-groups">${groups}</div>
+    ` : ""}
+  `;
+  const btn = document.getElementById("kb-nb-rules-recurate");
+  if (btn) btn.addEventListener("click", () => triggerRulesCurated(true));
+}
+
+async function loadRulesCurated() {
+  const cached = readCuratedCache("kb_nb_curated_rules");
+  if (cached && cached.data && cached.data._status === "ok") {
+    renderRulesCurated(cached.data, cached.ts);
+    return;
+  }
+  const btn = document.getElementById("kb-nb-rules-curate-btn");
+  if (btn) btn.onclick = () => triggerRulesCurated(false);
+}
+
+async function triggerRulesCurated(isRefresh) {
+  const box = $("kb-nb-rules-curated");
+  box.innerHTML = `<div class="kb-nb-curated-running">让 Opus 从你的规则里挑出 3 条最 wow 的，约 30 秒…</div>`;
+  try {
+    const data = await api("/notebook/rules/curated", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: "{}",
+    });
+    if (data._status !== "ok") {
+      box.innerHTML = `
+        <div class="kb-nb-curated-empty">
+          <div class="kb-nb-mono-soft">${escapeHtml(data._status || "数据不足")}</div>
+          <div style="margin-top:6px;color:var(--kb-ink-mute);">${escapeHtml(data._message || "")}</div>
+        </div>`;
+      return;
+    }
+    writeCuratedCache("kb_nb_curated_rules", data);
+    renderRulesCurated(data, Date.now());
+    toast(isRefresh ? "重新挑选完成" : "挑选完成");
+  } catch (e) {
+    box.innerHTML = `
+      <div class="kb-nb-curated-failed">
+        <div style="font-weight:500;margin-bottom:6px;">这次没挑出来</div>
+        <div style="font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--kb-ink-mute);">${escapeHtml((e && e.message) || "未知错误")}</div>
+        <button class="kb-nb-soft-btn" id="kb-nb-rules-retry" style="margin-top:10px;">再试一次 →</button>
+      </div>`;
+    const r = document.getElementById("kb-nb-rules-retry");
+    if (r) r.addEventListener("click", () => triggerRulesCurated(isRefresh));
   }
 }
 

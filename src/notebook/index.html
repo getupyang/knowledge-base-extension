@@ -55,12 +55,26 @@
         <!-- 你 & 项目 -->
         <section class="kb-nb-page" id="kb-tab-profile-project">
           <div class="kb-nb-page-header">
-            <span class="kb-nb-page-mono">● 知识记忆 · 关于你</span>
+            <span class="kb-nb-page-mono">● 知识记忆 · 此刻的你</span>
             <button class="kb-nb-page-export" data-export="profile">导出 ↗</button>
           </div>
           <h2 class="kb-nb-page-title">此刻的你</h2>
-          <p class="kb-nb-page-subtitle">这里记录的是「你是谁、你在哪儿」 — 项目阶段、身份、近期最关心的事。</p>
-          <div class="kb-nb-md" id="kb-nb-profile-md">读取中…</div>
+          <p class="kb-nb-page-subtitle">同事眼里的你此刻 — 不是简历，是当下的状态。</p>
+
+          <!-- Curated 浓缩卡片（首次访问引导，跑过缓存 24h） -->
+          <div id="kb-nb-profile-curated" class="kb-nb-curated-section">
+            <div class="kb-nb-curated-empty" id="kb-nb-profile-curated-empty">
+              <div class="kb-nb-mono-soft">AI 还没替你写浓缩状态卡</div>
+              <div style="margin-top:6px;color:var(--kb-ink-mute);">让 Opus 读你的资料 + 最近 30 条批注，写一句穿透状态 + 4 个关键字段。约 30 秒。</div>
+              <button id="kb-nb-profile-curate-btn" class="kb-nb-soft-btn" style="margin-top:10px;">让 AI 写一稿 →</button>
+            </div>
+          </div>
+
+          <div class="kb-nb-divider-soft"></div>
+          <details class="kb-nb-md-details">
+            <summary class="kb-nb-md-details-summary">展开完整 user_profile.md ↓</summary>
+            <div class="kb-nb-md" id="kb-nb-profile-md">读取中…</div>
+          </details>
 
           <div class="kb-nb-divider"></div>
 
@@ -68,8 +82,11 @@
             <span class="kb-nb-page-mono">● 知识记忆 · 项目</span>
           </div>
           <h2 class="kb-nb-page-title">当前项目</h2>
-          <p class="kb-nb-page-subtitle">关于你手上的项目 — 状态、决议、悬而未决。</p>
-          <div class="kb-nb-md" id="kb-nb-project-md">读取中…</div>
+          <p class="kb-nb-page-subtitle">手上的项目 — 状态、决议、悬而未决。完整 markdown 在下方折叠。</p>
+          <details class="kb-nb-md-details">
+            <summary class="kb-nb-md-details-summary">展开完整 project_context.md ↓</summary>
+            <div class="kb-nb-md" id="kb-nb-project-md">读取中…</div>
+          </details>
         </section>
 
         <!-- 养成的习惯 -->
@@ -86,7 +103,21 @@
             <div class="kb-nb-stat"><div class="kb-nb-stat-num kb-nb-stat-mute" id="kb-nb-rules-hit">—</div><div class="kb-nb-stat-label">命中率（M3 启用）</div></div>
             <div class="kb-nb-stat-quote">"请用我的判断方式收敛 — 这样你越变了，我也越省心。"</div>
           </div>
-          <div class="kb-nb-rules-list" id="kb-nb-rules-list">读取中…</div>
+
+          <!-- Curated 浓缩区：3 条 wow + 折叠分组 -->
+          <div id="kb-nb-rules-curated" class="kb-nb-curated-section">
+            <div class="kb-nb-curated-empty" id="kb-nb-rules-curated-empty">
+              <div class="kb-nb-mono-soft">AI 还没挑出你最个人化的 3 条习惯</div>
+              <div style="margin-top:6px;color:var(--kb-ink-mute);">从 18 条里挑出最有"你的特征"的 3 条 + 把剩余的合并成几组。约 30 秒。</div>
+              <button id="kb-nb-rules-curate-btn" class="kb-nb-soft-btn" style="margin-top:10px;">让 AI 挑一稿 →</button>
+            </div>
+          </div>
+
+          <div class="kb-nb-divider-soft"></div>
+          <details class="kb-nb-md-details">
+            <summary class="kb-nb-md-details-summary">展开全部规则 ↓</summary>
+            <div class="kb-nb-rules-list" id="kb-nb-rules-list">读取中…</div>
+          </details>
         </section>
 
         <!-- 最近你在想的事 -->

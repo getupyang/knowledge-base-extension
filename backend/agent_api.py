@@ -1603,3 +1603,238 @@ def get_job(job_id: int):
         return dict(row)
     finally:
         conn.close()
+
+
+# ──────────────────────────────────────────
+# M2.6: Curated 视图（验证 aha，不持久化、不建表）
+#
+# 设计思路：先验证「养成的习惯」和「你 & 项目」用 LLM 浓缩后能不能产生 aha。
+# 不进 jobs 表、不建 working_rules，直接 sync 调 claude 返回 JSON。
+# 前端在 localStorage 缓存结果（避免每次访问都跑 LLM）。
+# 验证通过后再决定是否升级成 worker + 持久化（M3）。
+# ──────────────────────────────────────────
+
+
+def _safe_parse_curated_json(content: str) -> dict:
+    """从 claude 输出里提取 JSON，多策略 fallback"""
+    if not content:
+        raise ValueError("empty LLM output")
+    s = content.strip()
+    # 策略 1：```json ... ```
+    if "```json" in s:
+        i = s.find("```json") + 7
+        j = s.find("```", i)
+        if j > i:
+            try:
+                return json.loads(s[i:j].strip())
+            except Exception:
+                pass
+    # 策略 2：找最外层 { ... }
+    i = s.find("{"); j = s.rfind("}")
+    if i >= 0 and j > i:
+        try:
+            return json.loads(s[i:j+1])
+        except Exception:
+            pass
+    # 策略 3：原始解析
+    return json.loads(s)
+
+
+CURATED_RULES_PROMPT = """你是一个深度阅读用户工作偏好规则的产品观察者。
+
+# 用户身份
+{user_profile}
+
+# 当前的 18 条工作规则（learned_rules.json，按时间倒序）
+{rules_dump}
+
+# 任务
+
+从这 {rule_count} 条规则里挑出最让用户感到 **"卧槽 AI 真的把我那次纠正记住了"** 的 3 条。
+
+挑选标准（不是叠加是融合）：
+- **个人特征强**：这条规则换个用户就不成立
+- **被纠正过 / 反直觉**：明显是用户教 AI 出来的，不是 LLM 默认行为
+- **影响输出形态**：会让 AI 下次回答看起来明显不一样
+
+不要选：
+- 通用工程纪律（"先看文档"、"先 review"）
+- 被多次冲突表达的（自相矛盾的）
+- 明显被超期的（用户已经改主意了）
+
+剩余 {remaining_count} 条做一次合并去重 → 输出 3-5 个分组（同主题归一组）。
+
+# 输出格式（直接 JSON，不要围栏，不要解释）
+
+{{
+  "top3": [
+    {{"rule_id": "rule_010", "wow_text": "用户原 rule 的简化措辞，≤20 字", "why_wow": "为什么这条让用户 wow，一句话 ≤30 字", "evidence_keywords": ["关键词1", "关键词2"]}},
+    {{"rule_id": "rule_017", ...}},
+    {{"rule_id": "rule_xxx", ...}}
+  ],
+  "groups": [
+    {{"theme": "调研类输出格式", "rule_ids": ["rule_005", "rule_011", "rule_016"], "summary": "三条都在说同一件事：调研类回答的固定结构"}},
+    {{"theme": "...", ...}}
+  ]
+}}
+
+约束：
+- top3 必须严格 3 条，rule_id 必须是输入里真实存在的 id
+- groups 里每个 rule_id 也必须真实存在
+- 不要在 wow_text 内部使用未转义双引号（用「」代替）
+"""
+
+
+@app.post("/notebook/rules/curated")
+def notebook_rules_curated():
+    """挑出 3 条 wow rule + 把剩余 rule 分组合并。同步调 LLM，前端缓存。"""
+    try:
+        with open(LEARNED_RULES_PATH, 'r', encoding='utf-8') as f:
+            data = json.loads(f.read() or '{"rules":[]}')
+    except Exception:
+        data = {"rules": []}
+    rules = [r for r in data.get("rules", []) if r.get("active", True)]
+    if len(rules) < 3:
+        return {"top3": [], "groups": [], "_status": "insufficient_data",
+                "_message": f"当前只有 {len(rules)} 条 active 规则，先批注几次让 AI 学到东西"}
+
+    user_profile = _load_file(USER_PROFILE_PATH, "[空白]")[:3000]
+    rules_dump_lines = []
+    for r in rules:
+        rid = r.get("id", "?")
+        text = r.get("rule", "")
+        scope = r.get("scope", "all")
+        src = r.get("source", "")
+        rules_dump_lines.append(f"[{rid}] scope={scope} · src={src}\n  {text}")
+    rules_dump = "\n\n".join(rules_dump_lines)
+
+    prompt = CURATED_RULES_PROMPT.format(
+        user_profile=user_profile,
+        rules_dump=rules_dump,
+        rule_count=len(rules),
+        remaining_count=max(0, len(rules) - 3),
+    )
+    sys_prompt = "You are a careful product observer for a personal memory tool. Output only the requested JSON."
+
+    try:
+        content, rc = _call_claude(prompt, sys_prompt, timeout=120)
+        if rc != 0:
+            raise HTTPException(status_code=502, detail=f"claude exit {rc}: {content[:300]}")
+        parsed = _safe_parse_curated_json(content)
+        # 校验 rule_id 真实存在
+        valid_ids = {r.get("id") for r in rules}
+        top3 = [t for t in parsed.get("top3", []) if t.get("rule_id") in valid_ids][:3]
+        groups = []
+        for g in parsed.get("groups", []):
+            ids = [rid for rid in g.get("rule_ids", []) if rid in valid_ids]
+            if ids:
+                groups.append({"theme": g.get("theme", ""), "rule_ids": ids, "summary": g.get("summary", "")})
+        return {
+            "top3": top3,
+            "groups": groups,
+            "_status": "ok",
+            "_total_rules": len(rules),
+        }
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="LLM timeout")
+    except Exception as e:
+        # 失败显式：log + 返回 500，前端 fallback 到原 18 条列表
+        print(f"[curated_rules] error: {e}")
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {str(e)[:300]}")
+
+
+CURATED_PROFILE_PROMPT = """你是一个深度阅读用户当前状态的同事观察者。
+
+# user_profile.md
+{user_profile}
+
+# project_context.md
+{project_context}
+
+# 最近 30 条批注（按时间倒序，了解用户当下在做什么）
+{recent_comments}
+
+# 任务
+
+写出一份 **"AI 此刻怎么理解我"** 的浓缩状态卡片。这不是简历，是同事眼里的我。
+
+# 输出格式（直接 JSON，不要围栏，不要解释）
+
+{{
+  "one_liner": "你是 X，在做 Y，现在卡在 Z 上 — 一句话 ≤ 50 字，要有穿透力，不是简历自我介绍",
+  "fields": {{
+    "identity": "身份 — 你是谁，做什么阶段，≤ 25 字",
+    "current_project": "当前手上的项目 — 是什么，到了哪一步，≤ 30 字",
+    "north_star": "北极星 — 你在追什么验证 / 终局长什么样，≤ 30 字",
+    "pending": "悬而未决 — 当前最纠结 / 没拍板的具体问题，≤ 30 字"
+  }},
+  "since_last_check": "如果可见，最近 7 天有什么变化 ≤ 25 字（无明显变化就写"无明显变化"）"
+}}
+
+约束：
+- one_liner 必须有穿透力，不是泛泛"独立创业者，做 AI 产品"，要具体到当下
+- pending 优先用 user 自己最近批注里反复提的问题，不是项目文档里固定列的
+- 不要在字段值内部使用未转义双引号（用「」代替）
+- 全部使用中文
+"""
+
+
+@app.post("/notebook/profile/curated")
+def notebook_profile_curated():
+    """生成 你 & 项目 的浓缩状态卡：一句话 + 4 个关键字段。同步调 LLM。"""
+    user_profile = _load_file(USER_PROFILE_PATH, "")
+    project_context = _load_file(PROJECT_CONTEXT_PATH, "")
+    if not user_profile.strip() and not project_context.strip():
+        return {"_status": "insufficient_data",
+                "_message": "user_profile.md 和 project_context.md 都是空的，先填一下底"}
+
+    # 取最近 30 条 comments 作为"当下"信号
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT id, page_title, selected_text, comment, created_at "
+        "FROM comments ORDER BY created_at DESC LIMIT 30"
+    ).fetchall()
+    conn.close()
+    recent_lines = []
+    for r in rows:
+        excerpt = (r["selected_text"] or "").strip()[:80]
+        recent_lines.append(
+            f"[c#{r['id']}] {r['created_at'][:10]} 《{(r['page_title'] or '')[:30]}》\n"
+            f"  {(r['comment'] or '')[:150]}"
+            + (f"\n  > {excerpt}" if excerpt else "")
+        )
+    recent_dump = "\n\n".join(recent_lines) if recent_lines else "[暂无批注]"
+
+    prompt = CURATED_PROFILE_PROMPT.format(
+        user_profile=user_profile[:5000],
+        project_context=project_context[:5000],
+        recent_comments=recent_dump,
+    )
+    sys_prompt = "You are a careful colleague-observer for a personal memory tool. Output only the requested JSON."
+
+    try:
+        content, rc = _call_claude(prompt, sys_prompt, timeout=120)
+        if rc != 0:
+            raise HTTPException(status_code=502, detail=f"claude exit {rc}: {content[:300]}")
+        parsed = _safe_parse_curated_json(content)
+        # 校验字段
+        if not isinstance(parsed.get("one_liner"), str):
+            raise ValueError("missing one_liner")
+        fields = parsed.get("fields") or {}
+        return {
+            "one_liner": parsed.get("one_liner", "").strip(),
+            "fields": {
+                "identity": (fields.get("identity") or "").strip(),
+                "current_project": (fields.get("current_project") or "").strip(),
+                "north_star": (fields.get("north_star") or "").strip(),
+                "pending": (fields.get("pending") or "").strip(),
+            },
+            "since_last_check": (parsed.get("since_last_check") or "").strip(),
+            "_status": "ok",
+        }
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="LLM timeout")
+    except Exception as e:
+        print(f"[curated_profile] error: {e}")
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {str(e)[:300]}")
