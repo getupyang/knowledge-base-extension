@@ -283,6 +283,85 @@ a { color: inherit; }
 @keyframes kb-nb-pulse { 0%,100% { opacity: 0.3; } 50% { opacity: 1; } }
 .kb-nb-thinking-bottom { margin-top: 12px; }
 
+/* 评论引用锚点 c#xxx — 在 thinking_summary 正文 + evidence 列表里都用 */
+.kb-nb-cref {
+  display: inline-block;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  padding: 0 5px;
+  margin: 0 2px;
+  background: var(--kb-paper-3);
+  color: var(--kb-ink-2);
+  border: 1px solid var(--kb-line-2);
+  border-radius: 2px;
+  text-decoration: none;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  vertical-align: baseline;
+}
+.kb-nb-cref:hover {
+  background: var(--kb-terra-soft);
+  color: var(--kb-terra);
+  border-color: var(--kb-terra);
+}
+.kb-nb-thinking-evidence {
+  margin-top: 16px;
+  display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
+}
+.kb-nb-thinking-evidence .kb-nb-mono-soft {
+  margin-right: 6px; font-size: 11px;
+}
+
+/* 引用 hover 卡片（共享一个，绝对定位到 anchor 下方）*/
+.kb-nb-cref-hover {
+  position: absolute;
+  z-index: 1000;
+  background: var(--kb-paper);
+  border: 1px solid var(--kb-line);
+  border-radius: 4px;
+  box-shadow: 0 8px 24px rgba(40,30,20,0.15);
+  padding: 12px 14px;
+  max-width: 420px; min-width: 280px;
+  font-size: 12px;
+  line-height: 1.55;
+  font-family: "Source Han Serif SC", "Noto Serif SC", serif;
+  color: var(--kb-ink);
+}
+.kb-nb-cref-meta {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px;
+  color: var(--kb-ink-mute);
+  letter-spacing: 0.04em;
+  margin-bottom: 6px;
+}
+.kb-nb-cref-quote {
+  font-style: italic; color: var(--kb-ink-2);
+  border-left: 2px solid var(--kb-terra);
+  padding: 2px 0 2px 10px; margin: 4px 0 8px;
+  font-size: 12px; line-height: 1.5;
+}
+.kb-nb-cref-body {
+  margin-bottom: 8px;
+}
+.kb-nb-cref-foot {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px;
+  border-top: 1px solid var(--kb-line-2);
+  padding-top: 6px;
+}
+.kb-nb-cref-foot a {
+  color: var(--kb-blue);
+  text-decoration: none;
+  border-bottom: 1px solid oklch(0.55 0.12 240 / 0.4);
+}
+.kb-nb-cref-foot a:hover { border-bottom-color: var(--kb-blue); }
+.kb-nb-cref-loading {
+  color: var(--kb-ink-mute);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+}
+
 /* Diary */
 #kb-nb-diary-list {
   display: flex; flex-direction: column; gap: 10px;

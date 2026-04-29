@@ -193,6 +193,93 @@ async function loadThinking() {
   }
 }
 
+// comment 详情缓存（hover 时按需 fetch）
+const _commentCache = new Map();
+async function fetchComment(id) {
+  if (_commentCache.has(id)) return _commentCache.get(id);
+  try {
+    const c = await api("/comments/" + id);
+    _commentCache.set(id, c);
+    return c;
+  } catch {
+    _commentCache.set(id, null);
+    return null;
+  }
+}
+
+// 把渲染后的 HTML 里 [c#NNN] 文本节点替换为可点击锚点
+function activateCommentRefs(rootEl) {
+  const re = /\[c#(\d+)\]/g;
+  const walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT);
+  const targets = [];
+  let n;
+  while ((n = walker.nextNode())) {
+    if (re.test(n.nodeValue)) targets.push(n);
+    re.lastIndex = 0;
+  }
+  for (const node of targets) {
+    const frag = document.createDocumentFragment();
+    let last = 0;
+    const text = node.nodeValue;
+    const matches = [...text.matchAll(re)];
+    for (const m of matches) {
+      if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+      const id = parseInt(m[1], 10);
+      const a = document.createElement("a");
+      a.className = "kb-nb-cref";
+      a.dataset.cid = String(id);
+      a.href = "#c" + id;
+      a.textContent = "c#" + id;
+      frag.appendChild(a);
+      last = m.index + m[0].length;
+    }
+    if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+    node.parentNode.replaceChild(frag, node);
+  }
+}
+
+// 一个共享的 hover 卡片（避免每个引用一个）
+let _crefHoverEl = null;
+function ensureCrefHover() {
+  if (_crefHoverEl) return _crefHoverEl;
+  _crefHoverEl = document.createElement("div");
+  _crefHoverEl.className = "kb-nb-cref-hover";
+  _crefHoverEl.style.display = "none";
+  document.body.appendChild(_crefHoverEl);
+  _crefHoverEl.addEventListener("mouseenter", () => { _crefHoverEl._keep = true; });
+  _crefHoverEl.addEventListener("mouseleave", () => { _crefHoverEl._keep = false; hideCrefHover(); });
+  return _crefHoverEl;
+}
+function hideCrefHover() {
+  if (!_crefHoverEl) return;
+  setTimeout(() => {
+    if (_crefHoverEl && !_crefHoverEl._keep) _crefHoverEl.style.display = "none";
+  }, 120);
+}
+async function showCrefHoverFor(anchor) {
+  const id = parseInt(anchor.dataset.cid, 10);
+  const el = ensureCrefHover();
+  const rect = anchor.getBoundingClientRect();
+  el.style.left = (rect.left + window.scrollX) + "px";
+  el.style.top = (rect.bottom + window.scrollY + 6) + "px";
+  el.innerHTML = `<div class="kb-nb-cref-loading">读取 c#${id}…</div>`;
+  el.style.display = "block";
+  const c = await fetchComment(id);
+  if (!c || _crefHoverEl !== el) return;
+  // 如果鼠标已经移走，且没 keep，就别弹
+  if (el.style.display === "none") return;
+  const t = c.created_at ? fmtDateShort(c.created_at) + " · " + fmtClock(c.created_at) : "";
+  const excerpt = (c.selected_text || "").trim();
+  el.innerHTML = `
+    <div class="kb-nb-cref-meta">c#${id} · ${escapeHtml(t)} · 《${escapeHtml((c.page_title || "未命名").slice(0, 40))}》</div>
+    ${excerpt ? `<div class="kb-nb-cref-quote">"${escapeHtml(excerpt.slice(0, 200))}${excerpt.length > 200 ? "…" : ""}"</div>` : ""}
+    <div class="kb-nb-cref-body">${escapeHtml((c.comment || "").slice(0, 360))}${(c.comment || "").length > 360 ? "…" : ""}</div>
+    <div class="kb-nb-cref-foot">
+      <a href="${escapeHtml(c.page_url || "#")}" target="_blank" rel="noopener">打开来源页 ↗</a>
+    </div>
+  `;
+}
+
 function renderThinking(data) {
   const box = $("kb-nb-thinking-active");
   // 优先展示 running 状态
@@ -215,14 +302,32 @@ function renderThinking(data) {
       <span>基于 ${a.comments_since_last || "?"} 条批注</span>
     </div>
     <h3 class="kb-nb-thinking-title">${escapeHtml(a.title || "")}</h3>
-    <div class="kb-nb-md">${md(a.synthesis_md || "")}</div>
+    <div class="kb-nb-md" id="kb-nb-thinking-md">${md(a.synthesis_md || "")}</div>
     ${evidence.length ? `
-      <div class="kb-nb-thinking-status" style="margin-top:14px;">
-        <span>引用：</span>
-        ${evidence.map(id => `<span style="opacity:0.7">[c#${id}]</span>`).join(" ")}
+      <div class="kb-nb-thinking-evidence">
+        <span class="kb-nb-mono-soft">引用 ${evidence.length} 条 ·</span>
+        ${evidence.map(id => `<a href="#c${id}" class="kb-nb-cref" data-cid="${id}">c#${id}</a>`).join("")}
       </div>
     ` : ""}
   `;
+  // 把正文里的 [c#NNN] 也变成可点击锚点
+  const mdBox = document.getElementById("kb-nb-thinking-md");
+  if (mdBox) activateCommentRefs(mdBox);
+  // 绑定 hover/click
+  box.querySelectorAll(".kb-nb-cref").forEach(a => {
+    a.addEventListener("mouseenter", () => showCrefHoverFor(a));
+    a.addEventListener("mouseleave", () => hideCrefHover());
+    a.addEventListener("click", async (e) => {
+      e.preventDefault();
+      const id = parseInt(a.dataset.cid, 10);
+      const c = await fetchComment(id);
+      if (c && c.page_url) {
+        window.open(c.page_url, "_blank", "noopener");
+      } else {
+        toast("c#" + id + " 没找到 / 没有来源页");
+      }
+    });
+  });
 }
 
 async function requestThinking(reason) {
@@ -246,18 +351,51 @@ function startThinkingPolling(jobId) {
   _thinkingPolling = setInterval(async () => {
     try {
       const job = await api("/jobs/" + jobId);
-      if (job.status === "done" || job.status === "failed") {
+      if (job.status === "done") {
         clearInterval(_thinkingPolling); _thinkingPolling = null;
-        // 重新拉一次完整数据
         loadThinking();
         loadOverview();
-        if (job.status === "failed") toast("整理失败 · 看 .logs/failures.jsonl");
-        else toast("整理好了");
+        toast("整理好了");
+      } else if (job.status === "failed") {
+        clearInterval(_thinkingPolling); _thinkingPolling = null;
+        renderThinkingFailed(job);
+        toast("整理失败 · 见下方提示");
       }
     } catch (e) {
       // 忽略，下次再轮
     }
   }, 3000);
+}
+
+function renderThinkingFailed(job) {
+  const box = $("kb-nb-thinking-active");
+  const errShort = (job.error || "未知错误").split("\n")[0].slice(0, 200);
+  const attempts = job.attempts || 0;
+  box.innerHTML = `
+    <div class="kb-nb-thinking-status">
+      <span style="color:var(--kb-terra);">整理失败</span>
+      <span>·</span>
+      <span>job#${job.id} · 重试 ${attempts}/3</span>
+      <span>·</span>
+      <span>${fmtTimeAgo(job.finished_at || job.created_at)}</span>
+    </div>
+    <h3 class="kb-nb-thinking-title" style="color:var(--kb-terra);">这次没整理出来</h3>
+    <div class="kb-nb-md">
+      <p><strong>错误：</strong><code>${escapeHtml(errShort)}</code></p>
+      <p>常见原因：</p>
+      <ul>
+        <li>Opus 限流（看 <code>backend/.logs/worker.log</code> 是否 429 / quota）</li>
+        <li>JSON 解析失败（worker 已加多策略 fallback，但仍可能踩雷）</li>
+        <li>claude CLI 超时</li>
+      </ul>
+      <p>排查：<code>tail -50 backend/.logs/worker.log</code> + <code>tail backend/.logs/failures.jsonl</code></p>
+    </div>
+    <div style="margin-top:12px;">
+      <button id="kb-nb-thinking-retry" class="kb-nb-soft-btn">再试一次 →</button>
+    </div>
+  `;
+  const retry = document.getElementById("kb-nb-thinking-retry");
+  if (retry) retry.addEventListener("click", () => requestThinking("user_request"));
 }
 
 $("kb-nb-thinking-refresh").addEventListener("click", () => requestThinking("user_request"));
@@ -280,6 +418,19 @@ async function loadDiary() {
         <div class="kb-nb-diary-page">
           <a href="${escapeHtml(c.page_url)}" target="_blank" rel="noopener">${escapeHtml(c.page_title || c.page_url)}</a>
         </div>` : "";
+      // 把这条评论的 AI replies 渲染成紧跟其后的 agent 流
+      const aiReplies = (c.replies || []).filter(r => r.author === "agent");
+      const repliesHtml = aiReplies.map(r => {
+        const rt = new Date(r.created_at);
+        const rts = `${(rt.getMonth()+1)}-${String(rt.getDate()).padStart(2,"0")} ${String(rt.getHours()).padStart(2,"0")}:${String(rt.getMinutes()).padStart(2,"0")}`;
+        const preview = (r.content || "").replace(/\s+/g, " ").trim().slice(0, 200);
+        return `
+          <div class="kb-nb-diary-item agent">
+            <div class="kb-nb-diary-meta">AGENT · ${rts}</div>
+            <div class="kb-nb-diary-text">${escapeHtml(preview)}${(r.content || "").length > 200 ? "…" : ""}</div>
+          </div>
+        `;
+      }).join("");
       return `
         <div class="kb-nb-diary-item">
           <div class="kb-nb-diary-meta">你 · ${ts}</div>
@@ -287,6 +438,7 @@ async function loadDiary() {
           ${excerptHtml}
           ${pageHtml}
         </div>
+        ${repliesHtml}
       `;
     }).join("");
   } catch (e) {
