@@ -1640,48 +1640,68 @@ def _safe_parse_curated_json(content: str) -> dict:
     return json.loads(s)
 
 
-CURATED_RULES_PROMPT = """你是一个深度阅读用户工作偏好规则的产品观察者。
+CURATED_RULES_PROMPT = """你是一个观察 AI 协作者如何成长的产品观察者。你的任务不是挑选最好的规则，
+而是说出用户的 AI 正在长出哪几套"工作方式 / skill"。
 
 # 用户身份
 {user_profile}
 
-# 当前的 18 条工作规则（learned_rules.json，按时间倒序）
+# 当前的 {rule_count} 条工作规则（按时间倒序）
 {rules_dump}
 
 # 任务
 
-从这 {rule_count} 条规则里挑出最让用户感到 **"卧槽 AI 真的把我那次纠正记住了"** 的 3 条。
+把这些规则**抽象**成 3-6 个 **"工作方式 / skill"**。这不是挑选，是 distill：
+- 每个 skill 是用户的 AI 正在长出的一套能力（"调研方式"、"思辨方式"、"判断方式"等）
+- 每个 skill 由多条 rule 共同支撑（≥ 2 条 evidence）
+- skill 数量由你判断（但 3-6 个最合适）；不一定要把所有 rule 都覆盖（少数过于零散的可以放 uncategorized）
 
-挑选标准（不是叠加是融合）：
-- **个人特征强**：这条规则换个用户就不成立
-- **被纠正过 / 反直觉**：明显是用户教 AI 出来的，不是 LLM 默认行为
-- **影响输出形态**：会让 AI 下次回答看起来明显不一样
+# 写 description 的语感（最重要）
 
-不要选：
-- 通用工程纪律（"先看文档"、"先 review"）
-- 被多次冲突表达的（自相矛盾的）
-- 明显被超期的（用户已经改主意了）
+不要写"用户喜欢 X / 用户偏好 Y"。**用 AI 第一人称："我会..."、"我倾向..."、"在 X 场景里我会 Y"**。
 
-剩余 {remaining_count} 条做一次合并去重 → 输出 3-5 个分组（同主题归一组）。
+要具体到行为，不要抽象。要场景化举例。长度自然（30–80 字），不要压缩到口号。
+
+# 4 个示范（学这个语感，不要照抄内容）
+
+示范 1 · 调研方式：
+> 我会按"原文摘抄 + 中文翻译 + 对你项目的思考"输出，并主动补你没问到的问题。
+
+示范 2 · 思辨方式：
+> 我会避免二元结论，主动拆 trade-off、机制和信号链路。在 benchmark / memory 这类主题上尤其会展开。
+
+示范 3 · 项目判断方式：
+> 我会记住你当前阶段优先级 — 小范围 aha 大于行业标准兼容，研究/知识工作大于个助大于 coding。在做选型建议时按这个顺序排。
+
+示范 4 · 内容质感方式：
+> 深度访谈和案例研究我会接近《晚点》风格 — 保留场景、原话、人物和结果，不做信息罗列。
 
 # 输出格式（直接 JSON，不要围栏，不要解释）
 
 {{
-  "top3": [
-    {{"rule_id": "rule_010", "wow_text": "用户原 rule 的简化措辞，≤20 字", "why_wow": "为什么这条让用户 wow，一句话 ≤30 字", "evidence_keywords": ["关键词1", "关键词2"]}},
-    {{"rule_id": "rule_017", ...}},
-    {{"rule_id": "rule_xxx", ...}}
+  "skills": [
+    {{
+      "name": "调研方式",
+      "description": "我会按...的方式...（第一人称，具体行为 + 场景，30–80 字）",
+      "evidence_rule_ids": ["rule_005", "rule_011", "rule_016"]
+    }},
+    {{
+      "name": "...",
+      "description": "...",
+      "evidence_rule_ids": [...]
+    }}
   ],
-  "groups": [
-    {{"theme": "调研类输出格式", "rule_ids": ["rule_005", "rule_011", "rule_016"], "summary": "三条都在说同一件事：调研类回答的固定结构"}},
-    {{"theme": "...", ...}}
-  ]
+  "uncategorized_rule_ids": ["rule_xxx", "rule_yyy"]
 }}
 
 约束：
-- top3 必须严格 3 条，rule_id 必须是输入里真实存在的 id
-- groups 里每个 rule_id 也必须真实存在
-- 不要在 wow_text 内部使用未转义双引号（用「」代替）
+- skill 数量在 3–6 之间，由你判断
+- 每个 skill 至少 2 条 evidence_rule_ids
+- 每个 rule_id 只能出现在一个 skill 里 OR 一次 uncategorized（不能重复）
+- 所有 rule_id 必须是输入里真实存在的 id（不能编造）
+- description 严格 AI 第一人称，不要在 description 内部使用未转义双引号（用「」/『』代替）
+- name 要短（4–7 字，"X 方式" 或 "X 偏好" 形式）
+- 全部使用中文
 """
 
 
@@ -1717,21 +1737,35 @@ def notebook_rules_curated():
     sys_prompt = "You are a careful product observer for a personal memory tool. Output only the requested JSON."
 
     try:
-        content, rc = _call_claude(prompt, sys_prompt, timeout=120)
+        content, rc = _call_claude(prompt, sys_prompt, timeout=180)
         if rc != 0:
             raise HTTPException(status_code=502, detail=f"claude exit {rc}: {content[:300]}")
         parsed = _safe_parse_curated_json(content)
-        # 校验 rule_id 真实存在
+        # 校验 rule_id 真实存在 + 不重复 + 每 skill ≥ 2 条
         valid_ids = {r.get("id") for r in rules}
-        top3 = [t for t in parsed.get("top3", []) if t.get("rule_id") in valid_ids][:3]
-        groups = []
-        for g in parsed.get("groups", []):
-            ids = [rid for rid in g.get("rule_ids", []) if rid in valid_ids]
-            if ids:
-                groups.append({"theme": g.get("theme", ""), "rule_ids": ids, "summary": g.get("summary", "")})
+        seen_ids = set()
+        skills = []
+        for s in parsed.get("skills", []) or []:
+            ids = [rid for rid in (s.get("evidence_rule_ids") or []) if rid in valid_ids and rid not in seen_ids]
+            if len(ids) < 2:  # 强制每 skill ≥ 2 条
+                continue
+            seen_ids.update(ids)
+            skills.append({
+                "name": (s.get("name") or "").strip(),
+                "description": (s.get("description") or "").strip(),
+                "evidence_rule_ids": ids,
+            })
+        uncategorized = [rid for rid in (parsed.get("uncategorized_rule_ids") or [])
+                         if rid in valid_ids and rid not in seen_ids]
+        # 把所有没被覆盖的 rule_id 也归入 uncategorized
+        covered = set(seen_ids) | set(uncategorized)
+        for r in rules:
+            rid = r.get("id")
+            if rid and rid not in covered:
+                uncategorized.append(rid)
         return {
-            "top3": top3,
-            "groups": groups,
+            "skills": skills,
+            "uncategorized_rule_ids": uncategorized,
             "_status": "ok",
             "_total_rules": len(rules),
         }

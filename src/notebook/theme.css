@@ -451,7 +451,55 @@ a { color: inherit; }
   font-size: 13.5px; line-height: 1.55; color: var(--kb-ink);
 }
 
-/* Rules · 3 条 wow + 折叠分组 */
+/* Rules · skills（M2.6 b 升级：抽象成工作方式而非挑选 rule）*/
+.kb-nb-skills-header {
+  display: flex; justify-content: space-between; align-items: baseline;
+  margin-bottom: 4px;
+}
+.kb-nb-skills-title {
+  font-family: "Source Han Serif SC", "Noto Serif SC", serif;
+  font-size: 22px; font-weight: 500; margin: 0;
+  letter-spacing: 0.02em; color: var(--kb-ink);
+}
+.kb-nb-skills-subtitle {
+  font-size: 12px; color: var(--kb-ink-mute);
+  margin: 0 0 16px;
+}
+.kb-nb-skills-list {
+  display: flex; flex-direction: column; gap: 12px;
+  margin-bottom: 18px;
+}
+.kb-nb-skill-card {
+  background: var(--kb-paper);
+  border: 1px solid var(--kb-line-2);
+  border-left: 3px solid var(--kb-terra);
+  padding: 16px 20px 14px;
+  border-radius: 0 4px 4px 0;
+}
+.kb-nb-skill-name {
+  font-family: "Source Han Serif SC", "Noto Serif SC", serif;
+  font-size: 17px; font-weight: 500; color: var(--kb-terra);
+  letter-spacing: 0.04em;
+  margin-bottom: 8px;
+}
+.kb-nb-skill-desc {
+  font-family: "Source Han Serif SC", "Noto Serif SC", serif;
+  font-size: 14.5px; line-height: 1.7; color: var(--kb-ink);
+  margin-bottom: 10px;
+}
+.kb-nb-skill-evidence {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px; letter-spacing: 0.04em;
+  color: var(--kb-ink-faint);
+  border-top: 1px solid var(--kb-line-2);
+  padding-top: 8px;
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline;
+}
+.kb-nb-skill-evidence-label {
+  margin-right: 4px;
+}
+
+/* 旧的 top3 样式保留为后向兼容（缓存里可能有老 schema）*/
 .kb-nb-rules-top3 {
   display: flex; flex-direction: column; gap: 12px;
   margin-bottom: 18px;

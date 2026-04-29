@@ -260,49 +260,84 @@ function _findRuleById(rid) {
 function renderRulesCurated(data, ts) {
   const box = $("kb-nb-rules-curated");
   const ageStr = ts ? fmtTimeAgo(new Date(ts).toISOString()) : "刚刚";
-  const top3 = (data.top3 || []).map(t => {
-    const orig = _findRuleById(t.rule_id);
-    const sourceStr = orig ? (orig.source || orig.created_at || "") : "";
+  const skills = data.skills || [];
+  const skillsHtml = skills.map(s => {
+    const ids = s.evidence_rule_ids || [];
+    const refsHtml = ids.map(id => `<a class="kb-nb-cref" data-rid="${escapeHtml(id)}" href="#${escapeHtml(id)}">${escapeHtml(id)}</a>`).join("");
     return `
-      <div class="kb-nb-top3-card">
-        <div class="kb-nb-top3-wow">${escapeHtml(t.wow_text || (orig && orig.rule) || "")}</div>
-        ${t.why_wow ? `<div class="kb-nb-top3-why">${escapeHtml(t.why_wow)}</div>` : ""}
-        <div class="kb-nb-top3-meta">${escapeHtml(t.rule_id || "")}${sourceStr ? " · " + escapeHtml(sourceStr) : ""}</div>
+      <div class="kb-nb-skill-card">
+        <div class="kb-nb-skill-name">${escapeHtml(s.name || "")}</div>
+        <div class="kb-nb-skill-desc">${escapeHtml(s.description || "")}</div>
+        <div class="kb-nb-skill-evidence">
+          <span class="kb-nb-skill-evidence-label">来自 ${ids.length} 条反馈：</span>
+          ${refsHtml}
+        </div>
       </div>
     `;
   }).join("");
 
-  const groups = (data.groups || []).map(g => `
-    <div class="kb-nb-rules-group">
-      <div class="kb-nb-group-theme">${escapeHtml(g.theme || "")}</div>
-      ${g.summary ? `<div class="kb-nb-group-summary">${escapeHtml(g.summary)}</div>` : ""}
-      <div class="kb-nb-group-ids">${(g.rule_ids || []).map(id => escapeHtml(id)).join(" · ")}</div>
-    </div>
-  `).join("");
-
+  const uncategorizedCount = (data.uncategorized_rule_ids || []).length;
+  const skillCount = skills.length;
   box.innerHTML = `
-    <div class="kb-nb-rules-top3-header">
-      <span>AI 挑出的 3 条 · 最有"你"的特征</span>
-      <button class="kb-nb-profile-oneliner-refresh" id="kb-nb-rules-recurate">重新挑选 · 上次 ${ageStr}</button>
+    <div class="kb-nb-skills-header">
+      <h3 class="kb-nb-skills-title">我正在养成的 ${skillCount} 个工作方式</h3>
+      <button class="kb-nb-profile-oneliner-refresh" id="kb-nb-rules-recurate">重新提炼 · 上次 ${ageStr}</button>
     </div>
-    <div class="kb-nb-rules-top3">${top3 || '<div class="kb-nb-empty">挑选结果为空</div>'}</div>
-    ${groups ? `
-      <div class="kb-nb-rules-top3-header" style="margin-top:14px;">
-        <span>剩余 ${data._total_rules ? data._total_rules - 3 : "?"} 条 · 按主题合并</span>
-      </div>
-      <div class="kb-nb-rules-groups">${groups}</div>
+    <p class="kb-nb-skills-subtitle">这是我作为你的协作者在长出的能力 — 来自你 ${data._total_rules || 0} 条具体反馈。</p>
+    <div class="kb-nb-skills-list">${skillsHtml || '<div class="kb-nb-empty">还没识别出工作方式，再批注几次让我学到更多</div>'}</div>
+    ${uncategorizedCount > 0 ? `
+      <details class="kb-nb-md-details" style="margin-top:14px;">
+        <summary class="kb-nb-md-details-summary">还有 ${uncategorizedCount} 条暂未归类的零散规则 ↓</summary>
+        <div class="kb-nb-rules-groups" style="margin-top:8px;">
+          ${(data.uncategorized_rule_ids || []).map(rid => {
+            const orig = _findRuleById(rid);
+            return `<div class="kb-nb-rules-group">
+              <div class="kb-nb-group-ids">${escapeHtml(rid)}</div>
+              ${orig ? `<div class="kb-nb-group-summary">${escapeHtml(orig.rule || "")}</div>` : ""}
+            </div>`;
+          }).join("")}
+        </div>
+      </details>
     ` : ""}
   `;
   const btn = document.getElementById("kb-nb-rules-recurate");
   if (btn) btn.addEventListener("click", () => triggerRulesCurated(true));
+  // 给 evidence rule_id 加 hover 卡（复用 thinking 的浮卡）
+  box.querySelectorAll(".kb-nb-cref[data-rid]").forEach(a => {
+    a.addEventListener("mouseenter", () => showRuleHoverFor(a));
+    a.addEventListener("mouseleave", () => hideCrefHover());
+    a.addEventListener("click", e => e.preventDefault());
+  });
+}
+
+// 复用 thinking 的浮卡显示 rule 详情
+function showRuleHoverFor(anchor) {
+  const rid = anchor.dataset.rid;
+  const r = _findRuleById(rid);
+  const el = ensureCrefHover();
+  const rect = anchor.getBoundingClientRect();
+  el.style.left = (rect.left + window.scrollX) + "px";
+  el.style.top = (rect.bottom + window.scrollY + 6) + "px";
+  if (!r) {
+    el.innerHTML = `<div class="kb-nb-cref-loading">${escapeHtml(rid)} 没找到</div>`;
+  } else {
+    const src = r.source || r.created_at || "";
+    el.innerHTML = `
+      <div class="kb-nb-cref-meta">${escapeHtml(rid)} · ${escapeHtml(src)} · scope=${escapeHtml(r.scope || "all")}</div>
+      <div class="kb-nb-cref-body">${escapeHtml(r.rule || "")}</div>
+    `;
+  }
+  el.style.display = "block";
 }
 
 async function loadRulesCurated() {
   const cached = readCuratedCache("kb_nb_curated_rules");
-  if (cached && cached.data && cached.data._status === "ok") {
+  // 检查缓存 schema 版本：必须有 skills 字段（新版），否则丢弃
+  if (cached && cached.data && cached.data._status === "ok" && Array.isArray(cached.data.skills)) {
     renderRulesCurated(cached.data, cached.ts);
     return;
   }
+  if (cached) clearCuratedCache("kb_nb_curated_rules"); // 老 schema 清掉
   const btn = document.getElementById("kb-nb-rules-curate-btn");
   if (btn) btn.onclick = () => triggerRulesCurated(false);
 }
