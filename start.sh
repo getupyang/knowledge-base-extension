@@ -47,6 +47,22 @@ echo "→ 启动 Agent API (8766)..."
 nohup python3 -m uvicorn agent_api:app --host 127.0.0.1 --port 8766 > "$LOG_DIR/agent_api.log" 2>&1 &
 AGENT_PID=$!
 
+# ── 启动异步 worker（jobs 表后台任务）──────────────────────
+WORKER_PID_FILE="$LOG_DIR/worker.pid"
+if [ -f "$WORKER_PID_FILE" ]; then
+  OLD_WORKER_PID="$(cat "$WORKER_PID_FILE" 2>/dev/null)"
+  if [ -n "$OLD_WORKER_PID" ] && ps -p "$OLD_WORKER_PID" > /dev/null 2>&1; then
+    echo "worker 已在运行（PID $OLD_WORKER_PID），先停掉..."
+    kill "$OLD_WORKER_PID" 2>/dev/null
+    sleep 1
+  fi
+fi
+
+echo "→ 启动后台 worker..."
+nohup python3 worker.py > "$LOG_DIR/worker.log" 2>&1 &
+WORKER_PID=$!
+echo "$WORKER_PID" > "$WORKER_PID_FILE"
+
 sleep 4
 
 # ── 验证 ──────────────────────────────────────────────────
@@ -65,9 +81,17 @@ else
   ALL_OK=false
 fi
 
+if ps -p "$WORKER_PID" > /dev/null 2>&1; then
+  echo "✓ Worker：PID $WORKER_PID"
+else
+  echo "✗ Worker 启动失败，查看日志：$LOG_DIR/worker.log"
+  ALL_OK=false
+fi
+
 if $ALL_OK; then
   echo ""
   echo "工作台已就绪。"
   echo "  知识库：http://localhost:8765"
-  echo "  停止服务：kill $SERVER_PID $AGENT_PID"
+  echo "  记忆笔记本：http://localhost:8765/notebook/"
+  echo "  停止服务：kill $SERVER_PID $AGENT_PID $WORKER_PID"
 fi

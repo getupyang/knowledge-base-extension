@@ -185,12 +185,22 @@ function renderProfileCurated(data, ts) {
 }
 
 async function loadProfileCurated() {
-  const cached = readCuratedCache("kb_nb_curated_profile");
-  if (cached && cached.data && cached.data._status === "ok") {
-    renderProfileCurated(cached.data, cached.ts);
-    return;
+  // Profile 状态卡已迁到 DB；清理旧 localStorage 缓存，避免换设备/换浏览器不一致
+  clearCuratedCache("kb_nb_curated_profile");
+
+  try {
+    const data = await api("/notebook/profile/snapshot");
+    if (data && data._status === "ok") {
+      const ts = data.latest_generation && data.latest_generation.created_at
+        ? new Date(data.latest_generation.created_at).getTime()
+        : Date.now();
+      renderProfileCurated(data, ts);
+      return;
+    }
+  } catch (e) {
+    console.warn("[notebook] load profile snapshot failed", e);
   }
-  // 没缓存：保留 empty 状态等用户点击
+  // 没 generation：保留 empty 状态等用户点击
   const btn = document.getElementById("kb-nb-profile-curate-btn");
   if (btn) {
     btn.onclick = () => triggerProfileCurated(false);
@@ -214,7 +224,6 @@ async function triggerProfileCurated(isRefresh) {
         </div>`;
       return;
     }
-    writeCuratedCache("kb_nb_curated_profile", data);
     renderProfileCurated(data, Date.now());
     toast(isRefresh ? "重新整理完成" : "整理完成");
   } catch (e) {
@@ -331,20 +340,32 @@ function showRuleHoverFor(anchor) {
 }
 
 async function loadRulesCurated() {
-  const cached = readCuratedCache("kb_nb_curated_rules");
-  // 检查缓存 schema 版本：必须有 skills 字段（新版），否则丢弃
-  if (cached && cached.data && cached.data._status === "ok" && Array.isArray(cached.data.skills)) {
-    renderRulesCurated(cached.data, cached.ts);
-    return;
+  // M3.0 范围 B：从 DB 读 active skills（持久化），不再用 localStorage
+  // localStorage 只作为旧缓存清理
+  clearCuratedCache("kb_nb_curated_rules");
+
+  try {
+    const data = await api("/notebook/skills");
+    if (data && data._status === "ok" && Array.isArray(data.skills) && data.skills.length > 0) {
+      // 把 latest_generation 的时间戳作为 ts 传给渲染函数
+      const ts = data.latest_generation && data.latest_generation.created_at
+        ? new Date(data.latest_generation.created_at).getTime()
+        : Date.now();
+      renderRulesCurated(data, ts);
+      return;
+    }
+  } catch (e) {
+    console.warn("[notebook] load skills failed", e);
   }
-  if (cached) clearCuratedCache("kb_nb_curated_rules"); // 老 schema 清掉
+
+  // 无 generation 或 DB 读失败 → 显示"让 AI 整理一稿"按钮
   const btn = document.getElementById("kb-nb-rules-curate-btn");
   if (btn) btn.onclick = () => triggerRulesCurated(false);
 }
 
 async function triggerRulesCurated(isRefresh) {
   const box = $("kb-nb-rules-curated");
-  box.innerHTML = `<div class="kb-nb-curated-running">让 Opus 从你的规则里挑出 3 条最 wow 的，约 30 秒…</div>`;
+  box.innerHTML = `<div class="kb-nb-curated-running">让 Opus 把零散规则提炼成 3-6 个工作方式，约 30 秒…</div>`;
   try {
     const data = await api("/notebook/rules/curated", {
       method: "POST",
@@ -359,9 +380,10 @@ async function triggerRulesCurated(isRefresh) {
         </div>`;
       return;
     }
-    writeCuratedCache("kb_nb_curated_rules", data);
-    renderRulesCurated(data, Date.now());
-    toast(isRefresh ? "重新挑选完成" : "挑选完成");
+    // M3.0 范围 B：后端已写 DB，前端不再 localStorage
+    const ts = data._generation_id ? Date.now() : Date.now();
+    renderRulesCurated(data, ts);
+    toast(isRefresh ? "重新蒸馏完成" : "蒸馏完成");
   } catch (e) {
     box.innerHTML = `
       <div class="kb-nb-curated-failed">

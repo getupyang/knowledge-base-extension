@@ -157,7 +157,7 @@ def run_checks():
         if n == 0:
             results.append(check("失败日志 24h", OK, "0 失败"))
         elif n <= 3:
-            phases = ", ".join(f["phase"] for f in failures_24h)
+            phases = ", ".join(f.get("phase") or f.get("kind") or f.get("error_type") or "unknown" for f in failures_24h)
             results.append(check("失败日志 24h", WARN,
                                  f"{n} 次失败，phase: {phases} — 看 .logs/failures.jsonl"))
         else:

@@ -121,7 +121,15 @@ bash start.sh
 ```
 ✓ 知识库服务器：http://localhost:8765
 ✓ Agent API：http://localhost:8766
+✓ Worker：PID xxxxx
 ```
+
+记忆笔记本有两个入口：
+
+- 浏览器直接打开：http://localhost:8765/notebook/
+- Chrome 插件弹窗 → 「打开记忆笔记本」
+
+`start.sh` 会同时启动三部分：知识库浏览器、Agent API、后台 worker。worker 负责执行 `jobs` 表里的异步整理任务，例如「最近在想什么」和 rules → skills 蒸馏。
 
 ---
 
@@ -162,12 +170,42 @@ knowledge-base-extension/
 ├── backend/
 │   ├── agent_api.py            # Agent 后端（端口 8766）
 │   ├── server.py               # 知识库浏览器（端口 8765）
+│   ├── worker.py               # 后台异步任务 worker（jobs 表）
+│   ├── agent_prompts/          # Agent / notebook 蒸馏 prompts
 │   ├── fetch_notion.py         # 拉取 Notion 数据
 │   ├── company_culture.md      # AI 输出行为规范（所有 agent 共用）
 │   └── project_context.template.md  # 项目上下文模板（复制后自己填）
+├── src/notebook/               # 记忆笔记本前端
 └── docs/
     └── decisions/              # 设计决策记录
 ```
+
+---
+
+## 在另一台电脑部署
+
+目标是让另一个用户在自己的电脑上运行同一套本地服务，并看到自己的记忆笔记本。
+
+```bash
+git clone https://github.com/getupyang/knowledge-base-extension.git
+cd knowledge-base-extension
+bash setup.sh
+bash start.sh
+```
+
+然后：
+
+1. 在 Chrome 开发者模式加载本仓库根目录。
+2. 点击插件图标，填入这个用户自己的 Notion Token 和 Database ID。
+3. 打开 http://localhost:8765/notebook/ 查看记忆笔记本。
+
+数据是本地优先、按用户隔离的：
+
+- `backend/comments.db` 是该用户的批注、对话、notebook generations。
+- `backend/learned_rules.json` 是该用户从反馈里学到的规则。
+- `backend/project_context.md` / `backend/user_profile.md` 是该用户自己的上下文。
+
+这些文件默认不进 git。新电脑新用户首次打开会是空笔记本；使用插件产生批注、AI 回复和规则后，笔记本会逐步长出内容。要迁移已有用户的数据，需要在停服务后拷贝上述本地文件到同一路径。
 
 ---
 

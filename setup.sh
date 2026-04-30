@@ -33,6 +33,7 @@ CLAUDE_BIN=""
 for p in \
   "$HOME/.npm-global/bin/claude" \
   "/usr/local/bin/claude" \
+  "/opt/homebrew/bin/claude" \
   "$(which claude 2>/dev/null)"; do
   if [ -f "$p" ] && [ -x "$p" ]; then
     CLAUDE_BIN="$p"
@@ -163,4 +164,5 @@ echo "  bash start.sh"
 echo ""
 echo "然后在 Chrome 加载插件（开发者模式 → 加载已解压的扩展程序 → 选择本仓库根目录）"
 echo "访问知识库：http://localhost:8765"
+echo "访问记忆笔记本：http://localhost:8765/notebook/"
 echo "═══════════════════════════════════════════════════════"

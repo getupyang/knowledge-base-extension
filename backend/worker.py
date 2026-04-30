@@ -29,6 +29,7 @@ import json
 import time
 import sqlite3
 import subprocess
+import shutil
 import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -43,7 +44,22 @@ LOG_DIR = BACKEND_DIR / ".logs"
 LOG_DIR.mkdir(exist_ok=True)
 FAILURE_LOG = LOG_DIR / "failures.jsonl"
 
-CLAUDE_BIN = os.environ.get("KB_CLAUDE_BIN") or os.path.expanduser("~/.npm-global/bin/claude")
+def get_claude_bin() -> str:
+    configured = os.environ.get("KB_CLAUDE_BIN")
+    candidates = [
+        configured,
+        os.path.expanduser("~/.npm-global/bin/claude"),
+        shutil.which("claude"),
+        "/usr/local/bin/claude",
+        "/opt/homebrew/bin/claude",
+    ]
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return candidate
+    return configured or os.path.expanduser("~/.npm-global/bin/claude")
+
+
+CLAUDE_BIN = get_claude_bin()
 
 # ── worker 配置 ──
 POLL_INTERVAL_SEC = 5         # queued 任务扫描间隔
@@ -59,6 +75,8 @@ def log(msg: str):
 def log_failure(payload: dict):
     """结构化失败日志，对应 mem-ai 失败不静默规范"""
     try:
+        if "phase" not in payload:
+            payload["phase"] = payload.get("kind") or ("main_loop" if payload.get("main_loop") else "worker")
         with open(FAILURE_LOG, "a", encoding="utf-8") as f:
             f.write(json.dumps({**payload, "ts": datetime.now().isoformat()}, ensure_ascii=False) + "\n")
     except Exception:
@@ -397,8 +415,175 @@ def handle_synthesize_thinking(conn: sqlite3.Connection, job: dict):
 # 主循环
 # ──────────────────────────────────────────
 
+def _load_active_rules() -> list:
+    """读 learned_rules.json 的 active 子集"""
+    try:
+        with open(LEARNED_RULES_PATH, 'r', encoding='utf-8') as f:
+            data = json.loads(f.read() or '{"rules":[]}')
+    except Exception:
+        return []
+    return [r for r in data.get("rules", []) if r.get("active", True)]
+
+
+def _load_curated_skills_prompt() -> str:
+    """读 agent_prompts/curated_skills.md"""
+    p = BACKEND_DIR / "agent_prompts" / "curated_skills.md"
+    if not p.exists():
+        raise RuntimeError(f"curated_skills.md not found at {p}")
+    return p.read_text(encoding='utf-8')
+
+
+def _safe_parse_curated_json(content: str) -> dict:
+    """从 claude 输出里提取 JSON。多策略 fallback。"""
+    if not content:
+        raise ValueError("empty LLM output")
+    s = content.strip()
+    if "```json" in s:
+        i = s.find("```json") + 7
+        j = s.find("```", i)
+        if j > i:
+            try:
+                return json.loads(s[i:j].strip())
+            except Exception:
+                pass
+    i = s.find("{"); j = s.rfind("}")
+    if i >= 0 and j > i:
+        try:
+            return json.loads(s[i:j+1])
+        except Exception:
+            pass
+    return json.loads(s)
+
+
+def _persist_skills_generation_in_worker(conn: sqlite3.Connection, distilled: dict,
+                                         source_rules: list, trigger_reason: str,
+                                         trigger_payload: dict, job_id: int,
+                                         llm_model: str = "claude-opus-4-7") -> int:
+    """worker 版本：原子性写 4 张表，返回新 generation_id。"""
+    skills = distilled.get("skills") or []
+    uncategorized = distilled.get("uncategorized_rule_ids") or []
+    if not skills:
+        raise RuntimeError("distillation produced no valid skills; keep previous active generation")
+    now = datetime.now().isoformat()
+    cur = conn.cursor()
+
+    cur.execute("UPDATE working_skills SET status='superseded' WHERE status='active'")
+    old_active_count = cur.rowcount
+
+    cur.execute(
+        "INSERT INTO skill_generations (kind, trigger_reason, trigger_payload, source_rules_count, llm_model, job_id, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ('skills', trigger_reason, json.dumps(trigger_payload or {}, ensure_ascii=False),
+         len(source_rules), llm_model, job_id, now),
+    )
+    gen_id = cur.lastrowid
+
+    for s in skills:
+        cur.execute(
+            "INSERT INTO working_skills (name, description, evidence_rule_ids, triggers, status, generation_id, created_at) "
+            "VALUES (?, ?, ?, NULL, 'active', ?, ?)",
+            (s["name"], s["description"], json.dumps(s["evidence_rule_ids"], ensure_ascii=False),
+             gen_id, now),
+        )
+
+    if old_active_count == 0:
+        diff_summary = f"首次蒸馏：{len(skills)} 个工作方式，基于 {len(source_rules)} 条 rules"
+    else:
+        diff_summary = f"重蒸馏：{len(skills)} 个工作方式（之前 {old_active_count} 条），基于 {len(source_rules)} 条 rules · 触发：{trigger_reason}"
+    diff_json = {
+        "skill_count": len(skills),
+        "uncategorized_count": len(uncategorized),
+        "rules_used": len(source_rules),
+        "previous_active": old_active_count,
+    }
+    cur.execute(
+        "INSERT INTO memory_revisions (generation_id, kind, diff_summary, diff_json, created_at) "
+        "VALUES (?, 'skills', ?, ?, ?)",
+        (gen_id, diff_summary, json.dumps(diff_json, ensure_ascii=False), now),
+    )
+    conn.commit()
+    return gen_id
+
+
+def handle_synthesize_skills(conn: sqlite3.Connection, job: dict):
+    """蒸馏 active rules → working_skills（M3.0 范围 B 自动触发路径）。"""
+    payload = job.get("payload") or job.get("payload_json") or {}
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except Exception:
+            payload = {}
+
+    rules = _load_active_rules()
+    if len(rules) < 3:
+        log(f"job#{job['id']} synthesize_skills: insufficient rules ({len(rules)} active)")
+        return
+
+    user_profile = ""
+    if Path(USER_PROFILE_PATH).exists():
+        user_profile = Path(USER_PROFILE_PATH).read_text(encoding='utf-8')[:3000]
+
+    rules_dump_lines = []
+    for r in rules:
+        rid = r.get("id", "?")
+        text = r.get("rule", "")
+        scope = r.get("scope", "all")
+        src = r.get("source", "")
+        rules_dump_lines.append(f"[{rid}] scope={scope} · src={src}\n  {text}")
+    rules_dump = "\n\n".join(rules_dump_lines)
+
+    template = _load_curated_skills_prompt()
+    prompt = template.format(
+        user_profile=user_profile,
+        rules_dump=rules_dump,
+        rule_count=len(rules),
+        remaining_count=max(0, len(rules) - 3),
+    )
+
+    log(f"job#{job['id']} synthesize_skills: calling LLM with {len(rules)} rules")
+    content = call_claude(prompt, timeout_sec=180)
+    parsed = _safe_parse_curated_json(content)
+
+    valid_ids = {r.get("id") for r in rules}
+    seen_ids = set()
+    skills_clean = []
+    for s in parsed.get("skills", []) or []:
+        name = (s.get("name") or "").strip()
+        description = (s.get("description") or "").strip()
+        if not name or not description:
+            continue
+        ids = [rid for rid in (s.get("evidence_rule_ids") or []) if rid in valid_ids and rid not in seen_ids]
+        if len(ids) < 2:
+            continue
+        seen_ids.update(ids)
+        skills_clean.append({
+            "name": name,
+            "description": description,
+            "evidence_rule_ids": ids,
+        })
+    uncategorized = [rid for rid in (parsed.get("uncategorized_rule_ids") or [])
+                     if rid in valid_ids and rid not in seen_ids]
+    covered = set(seen_ids) | set(uncategorized)
+    for r in rules:
+        rid = r.get("id")
+        if rid and rid not in covered:
+            uncategorized.append(rid)
+
+    distilled = {"skills": skills_clean, "uncategorized_rule_ids": uncategorized}
+    gen_id = _persist_skills_generation_in_worker(
+        conn=conn,
+        distilled=distilled,
+        source_rules=rules,
+        trigger_reason=payload.get("trigger_reason", "unknown"),
+        trigger_payload=payload,
+        job_id=job["id"],
+    )
+    log(f"job#{job['id']} synthesize_skills: persisted generation_id={gen_id} with {len(skills_clean)} skills")
+
+
 JOB_HANDLERS = {
     "synthesize_thinking": handle_synthesize_thinking,
+    "synthesize_skills": handle_synthesize_skills,
     # M3 扩展点
 }
 

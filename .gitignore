@@ -15,8 +15,10 @@ backend/.notion_cache.md
 backend/project_context.md
 backend/user_profile.md
 backend/learned_rules.json
+backend/.logs/
 backend/.test_cases/
 backend/debug-logs/
+backend/*.bak
 
 # 开发过程文档，不开源
 CLAUDE.md

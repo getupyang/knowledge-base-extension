@@ -15,6 +15,8 @@ import markdown
 # 优先用 RESEARCH_DIR 环境变量（从 ~/.kb_config 读取），否则用脚本所在目录
 ROOT = os.environ.get("RESEARCH_DIR", os.path.dirname(os.path.abspath(__file__)))
 PORT = 8765
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+NOTEBOOK_DIR = os.path.join(REPO_ROOT, "src", "notebook")
 
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="zh">
@@ -313,6 +315,28 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.serve_html(render_index())
             return
 
+        # ── 记忆笔记本：允许直接用 http://localhost:8765/notebook/ 打开 ──
+        if path == '/notebook' or path == '/notebook/':
+            self.serve_static_file(os.path.join(NOTEBOOK_DIR, 'index.html'), 'text/html; charset=utf-8')
+            return
+        if path.startswith('/notebook/'):
+            rel = path[len('/notebook/'):].strip('/')
+            if not rel or '..' in rel.split('/'):
+                self.send_response(404)
+                self.end_headers()
+                self.wfile.write(b'Not found')
+                return
+            fpath = os.path.join(NOTEBOOK_DIR, rel)
+            content_type = 'text/plain; charset=utf-8'
+            if fpath.endswith('.js'):
+                content_type = 'application/javascript; charset=utf-8'
+            elif fpath.endswith('.css'):
+                content_type = 'text/css; charset=utf-8'
+            elif fpath.endswith('.html'):
+                content_type = 'text/html; charset=utf-8'
+            self.serve_static_file(fpath, content_type)
+            return
+
         # ── CLAUDE.md 路由 ──
         if path == '/claude' or path == '/claude/':
             self.serve_html(render_claude_index())
@@ -385,6 +409,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header('Content-Length', len(encoded))
         self.end_headers()
         self.wfile.write(encoded)
+
+    def serve_static_file(self, filepath, content_type):
+        if not os.path.exists(filepath) or not os.path.isfile(filepath):
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b'Not found')
+            return
+        with open(filepath, 'rb') as f:
+            data = f.read()
+        self.send_response(200)
+        self.send_header('Content-Type', content_type)
+        self.send_header('Content-Length', len(data))
+        self.end_headers()
+        self.wfile.write(data)
 
 
 if __name__ == '__main__':
