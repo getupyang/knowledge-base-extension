@@ -1,6 +1,144 @@
 # 知识库助手
 
-在任意网页划线，AI 立即深度处理，结果沉淀到本地 + Notion。
+# Knowledge Base Extension
+
+**Turn reading into an AI workspace.**  
+**从浏览文档出发，把阅读变成一个可协作的 AI 工作台。**
+
+Knowledge Base Extension is a local-first Chrome extension that lets people highlight anything they read, leave thoughts in context, and turn those moments into structured AI work.
+
+知识库扩展是一个本地优先的 Chrome 插件。  
+它让用户在阅读过程中直接划线、记录想法，并把这些瞬间转化为结构化的 AI 工作流。
+
+---
+
+## The idea
+
+Today, AI is powerful, but the way we work with it is still primitive.
+
+We still copy text into chat boxes.  
+We still restate context over and over.  
+We still lose the thread between reading, thinking, asking, and reviewing.
+
+This project explores a different interface:
+
+**not chat first, but context first**  
+**not another answer, but a working surface**
+
+如今 AI 已经很强，但人与 AI 协作的界面仍然很原始。
+
+我们还在把文字复制到聊天框里。  
+还在一遍遍重讲上下文。  
+还在阅读、思考、提问、验收之间不断断线。
+
+这个项目想探索另一种界面：
+
+**不是先聊天，而是先上下文**  
+**不是多一个答案，而是多一个工作界面**
+
+我的设计理念：
+
+**产品解决的是思考的摩擦力问题。念头产生的地方就是处理它的地方。**
+
+---
+
+## Why it matters
+
+The future AI product is not just “a smarter model.”
+
+It is a system that can:
+
+- stay inside the user’s real workflow
+- accumulate context across time
+- return work in a form people can inspect and improve
+- feel less like prompting, and more like collaboration
+
+未来的 AI 产品，不只是“更聪明的模型”。
+
+它更应该是一个系统，能够：
+
+- 留在用户真实的工作流里
+- 跨时间积累上下文
+- 以可检查、可改进的形式返回结果
+- 更少像刻意的 prompting、skills，更多像协作 —— 如果还有human in the loop的话 ：）
+
+---
+
+## What this project is building
+
+A new interaction layer between humans and AI:
+
+- read in place
+- think in place
+- leave comments in place
+- work with AI in place
+
+This repo is an early prototype of that layer.
+
+它想搭建的是一层新的人机协作界面：
+
+- 在原地阅读
+- 在原地思考
+- 在原地留下评论
+- 在原地与 AI 协作
+
+这个仓库就是这层界面的一个早期原型。
+
+---
+
+## Current shape
+
+Today, the system includes:
+
+- a Chrome extension for highlighting and inline comments
+- a local backend for storing notes and AI interactions
+- a local knowledge browser
+- optional Notion sync
+- an experimental agent workflow around context-aware output
+
+目前，这个系统包括：
+
+- 一个支持划线和行内评论的 Chrome 插件
+- 一个本地后端，用于保存笔记和 AI 交互
+- 一个本地知识浏览器
+- 可选的 Notion 同步
+- 一个围绕上下文感知输出的实验性 Agent 工作流
+
+---
+
+## What is interesting here
+
+This is **not** just a note-taking tool.  
+It is **not** just another AI wrapper.  
+It is an experiment in how AI could become part of the reading and thinking surface itself.
+
+这**不是**一个普通笔记工具。  
+这**不是**又一个 AI 壳。  
+它更像是在实验：AI 能不能真正成为阅读与思考界面的一部分。
+
+---
+
+## Vision
+
+We believe the next generation of AI products will not win only because they generate better text.
+
+They will win because they create better **working environments** for thought, research, review, and collaboration.
+
+我们相信，下一代 AI 产品的竞争，不会只发生在“谁生成得更好”。
+
+更关键的是：谁能创造更好的**工作环境**，让思考、研究、验收和协作真正发生。
+
+---
+
+## Status
+
+**Experimental. Local-first. Evolving quickly.**
+
+This is an active prototype, not a finished product.
+
+**实验阶段。本地优先。快速迭代中。**
+
+这是一个正在生长中的原型，还不是最终产品。
 
 ---
 
