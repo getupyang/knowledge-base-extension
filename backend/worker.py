@@ -36,12 +36,23 @@ from pathlib import Path
 
 # ── 路径与 agent_api.py 一致 ──
 BACKEND_DIR = Path(__file__).resolve().parent
-DB_PATH = str(BACKEND_DIR / "comments.db")
-USER_PROFILE_PATH = str(BACKEND_DIR / "user_profile.md")
-PROJECT_CONTEXT_PATH = str(BACKEND_DIR / "project_context.md")
-LEARNED_RULES_PATH = str(BACKEND_DIR / "learned_rules.json")
-LOG_DIR = BACKEND_DIR / ".logs"
+
+_config_file = Path.home() / ".kb_config"
+if _config_file.exists():
+    for _line in _config_file.read_text(encoding="utf-8").splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _v = _line.split("=", 1)
+            os.environ.setdefault(_k.strip(), _v.strip())
+
+DATA_DIR = Path(os.path.expanduser(os.environ.get("KB_DATA_DIR", "~/.knowledge-base-extension"))).resolve()
+LOG_DIR = DATA_DIR / ".logs"
+DATA_DIR.mkdir(exist_ok=True)
 LOG_DIR.mkdir(exist_ok=True)
+DB_PATH = str(DATA_DIR / "comments.db")
+USER_PROFILE_PATH = str(DATA_DIR / "user_profile.md")
+PROJECT_CONTEXT_PATH = str(DATA_DIR / "project_context.md")
+LEARNED_RULES_PATH = str(DATA_DIR / "learned_rules.json")
 FAILURE_LOG = LOG_DIR / "failures.jsonl"
 
 def get_claude_bin() -> str:
@@ -88,6 +99,48 @@ def _load_file(path: str, default: str = "") -> str:
         with open(path, "r", encoding="utf-8") as f:
             return f.read()
     return default
+
+
+_PRIVATE_CONTEXT_LEAK_PATTERNS = [
+    "意图-行动缺口",
+    "Intention-Action Gap",
+    "mem-ai 方向",
+    "mem-ai 的产品定位",
+    "知识库助手产品迭代",
+    "基于浏览器插件的 AI 知识管理产品",
+    "正在构建一个基于浏览器插件",
+    "记忆赛道",
+]
+
+
+def _looks_like_bundled_private_context(text: str) -> bool:
+    if os.environ.get("KB_TRUST_PRIVATE_CONTEXT_FILES") == "1":
+        return False
+    return any(p in (text or "") for p in _PRIVATE_CONTEXT_LEAK_PATTERNS)
+
+
+def _load_private_context(path: str, default: str = "") -> str:
+    text = _load_file(path, default)
+    if _looks_like_bundled_private_context(text):
+        log(f"ignoring suspicious private context file: {path}")
+        return default
+    return text
+
+
+def _load_learned_rules_data() -> dict:
+    raw = _load_file(LEARNED_RULES_PATH, '{"rules":[]}')
+    if _looks_like_bundled_private_context(raw):
+        log(f"ignoring suspicious learned rules file: {LEARNED_RULES_PATH}")
+        return {"rules": []}
+    try:
+        data = json.loads(raw or '{"rules":[]}')
+    except Exception:
+        return {"rules": []}
+    safe = []
+    for rule in data.get("rules", []):
+        if not _looks_like_bundled_private_context(rule.get("rule", "")):
+            safe.append(rule)
+    return {"rules": safe}
 
 
 # ──────────────────────────────────────────
@@ -167,6 +220,25 @@ def mark_job_failed(conn: sqlite3.Connection, job_id: int, error: str, retry: bo
             (error[:2000], now, job_id)
         )
     conn.commit()
+
+
+def wait_for_schema_ready(timeout_sec: int = 30):
+    """agent_api owns schema creation; worker waits for it on fresh installs."""
+    deadline = time.time() + timeout_sec
+    last_error = None
+    while time.time() < deadline:
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            row = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='jobs'"
+            ).fetchone()
+            conn.close()
+            if row:
+                return
+        except Exception as e:
+            last_error = e
+        time.sleep(1)
+    raise RuntimeError(f"DB schema not ready: jobs table missing ({last_error})")
 
 
 # ──────────────────────────────────────────
@@ -344,8 +416,8 @@ def handle_synthesize_thinking(conn: sqlite3.Connection, job: dict):
         return
 
     # 2. 拼 prompt
-    user_profile = _load_file(USER_PROFILE_PATH, "[空白，新用户]")
-    project_context = _load_file(PROJECT_CONTEXT_PATH, "[未提供]")
+    user_profile = _load_private_context(USER_PROFILE_PATH, "[空白，新用户]")
+    project_context = _load_private_context(PROJECT_CONTEXT_PATH, "[未提供]")
     # 截断防止 prompt 过长
     user_profile = user_profile[:3000]
     project_context = project_context[:3000]
@@ -417,11 +489,7 @@ def handle_synthesize_thinking(conn: sqlite3.Connection, job: dict):
 
 def _load_active_rules() -> list:
     """读 learned_rules.json 的 active 子集"""
-    try:
-        with open(LEARNED_RULES_PATH, 'r', encoding='utf-8') as f:
-            data = json.loads(f.read() or '{"rules":[]}')
-    except Exception:
-        return []
+    data = _load_learned_rules_data()
     return [r for r in data.get("rules", []) if r.get("active", True)]
 
 
@@ -519,9 +587,7 @@ def handle_synthesize_skills(conn: sqlite3.Connection, job: dict):
         log(f"job#{job['id']} synthesize_skills: insufficient rules ({len(rules)} active)")
         return
 
-    user_profile = ""
-    if Path(USER_PROFILE_PATH).exists():
-        user_profile = Path(USER_PROFILE_PATH).read_text(encoding='utf-8')[:3000]
+    user_profile = _load_private_context(USER_PROFILE_PATH, "")[:3000]
 
     rules_dump_lines = []
     for r in rules:
@@ -613,7 +679,9 @@ def run_one(conn: sqlite3.Connection, job: dict) -> bool:
 
 def main():
     log(f"worker starting (DB={DB_PATH})")
+    log(f"data dir: {DATA_DIR}")
     log(f"claude bin: {CLAUDE_BIN} ({'OK' if os.path.exists(CLAUDE_BIN) else 'MISSING'})")
+    wait_for_schema_ready()
     while True:
         try:
             conn = sqlite3.connect(DB_PATH)

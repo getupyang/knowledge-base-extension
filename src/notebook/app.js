@@ -81,6 +81,32 @@ document.querySelectorAll(".kb-nb-nav-item").forEach(a => {
 });
 
 // ─── 1. 顶部 overview + 底部 callout ───
+let _notionImportStarted = false;
+
+async function maybeImportFromNotion(data) {
+  if (_notionImportStarted) return;
+  if (!data || data.comment_count !== 0 || !data.notion_configured) return;
+  _notionImportStarted = true;
+  toast("正在从 Notion 导入旧数据…");
+  try {
+    const result = await api("/notebook/import-notion", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({limit: 1000}),
+    });
+    if (result.imported > 0) {
+      toast(`已导入 ${result.imported} 条旧数据`);
+      loadOverview();
+      loadDiary();
+    } else {
+      toast("Notion 没有可导入的旧数据");
+    }
+  } catch (e) {
+    console.warn("[notebook] import notion failed", e);
+    toast("Notion 旧数据导入失败");
+  }
+}
+
 async function loadOverview() {
   try {
     const data = await api("/notebook/overview");
@@ -99,6 +125,7 @@ async function loadOverview() {
     // 计数
     $("kb-nb-count-rules").textContent = data.active_rules || 0;
     $("kb-nb-count-diary").textContent = data.comment_count || 0;
+    maybeImportFromNotion(data);
   } catch (e) {
     $("kb-nb-overview-sync").textContent = "后端离线（localhost:8766）";
     $("kb-nb-callout-body").innerHTML = `<em>后端 agent_api.py 没启动？</em><br><span class="kb-nb-mono-soft">cd backend && python3 agent_api.py</span>`;

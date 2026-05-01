@@ -232,9 +232,9 @@ bash setup.sh
 ### 第五步：配置项目上下文（可选但推荐）
 
 ```bash
-# 编辑 backend/project_context.md，填入你自己的背景信息
-# 这让 AI 在回答时更了解你的工作场景
-open backend/project_context.md
+# 编辑这台电脑的本地私有项目背景
+# 不填也可以，AI 会先基于本机 SQLite 里的批注逐步学习
+open ~/.knowledge-base-extension/project_context.md
 ```
 
 ### 第六步：加载 Chrome 插件
@@ -283,11 +283,11 @@ bash start.sh
    - `@竞品` — 竞品分析，找差异化机会
    - `@思辨` — 多角度辩论，提出反例
 4. 点击发送，AI 在后台处理（通常 30-60 秒）
-5. 结果自动展示在评论卡片中，同步写入 Notion
+5. 结果自动展示在评论卡片中，先写入本地 SQLite；如果配置了 Notion，会同步一份外部副本
 
 ### 保存到知识库
 
-选中文字 → 右键 → 「保存到知识库」→ 输入想法 → 直接存 Notion（无 AI 处理）
+选中文字 → 右键 → 「保存到知识库」→ 输入想法 → 存入本地 SQLite（无 AI 处理）；如果配置了 Notion，会同步一份外部副本
 
 ---
 
@@ -339,11 +339,14 @@ bash start.sh
 
 数据是本地优先、按用户隔离的：
 
-- `backend/comments.db` 是该用户的批注、对话、notebook generations。
-- `backend/learned_rules.json` 是该用户从反馈里学到的规则。
-- `backend/project_context.md` / `backend/user_profile.md` 是该用户自己的上下文。
+- `~/.knowledge-base-extension/comments.db` 是该用户的批注、对话、notebook generations。
+- `~/.knowledge-base-extension/learned_rules.json` 是该用户从反馈里学到的规则。
+- `~/.knowledge-base-extension/project_context.md` / `~/.knowledge-base-extension/user_profile.md` 是该用户自己的上下文。
+- Agent 回复只使用这台电脑的本地记忆目录、本地 SQLite 和当前页面内容；代码仓库不携带任何人的记忆。
 
-这些文件默认不进 git。新电脑新用户首次打开会是空笔记本；使用插件产生批注、AI 回复和规则后，笔记本会逐步长出内容。要迁移已有用户的数据，需要在停服务后拷贝上述本地文件到同一路径。
+这些文件默认不进 git。新电脑新用户首次打开时，如果本地 `comments.db` 是空的、但该用户自己的 Notion database 里已有旧数据，记忆笔记本会自动做一次 Notion → SQLite 导入，共同日记随后就能看到旧行为。导入只用于兼容旧版本；新版运行时以本地 SQLite 为准。
+
+如果要完整迁移另一台电脑上的本地状态，停服务后拷贝上述本地文件到同一路径即可。
 
 ---
 
@@ -355,11 +358,31 @@ bash start.sh
 ```bash
 curl http://localhost:8766/health
 ```
-如果失败，重新运行 `bash start.sh`，查看日志：`backend/.logs/agent_api.log`
+如果失败，重新运行 `bash start.sh`，查看日志：`~/.knowledge-base-extension/.logs/agent_api.log`
 
 **Q: Notion 写入失败**
 
-检查 Token 和 Database ID 是否正确，以及数据库是否已连接 Integration（步骤 3.3）。
+检查 Token 和 Database ID 是否正确，以及数据库是否已连接 Integration（步骤 3.3）。Notion 失败不影响本地 SQLite 的批注和共同日记。
+
+**Q: Notion 里有旧数据，但共同日记是空的**
+
+升级到最新版后重启 `bash start.sh`，打开记忆笔记本会自动导入一次旧 Notion 数据。也可以手动触发：
+
+```bash
+curl -X POST http://localhost:8766/notebook/import-notion \
+  -H "Content-Type: application/json" \
+  -d '{"limit":1000}'
+```
+
+**Q: AI 提到了不属于我的项目**
+
+这属于数据隔离问题。新版已经不会信任旧版本可能带来的 maintainer 默认上下文；先升级并重启 `bash start.sh`。如果仍出现，检查并清空这台电脑上的私有上下文文件：
+
+```bash
+cat ~/.knowledge-base-extension/project_context.md
+cat ~/.knowledge-base-extension/user_profile.md
+cat ~/.knowledge-base-extension/learned_rules.json
+```
 
 **Q: `claude` 命令找不到**
 
@@ -376,7 +399,7 @@ claude login
 
 ## 数据说明
 
-- 所有批注和 AI 对话存储在本地 `backend/comments.db`（SQLite）
-- Notion 是展示层，不是主存储
+- 所有批注和 AI 对话存储在本地 `~/.knowledge-base-extension/comments.db`（SQLite）
+- Notion 是可选外部副本和旧数据导入来源，不是主存储
 - `~/.kb_config` 存储你的密钥，`chmod 600` 权限，不会上传到 git
 - 你的 Notion 数据库完全独立，和其他用户的数据互不干扰

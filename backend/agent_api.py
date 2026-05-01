@@ -12,6 +12,8 @@ import os
 import re
 import shutil
 import threading
+import urllib.error
+import urllib.request
 from datetime import datetime
 from typing import Optional
 from fastapi import FastAPI, HTTPException
@@ -19,14 +21,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(ROOT, "comments.db")
-PROJECT_CONTEXT_PATH = os.path.join(ROOT, "project_context.md")
-COMPANY_CULTURE_PATH = os.path.join(ROOT, "company_culture.md")
-# v2 新增路径
-PROMPTS_DIR = os.path.join(ROOT, "agent_prompts")
-AGENT_PRINCIPLES_PATH = os.path.join(ROOT, "agent_principles.md")
-USER_PROFILE_PATH = os.path.join(ROOT, "user_profile.md")
-LEARNED_RULES_PATH = os.path.join(ROOT, "learned_rules.json")
 
 # 启动时读取 ~/.kb_config，让 uvicorn 子进程也能拿到配置
 _config_file = os.path.expanduser("~/.kb_config")
@@ -37,6 +31,57 @@ if os.path.exists(_config_file):
             if _line and not _line.startswith("#") and "=" in _line:
                 _k, _v = _line.split("=", 1)
                 os.environ.setdefault(_k.strip(), _v.strip())
+
+DEFAULT_DATA_DIR = os.path.expanduser("~/.knowledge-base-extension")
+DATA_DIR = os.path.abspath(os.path.expanduser(os.environ.get("KB_DATA_DIR", DEFAULT_DATA_DIR)))
+LOG_DIR = os.path.join(DATA_DIR, ".logs")
+DB_PATH = os.path.join(DATA_DIR, "comments.db")
+PROJECT_CONTEXT_PATH = os.path.join(DATA_DIR, "project_context.md")
+COMPANY_CULTURE_PATH = os.path.join(ROOT, "company_culture.md")
+# v2 新增路径
+PROMPTS_DIR = os.path.join(ROOT, "agent_prompts")
+AGENT_PRINCIPLES_PATH = os.path.join(ROOT, "agent_principles.md")
+USER_PROFILE_PATH = os.path.join(DATA_DIR, "user_profile.md")
+LEARNED_RULES_PATH = os.path.join(DATA_DIR, "learned_rules.json")
+LEGACY_DB_PATH = os.path.join(ROOT, "comments.db")
+
+def _ensure_data_dir():
+    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(LOG_DIR, exist_ok=True)
+
+    def _comment_count(path: str) -> int:
+        if not os.path.exists(path):
+            return 0
+        try:
+            conn = sqlite3.connect(path)
+            n = conn.execute("SELECT COUNT(*) FROM comments").fetchone()[0]
+            conn.close()
+            return int(n)
+        except Exception:
+            return 0
+
+    should_migrate_db = (
+        os.environ.get("KB_DISABLE_LEGACY_DB_MIGRATION") != "1"
+        and os.path.exists(LEGACY_DB_PATH)
+        and (not os.path.exists(DB_PATH) or (_comment_count(DB_PATH) == 0 and _comment_count(LEGACY_DB_PATH) > 0))
+    )
+    if should_migrate_db:
+        try:
+            shutil.copy2(LEGACY_DB_PATH, DB_PATH)
+            print(f"[agent_api] migrated legacy DB: {LEGACY_DB_PATH} -> {DB_PATH}")
+        except Exception as e:
+            print(f"[agent_api] legacy DB migration skipped: {e}")
+    defaults = {
+        USER_PROFILE_PATH: "# 用户画像\n\n（空白，系统会根据这台电脑上的本地批注逐步学习。）\n",
+        PROJECT_CONTEXT_PATH: "# 项目上下文\n\n（空白，用户还没有填写项目背景。AI 不能假设用户正在做某个项目。）\n",
+        LEARNED_RULES_PATH: '{\n  "rules": []\n}\n',
+    }
+    for path, content in defaults.items():
+        if not os.path.exists(path):
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+
+_ensure_data_dir()
 
 app = FastAPI()
 app.add_middleware(
@@ -55,6 +100,7 @@ def init_db():
     conn.execute("""
         CREATE TABLE IF NOT EXISTS comments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            notion_page_id TEXT,      -- 对应 Notion page id，用于新机器回填和去重
             page_url TEXT NOT NULL,
             page_title TEXT,
             selected_text TEXT,       -- 用户划线的原文
@@ -201,11 +247,13 @@ def init_db():
     for col, table in [
         ("debug_meta TEXT", "replies"),
         ("surrounding_text TEXT", "comments"),
+        ("notion_page_id TEXT", "comments"),
     ]:
         try:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {col}")
         except Exception:
             pass  # 列已存在，忽略
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_comments_notion_page_id ON comments(notion_page_id)")
     conn.commit()
     conn.close()
 
@@ -232,6 +280,7 @@ def _get_claude_bin():
 def _startup_check():
     claude_bin = _get_claude_bin()
     notion_ok = bool(os.environ.get("KB_NOTION_TOKEN") or os.environ.get("NOTION_TOKEN"))
+    print(f"[agent_api] 数据目录: {DATA_DIR}")
     print(f"[agent_api] 数据库: {DB_PATH} ({'✓' if os.path.exists(DB_PATH) else '✗ 不存在'})")
     print(f"[agent_api] Claude: {claude_bin} ({'✓' if os.path.exists(claude_bin) else '✗ 未找到'})")
     print(f"[agent_api] Notion Token: {'✓ 已配置' if notion_ok else '✗ 未配置'}")
@@ -251,9 +300,43 @@ def _load_file(path: str, default: str = "") -> str:
             return f.read()
     return default
 
+_PRIVATE_CONTEXT_LEAK_PATTERNS = [
+    "意图-行动缺口",
+    "Intention-Action Gap",
+    "mem-ai 方向",
+    "mem-ai 的产品定位",
+    "知识库助手产品迭代",
+    "基于浏览器插件的 AI 知识管理产品",
+    "正在构建一个基于浏览器插件",
+    "记忆赛道",
+]
+
+def _looks_like_bundled_private_context(text: str) -> bool:
+    """Detect old maintainer-specific context that may have leaked to installs.
+
+    Newer releases never track user_profile.md/project_context.md/learned_rules.json,
+    but old local installs can still have copied files. The safest default for a
+    public product is to ignore suspicious static context and learn from local
+    user behavior instead.
+    """
+    if os.environ.get("KB_TRUST_PRIVATE_CONTEXT_FILES") == "1":
+        return False
+    return any(p in (text or "") for p in _PRIVATE_CONTEXT_LEAK_PATTERNS)
+
+def _load_private_context(path: str, empty_message: str) -> str:
+    content = _load_file(path, "")
+    if not content.strip():
+        return empty_message
+    if _looks_like_bundled_private_context(content):
+        print(f"[privacy] ignoring suspicious private context file: {path}")
+        return empty_message
+    return content
+
 def load_project_context() -> str:
-    return _load_file(PROJECT_CONTEXT_PATH,
-        "项目：意图-行动缺口创业方向调研。目标：验证这个方向是否值得做，并开发Chrome评论区系统作为自用工具和产品原型。")
+    return _load_private_context(
+        PROJECT_CONTEXT_PATH,
+        "（本机还没有可信项目背景。只能基于当前页面、当前评论和本机最近批注回答；不要假设用户正在做某个项目。）",
+    )
 
 def load_company_culture() -> str:
     return _load_file(COMPANY_CULTURE_PATH)
@@ -262,29 +345,79 @@ def load_agent_principles() -> str:
     return _load_file(AGENT_PRINCIPLES_PATH, load_company_culture())
 
 def load_user_profile() -> str:
-    return _load_file(USER_PROFILE_PATH, "[空白，新用户]")
+    return _load_private_context(
+        USER_PROFILE_PATH,
+        "（本机还没有可信用户画像。只根据当前页面、当前评论和本机最近批注推断；不确定就明确说不确定。）",
+    )
+
+def _load_learned_rules_data() -> dict:
+    raw = _load_file(LEARNED_RULES_PATH, '{"rules": []}')
+    if _looks_like_bundled_private_context(raw):
+        print(f"[privacy] ignoring suspicious learned rules file: {LEARNED_RULES_PATH}")
+        return {"rules": []}
+    try:
+        data = json.loads(raw or '{"rules": []}')
+    except Exception:
+        return {"rules": []}
+    safe_rules = []
+    for rule in data.get("rules", []):
+        rule_text = rule.get("rule", "")
+        if _looks_like_bundled_private_context(rule_text):
+            continue
+        safe_rules.append(rule)
+    return {"rules": safe_rules}
 
 def load_learned_rules() -> str:
-    return _load_file(LEARNED_RULES_PATH, '{"rules": []}')
+    return json.dumps(_load_learned_rules_data(), ensure_ascii=False)
 
 def load_learned_rules_scoped(role: str) -> str:
     """加载适用于指定角色的规则子集"""
-    raw = _load_file(LEARNED_RULES_PATH, '{"rules": []}')
     try:
-        data = json.loads(raw)
+        data = _load_learned_rules_data()
         applicable = [r for r in data.get("rules", [])
                       if r.get("active", True) and r.get("scope") in ("all", f"role:{role}")]
         if not applicable:
             return "（暂无已学到的规则）"
         return "\n".join(f"- {r['rule']}" for r in applicable)
     except Exception:
-        return raw
+        return "（暂无已学到的规则）"
 
 def load_prompt_template(name: str) -> str:
     return _load_file(os.path.join(PROMPTS_DIR, f"{name}.md"))
 
+def fetch_local_memory(limit: int = 15) -> str:
+    """Read recent local SQLite comments as the user's current attention layer."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute(
+            """SELECT page_title, selected_text, comment, created_at
+               FROM comments
+               ORDER BY created_at DESC
+               LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        conn.close()
+        entries = []
+        for title, excerpt, thought, created in rows:
+            if not (thought or excerpt):
+                continue
+            line = f"[{(created or '')[:10]}]"
+            if title:
+                line += f" 《{title[:30]}》"
+            if excerpt:
+                line += f"\n  划线：{excerpt[:100]}"
+            if thought:
+                line += f"\n  想法：{thought[:150]}"
+            entries.append(line)
+        if not entries:
+            return ""
+        return "本机最近的阅读批注（只代表这台电脑/这个用户的关注点）：\n" + "\n\n".join(entries)
+    except Exception as e:
+        print(f"[memory] fetch_local_memory error: {e}")
+        return ""
+
 def fetch_notion_memory(limit: int = 15) -> str:
-    """拉取 Notion 最近批注作为记忆上下文，失败时静默返回空字符串"""
+    """拉取当前用户自己的 Notion 最近批注；仅作迁移/兼容 fallback。"""
     import urllib.request
     import urllib.error
     try:
@@ -326,9 +459,16 @@ def fetch_notion_memory(limit: int = 15) -> str:
                 entries.append(line)
         if not entries:
             return ""
-        return "用户最近的阅读批注（最新 {} 条，用于理解用户当前关注点）：\n".format(len(entries)) + "\n\n".join(entries)
+        return "当前配置的 Notion 数据库最近批注（仅作本机 SQLite 为空时的兼容上下文）：\n" + "\n\n".join(entries)
     except Exception:
         return ""
+
+def fetch_attention_memory(limit: int = 15) -> str:
+    """User attention context for prompts. SQLite is authoritative."""
+    local = fetch_local_memory(limit)
+    if local:
+        return local
+    return fetch_notion_memory(limit)
 
 # ──────────────────────────────────────────
 # v2: @手动路由兼容 + 映射
@@ -466,13 +606,13 @@ def build_role_prompt(role: str, page_url: str, page_title: str,
         # fallback: 用 sparring_partner 模板
         template = load_prompt_template("sparring_partner") or ""
 
-    notion_memory = fetch_notion_memory(15)
+    attention_memory = fetch_attention_memory(15)
 
     prompt = template.replace("{agent_principles}", load_agent_principles())
     prompt = prompt.replace("{user_profile}", load_user_profile())
     prompt = prompt.replace("{project_context}", load_project_context())
     prompt = prompt.replace("{learned_rules_scoped}", load_learned_rules_scoped(role))
-    prompt = prompt.replace("{notion_memory}", notion_memory)
+    prompt = prompt.replace("{notion_memory}", attention_memory)
     prompt = prompt.replace("{page_url}", page_url or "")
     prompt = prompt.replace("{surrounding_context}", surrounding_text or "")
     prompt = prompt.replace("{selected_text}", selected_text or "")
@@ -489,8 +629,8 @@ def save_learned_rules(new_rules: list, role: str = "all"):
     if not new_rules:
         return
     try:
-        raw = _load_file(LEARNED_RULES_PATH, '{"rules": []}')
-        data = json.loads(raw)
+        data = _load_learned_rules_data()
+        raw = json.dumps(data, ensure_ascii=False, indent=2)
         rules = data.get("rules", [])
 
         # 备份当前版本
@@ -571,11 +711,7 @@ def _last_skills_generation_max_rule_id() -> int:
 
 def _current_max_rule_id() -> int:
     """读 learned_rules.json，返回最大 rule id 数值（从 rule_NNN 解析）"""
-    try:
-        with open(LEARNED_RULES_PATH, 'r', encoding='utf-8') as f:
-            data = json.loads(f.read() or '{"rules":[]}')
-    except Exception:
-        return 0
+    data = _load_learned_rules_data()
     max_id = 0
     for r in data.get("rules", []):
         rid = r.get("id", "rule_0")
@@ -686,7 +822,7 @@ def _get_recent_interactions(limit: int = 20) -> str:
 def _review_user_profile(interaction_count: int):
     """异步审视用户画像，有变化则更新 user_profile.md"""
     try:
-        current_profile = _load_file(USER_PROFILE_PATH, "")
+        current_profile = load_user_profile()
         recent = _get_recent_interactions(20)
         if not recent:
             return
@@ -761,7 +897,7 @@ def _review_user_profile(interaction_count: int):
 def _review_project_context(agent_reply: str, user_comment: str):
     """检测 agent 回复中是否有项目状态变化信号，有则更新 project_context.md"""
     try:
-        current_context = _load_file(PROJECT_CONTEXT_PATH, "")
+        current_context = load_project_context()
         if not current_context.strip():
             return  # 没有现有上下文，不处理
 
@@ -980,7 +1116,7 @@ def run_agent_v1_fallback(comment_id: int, agent_type: str,
 # Debug 日志
 # ──────────────────────────────────────────
 
-DEBUG_LOG_DIR = os.path.join(ROOT, "debug-logs")
+DEBUG_LOG_DIR = os.path.join(DATA_DIR, "debug-logs")
 os.makedirs(DEBUG_LOG_DIR, exist_ok=True)
 
 def write_debug_log(comment_id: int, agent_type: str, prompt: str, extra: dict = None):
@@ -1305,7 +1441,7 @@ def rerun_agent(comment_id: int):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "db": DB_PATH}
+    return {"status": "ok", "data_dir": DATA_DIR, "db": DB_PATH}
 
 class ClientErrorReport(BaseModel):
     source: str = "unknown"       # callAIViaAgent / upsertNotionPage / saveToNotion ...
@@ -1314,7 +1450,7 @@ class ClientErrorReport(BaseModel):
     context: dict = {}             # 任意上下文：url / comment_id / agent_type / etc.
     ts: str = ""                   # 客户端时间戳，缺失由后端补
 
-CLIENT_ERROR_LOG = os.environ.get("KB_CLIENT_ERROR_LOG") or os.path.join(ROOT, ".logs", "client_errors.log")
+CLIENT_ERROR_LOG = os.environ.get("KB_CLIENT_ERROR_LOG") or os.path.join(LOG_DIR, "client_errors.log")
 
 @app.post("/client-error")
 def client_error(body: ClientErrorReport):
@@ -1344,7 +1480,7 @@ def client_error(body: ClientErrorReport):
 #   3. 所有失败必须可见：兜底 handler 把错误变成用户可见的 reply
 # ──────────────────────────────────────────
 
-FAILURE_LOG = os.environ.get("KB_FAILURE_LOG") or os.path.join(ROOT, ".logs", "failures.jsonl")
+FAILURE_LOG = os.environ.get("KB_FAILURE_LOG") or os.path.join(LOG_DIR, "failures.jsonl")
 
 
 def log_failure(comment_id: int, phase: str, error: Exception, **extra):
@@ -1417,9 +1553,8 @@ def learning_status():
     """学习层状态：查看当前画像、交互计数、下次触发时间"""
     count = _get_interaction_count()
     next_profile_review = _PROFILE_REVIEW_INTERVAL - (count % _PROFILE_REVIEW_INTERVAL)
-    profile = _load_file(USER_PROFILE_PATH, "")
-    rules_raw = _load_file(LEARNED_RULES_PATH, '{"rules": []}')
-    rules = json.loads(rules_raw).get("rules", [])
+    profile = load_user_profile()
+    rules = _load_learned_rules_data().get("rules", [])
     active_rules = [r for r in rules if r.get("active", True)]
     return {
         "interaction_count": count,
@@ -1447,6 +1582,7 @@ def debug_env():
         "claude_bin": claude_bin,
         "claude_bin_exists": os.path.exists(claude_bin),
         "notion_token_set": bool(os.environ.get("NOTION_TOKEN") or os.environ.get("KB_NOTION_TOKEN")),
+        "data_dir": DATA_DIR,
         "db_path": DB_PATH,
         "db_exists": os.path.exists(DB_PATH),
     }
@@ -1485,6 +1621,7 @@ class NotionSaveRequest(BaseModel):
     aiConversation: str = ""
 
 class NotionUpsertRequest(BaseModel):
+    localCommentId: Optional[int] = None
     notionPageId: Optional[str] = None
     title: str = ""
     url: str = ""
@@ -1493,14 +1630,199 @@ class NotionUpsertRequest(BaseModel):
     thought: str = ""
     aiConversation: str = ""
 
-@app.post("/notion/save")
-async def notion_save(req: NotionSaveRequest):
-    """高亮保存到 Notion（代理，不经过 Service Worker）"""
-    import urllib.request, urllib.error
+class NotionImportRequest(BaseModel):
+    limit: int = 500
+
+def _notion_credentials():
     token = os.environ.get("NOTION_TOKEN") or os.environ.get("KB_NOTION_TOKEN", "")
     db_id = os.environ.get("NOTION_DATABASE_ID") or os.environ.get("KB_NOTION_DATABASE_ID", "")
-    if not token or not db_id:
+    return token, db_id
+
+def _notion_headers(token: str) -> dict:
+    return {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Notion-Version": "2022-06-28",
+    }
+
+def _notion_request(endpoint: str, method: str = "GET", data: dict = None, timeout: int = 20) -> dict:
+    token, _ = _notion_credentials()
+    if not token:
         raise HTTPException(status_code=500, detail="Notion 未配置")
+    body = json.dumps(data, ensure_ascii=False).encode() if data else None
+    req = urllib.request.Request(
+        f"https://api.notion.com/v1/{endpoint}",
+        data=body,
+        headers=_notion_headers(token),
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode() if e.fp else str(e)
+        return {
+            "success": True,
+            "localCommentId": local_comment_id,
+            "localCreated": local_created,
+            "notionSynced": False,
+            "notionError": detail,
+        }
+    except urllib.error.URLError as e:
+        return {
+            "success": True,
+            "localCommentId": local_comment_id,
+            "localCreated": local_created,
+            "notionSynced": False,
+            "notionError": str(e),
+        }
+
+def _notion_text(prop: dict) -> str:
+    if not prop:
+        return ""
+    items = prop.get("rich_text") or prop.get("title") or []
+    return "".join(i.get("plain_text") or i.get("text", {}).get("content", "") for i in items)
+
+def _notion_url(prop: dict) -> str:
+    if not prop:
+        return ""
+    return prop.get("url") or ""
+
+def _notion_select(prop: dict) -> str:
+    if not prop:
+        return ""
+    value = prop.get("select") or {}
+    return value.get("name") or ""
+
+def _parse_notion_conversation(ai_conversation: str, fallback_created_at: str) -> list:
+    """Parse the conversation text written by the extension into reply rows.
+
+    Old Notion-only installs have no SQLite replies. This keeps enough structure
+    for the notebook diary without trying to perfectly recover every timestamp.
+    """
+    text = (ai_conversation or "").strip()
+    if not text:
+        return []
+
+    matches = list(re.finditer(r"\[[^\]]+\]\s*(AI|你):\s*", text))
+    if not matches:
+        if "AI:" in text or "AI：" in text:
+            return [{"author": "agent", "content": text, "created_at": fallback_created_at}]
+        return []
+
+    replies = []
+    for i, match in enumerate(matches):
+        author_label = match.group(1)
+        start = match.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        content = text[start:end].strip()
+        if not content:
+            continue
+        replies.append({
+            "author": "agent" if author_label == "AI" else "user",
+            "content": content,
+            "created_at": fallback_created_at,
+        })
+    return replies
+
+def _insert_local_comment_if_missing(notion_page_id: str = None, page_url: str = "",
+                                     page_title: str = "", selected_text: str = "",
+                                     comment: str = "", agent_type: str = "notion_import",
+                                     created_at: str = None, updated_at: str = None,
+                                     replies: list = None) -> tuple:
+    """Create a local SQLite event unless the same Notion/local event already exists.
+
+    Returns (comment_id, created_bool).
+    """
+    created_at = created_at or _now_iso()
+    updated_at = updated_at or created_at
+    comment = (comment or "").strip() or "（仅高亮，无评论）"
+    selected_text = selected_text or ""
+    page_url = page_url or "notion://unknown"
+    page_title = page_title or ""
+    replies = replies or []
+
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        existing = None
+        if notion_page_id:
+            existing = conn.execute(
+                "SELECT id FROM comments WHERE notion_page_id=? LIMIT 1",
+                (notion_page_id,),
+            ).fetchone()
+        if not existing:
+            existing = conn.execute(
+                "SELECT id FROM comments WHERE page_url=? AND selected_text=? AND comment=? LIMIT 1",
+                (page_url, selected_text, comment),
+            ).fetchone()
+        if existing:
+            comment_id = existing[0]
+            if notion_page_id:
+                conn.execute(
+                    "UPDATE comments SET notion_page_id=COALESCE(notion_page_id, ?), updated_at=? WHERE id=?",
+                    (notion_page_id, updated_at, comment_id),
+                )
+                conn.commit()
+            return comment_id, False
+
+        cur = conn.execute(
+            """INSERT INTO comments
+               (notion_page_id, page_url, page_title, selected_text, surrounding_text, comment,
+                agent_type, status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, '', ?, ?, 'open', ?, ?)""",
+            (notion_page_id, page_url, page_title, selected_text, comment, agent_type,
+             created_at, updated_at),
+        )
+        comment_id = cur.lastrowid
+        for reply in replies:
+            conn.execute(
+                "INSERT INTO replies (comment_id, author, agent_type, content, created_at) VALUES (?, ?, ?, ?, ?)",
+                (
+                    comment_id,
+                    reply.get("author") or "agent",
+                    "notion_import",
+                    reply.get("content") or "",
+                    reply.get("created_at") or created_at,
+                ),
+            )
+        conn.commit()
+        return comment_id, True
+    finally:
+        conn.close()
+
+def _link_comment_to_notion(local_comment_id: int, page_id: str):
+    if not local_comment_id or not page_id:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute(
+            "UPDATE comments SET notion_page_id=?, updated_at=? WHERE id=?",
+            (page_id, _now_iso(), local_comment_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+@app.post("/notion/save")
+async def notion_save(req: NotionSaveRequest):
+    """高亮保存：先落本地 SQLite，Notion 只是可选外部副本。"""
+    local_comment_id, local_created = _insert_local_comment_if_missing(
+        page_url=req.url,
+        page_title=req.title,
+        selected_text=req.excerpt,
+        comment=req.thought,
+        agent_type="highlight",
+    )
+
+    token, db_id = _notion_credentials()
+    if not token or not db_id:
+        return {
+            "success": True,
+            "localCommentId": local_comment_id,
+            "localCreated": local_created,
+            "notionSynced": False,
+            "message": "已保存到本地 SQLite；Notion 未配置",
+        }
     body = json.dumps({
         "parent": {"database_id": db_id},
         "properties": {
@@ -1515,26 +1837,65 @@ async def notion_save(req: NotionSaveRequest):
     r = urllib.request.Request(
         "https://api.notion.com/v1/pages",
         data=body,
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "Notion-Version": "2022-06-28"},
+        headers=_notion_headers(token),
         method="POST"
     )
     try:
         with urllib.request.urlopen(r, timeout=15) as resp:
             data = json.loads(resp.read())
-        return {"success": True, "pageId": data.get("id")}
+        page_id = data.get("id")
+        _link_comment_to_notion(local_comment_id, page_id)
+        return {
+            "success": True,
+            "pageId": page_id,
+            "localCommentId": local_comment_id,
+            "localCreated": local_created,
+            "notionSynced": True,
+        }
     except urllib.error.HTTPError as e:
         detail = e.read().decode() if e.fp else str(e)
-        raise HTTPException(status_code=e.code, detail=detail)
+        if not req.localCommentId:
+            _insert_local_comment_if_missing(
+                notion_page_id=req.notionPageId,
+                page_url=req.url,
+                page_title=req.title,
+                selected_text=req.excerpt,
+                comment=req.thought,
+                agent_type="notion_upsert",
+                replies=_parse_notion_conversation(req.aiConversation, _now_iso()),
+            )
+        return {
+            "success": True,
+            "pageId": req.notionPageId,
+            "notionSynced": False,
+            "notionError": detail,
+        }
+    except urllib.error.URLError as e:
+        if not req.localCommentId:
+            _insert_local_comment_if_missing(
+                notion_page_id=req.notionPageId,
+                page_url=req.url,
+                page_title=req.title,
+                selected_text=req.excerpt,
+                comment=req.thought,
+                agent_type="notion_upsert",
+                replies=_parse_notion_conversation(req.aiConversation, _now_iso()),
+            )
+        return {
+            "success": True,
+            "pageId": req.notionPageId,
+            "notionSynced": False,
+            "notionError": str(e),
+        }
 
 @app.post("/notion/upsert")
 async def notion_upsert(req: NotionUpsertRequest):
     """评论 upsert 到 Notion（代理，不经过 Service Worker）"""
-    import urllib.request, urllib.error
-    token = os.environ.get("NOTION_TOKEN") or os.environ.get("KB_NOTION_TOKEN", "")
-    db_id = os.environ.get("NOTION_DATABASE_ID") or os.environ.get("KB_NOTION_DATABASE_ID", "")
+    token, db_id = _notion_credentials()
     if not token or not db_id:
-        raise HTTPException(status_code=500, detail="Notion 未配置")
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json", "Notion-Version": "2022-06-28"}
+        return {"success": True, "pageId": req.notionPageId, "notionSynced": False,
+                "message": "本地评论已保存；Notion 未配置"}
+    headers = _notion_headers(token)
 
     has_ai = req.aiConversation and "AI:" in req.aiConversation
     conversation_field = {"评论区对话": {"rich_text": _split_rich_text(req.aiConversation)}} if has_ai else {}
@@ -1569,10 +1930,87 @@ async def notion_upsert(req: NotionUpsertRequest):
     try:
         with urllib.request.urlopen(r, timeout=15) as resp:
             data = json.loads(resp.read())
-        return {"success": True, "pageId": data.get("id", req.notionPageId)}
+        page_id = data.get("id", req.notionPageId)
+        if req.localCommentId:
+            _link_comment_to_notion(req.localCommentId, page_id)
+        else:
+            _insert_local_comment_if_missing(
+                notion_page_id=page_id,
+                page_url=req.url,
+                page_title=req.title,
+                selected_text=req.excerpt,
+                comment=req.thought,
+                agent_type="notion_upsert",
+                replies=_parse_notion_conversation(req.aiConversation, _now_iso()),
+            )
+        return {"success": True, "pageId": page_id, "notionSynced": True}
     except urllib.error.HTTPError as e:
         detail = e.read().decode() if e.fp else str(e)
         raise HTTPException(status_code=e.code, detail=detail)
+
+@app.post("/notebook/import-notion")
+def notebook_import_notion(req: NotionImportRequest):
+    """One-time backfill from the user's own Notion database into local SQLite.
+
+    This is a migration path for old installs that wrote Notion pages but did not
+    maintain comments.db. Runtime notebook data remains SQLite-first.
+    """
+    token, db_id = _notion_credentials()
+    if not token or not db_id:
+        raise HTTPException(status_code=400, detail="Notion 未配置，无法导入")
+
+    limit = max(1, min(int(req.limit or 500), 2000))
+    entries = []
+    cursor = None
+    while len(entries) < limit:
+        payload = {
+            "page_size": min(100, limit - len(entries)),
+            "sorts": [{"timestamp": "created_time", "direction": "ascending"}],
+        }
+        if cursor:
+            payload["start_cursor"] = cursor
+        result = _notion_request(f"databases/{db_id}/query", method="POST", data=payload, timeout=30)
+        entries.extend(result.get("results", []))
+        if not result.get("has_more"):
+            break
+        cursor = result.get("next_cursor")
+
+    imported = 0
+    skipped = 0
+    for page in entries:
+        props = page.get("properties", {})
+        title = _notion_text(props.get("标题", {}))
+        url = _notion_url(props.get("来源URL", {}))
+        excerpt = _notion_text(props.get("原文片段", {}))
+        thought = _notion_text(props.get("我的想法", {}))
+        ai_conv = _notion_text(props.get("评论区对话", {}))
+        created_at = page.get("created_time") or _now_iso()
+        updated_at = page.get("last_edited_time") or created_at
+        page_id = page.get("id")
+        comment_id, created = _insert_local_comment_if_missing(
+            notion_page_id=page_id,
+            page_url=url,
+            page_title=title,
+            selected_text=excerpt,
+            comment=thought,
+            agent_type="notion_import",
+            created_at=created_at,
+            updated_at=updated_at,
+            replies=_parse_notion_conversation(ai_conv, created_at),
+        )
+        if created:
+            imported += 1
+        else:
+            skipped += 1
+
+    return {
+        "success": True,
+        "imported": imported,
+        "skipped": skipped,
+        "total_seen": len(entries),
+        "limit": limit,
+        "db": DB_PATH,
+    }
 
 
 # ──────────────────────────────────────────
@@ -1596,18 +2034,16 @@ def notebook_overview():
             "WHERE status='active' ORDER BY created_at DESC LIMIT 1"
         ).fetchone()
         # 学到的规则数
-        try:
-            with open(LEARNED_RULES_PATH, 'r', encoding='utf-8') as f:
-                rules_data = json.loads(f.read() or '{"rules":[]}')
-            active_rules = sum(1 for r in rules_data.get("rules", []) if r.get("active", True))
-        except Exception:
-            active_rules = 0
+        rules_data = _load_learned_rules_data()
+        active_rules = sum(1 for r in rules_data.get("rules", []) if r.get("active", True))
         return {
             "comment_count": c_count,
             "page_count": page_count,
             "latest_sync": latest_sync,
             "active_rules": active_rules,
             "latest_thinking": dict(latest_thinking) if latest_thinking else None,
+            "storage_source": "sqlite",
+            "notion_configured": bool(_notion_credentials()[0] and _notion_credentials()[1]),
         }
     finally:
         conn.close()
@@ -1617,19 +2053,15 @@ def notebook_overview():
 def notebook_profile():
     """B 类记忆：user_profile.md + project_context.md（markdown 真理）"""
     return {
-        "user_profile_md": _load_file(USER_PROFILE_PATH, ""),
-        "project_context_md": _load_file(PROJECT_CONTEXT_PATH, ""),
+        "user_profile_md": load_user_profile(),
+        "project_context_md": load_project_context(),
     }
 
 
 @app.get("/notebook/rules")
 def notebook_rules():
     """C 类记忆：learned_rules.json（M3 后切到 working_rules 表）"""
-    try:
-        with open(LEARNED_RULES_PATH, 'r', encoding='utf-8') as f:
-            data = json.loads(f.read() or '{"rules":[]}')
-    except Exception:
-        data = {"rules": []}
+    data = _load_learned_rules_data()
     rules = data.get("rules", [])
     # 按 last_used_at desc 排序，未使用的放后面
     rules.sort(key=lambda r: (r.get("last_used_at") or r.get("created_at") or ""), reverse=True)
@@ -1847,13 +2279,13 @@ CURATED_RULES_PROMPT = load_prompt_template("curated_skills") or """你是一个
 # 4 个示范（学这个语感，不要照抄内容）
 
 示范 1 · 调研方式：
-> 我会按"原文摘抄 + 中文翻译 + 对你项目的思考"输出，并主动补你没问到的问题。
+> 我会按"原文摘抄 + 中文翻译 + 基于本机上下文的关联思考"输出，并主动补你没问到的问题。
 
 示范 2 · 思辨方式：
 > 我会避免二元结论，主动拆 trade-off、机制和信号链路。在 benchmark / memory 这类主题上尤其会展开。
 
 示范 3 · 项目判断方式：
-> 我会记住你当前阶段优先级 — 小范围 aha 大于行业标准兼容，研究/知识工作大于个助大于 coding。在做选型建议时按这个顺序排。
+> 我会记住你有明确证据支撑的阶段优先级。在做选型建议时，先引用本机上下文里的证据，再给判断。
 
 示范 4 · 内容质感方式：
 > 深度访谈和案例研究我会接近《晚点》风格 — 保留场景、原话、人物和结果，不做信息罗列。
@@ -2140,11 +2572,7 @@ def _read_active_profile_snapshot() -> dict:
 
 def _load_active_rules() -> list:
     """读 learned_rules.json 的 active 子集"""
-    try:
-        with open(LEARNED_RULES_PATH, 'r', encoding='utf-8') as f:
-            data = json.loads(f.read() or '{"rules":[]}')
-    except Exception:
-        data = {"rules": []}
+    data = _load_learned_rules_data()
     return [r for r in data.get("rules", []) if r.get("active", True)]
 
 
@@ -2251,8 +2679,8 @@ def notebook_profile_snapshot_get():
 @app.post("/notebook/profile/curated")
 def notebook_profile_curated():
     """生成 你 & 项目 的浓缩状态卡：跑 LLM → 写 DB → 返回 active snapshot。"""
-    user_profile = _load_file(USER_PROFILE_PATH, "")
-    project_context = _load_file(PROJECT_CONTEXT_PATH, "")
+    user_profile = load_user_profile()
+    project_context = load_project_context()
     if not user_profile.strip() and not project_context.strip():
         return {"_status": "insufficient_data",
                 "_message": "user_profile.md 和 project_context.md 都是空的，先填一下底"}

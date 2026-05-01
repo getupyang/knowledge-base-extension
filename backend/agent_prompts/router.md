@@ -27,10 +27,10 @@ dialogue → sparring_partner（用户在表达观点/判断/质疑）或 explai
 - 没有学习信号时，learned 为空数组
 
 ## 上下文
-用户画像：
+用户画像（本机私有；可能为空）：
 {user_profile}
 
-项目背景：
+项目背景（本机私有；可能为空）：
 {project_context}
 
 已学到的规则：
@@ -46,6 +46,11 @@ dialogue → sparring_partner（用户在表达观点/判断/质疑）或 explai
 {surrounding_context}
 划线内容：{selected_text}
 评论：{comment}
+
+## 数据隔离硬规则
+- 只能根据本机私有上下文、已学到的本机规则和当前输入判断。
+- 不要使用开发者、示例、模板或其他用户的项目背景。
+- 如果上下文为空或不确定，不要在 learned 里写入关于用户项目方向的猜测。
 
 ## 输出（严格 JSON，不要任何其他文字）
 {

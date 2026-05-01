@@ -25,8 +25,22 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 BACKEND_DIR = Path.home() / "Documents" / "ai" / "coding" / "knowledge-base-extension" / "backend"
-DB_PATH = BACKEND_DIR / "comments.db"
-LOG_DIR = BACKEND_DIR / ".logs"
+
+def load_kb_config():
+    config = {}
+    path = Path.home() / ".kb_config"
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                config[k.strip()] = v.strip()
+    return config
+
+CONFIG = load_kb_config()
+DATA_DIR = Path(os.path.expanduser(CONFIG.get("KB_DATA_DIR") or os.environ.get("KB_DATA_DIR") or "~/.knowledge-base-extension"))
+DB_PATH = DATA_DIR / "comments.db"
+LOG_DIR = DATA_DIR / ".logs"
 FAILURE_LOG = LOG_DIR / "failures.jsonl"
 AGENT_LOG = LOG_DIR / "agent_api.log"
 SERVER_LOG = LOG_DIR / "server.log"
@@ -115,6 +129,11 @@ def run_checks():
         results.append(check("后端是 reliability 版本", WARN, f"/failures 返回 {status}"))
 
     # 4. DB 可读 + 最近活跃
+    if DATA_DIR.is_dir():
+        results.append(check("本地记忆目录", OK, str(DATA_DIR)))
+    else:
+        results.append(check("本地记忆目录", FAIL, f"不存在: {DATA_DIR}"))
+
     if not DB_PATH.exists():
         results.append(check("批注 DB", FAIL, f"不存在: {DB_PATH}"))
     else:

@@ -602,7 +602,8 @@ const commentSystem = (() => {
       return r.json();
     }).then(resp => {
       if (resp.success) {
-        showToast("✓ 已高亮并保存到 Notion", "success");
+        if (resp.notionSynced === false && resp.notionError) console.warn("[KB] Notion not synced:", resp.notionError);
+        showToast(resp.notionSynced === false ? "✓ 已高亮并保存到本地（Notion 未同步）" : "✓ 已高亮并保存到 Notion", "success");
       } else {
         const detail = resp.detail || "未知错误";
         console.error("[KB] Notion save failed:", detail);
@@ -1424,6 +1425,7 @@ const commentSystem = (() => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        localCommentId: comment.agentCommentId || null,
         notionPageId: comment.notionPageId || null,
         title,
         url: location.href,
@@ -1440,12 +1442,13 @@ const commentSystem = (() => {
       return r.json();
     }).then(resp => {
       if (resp.success) {
+        if (resp.notionSynced === false && resp.notionError) console.warn("[KB] Notion not synced:", resp.notionError);
         if (resp.pageId && !comment.notionPageId) {
           const comments = load();
           const match = comments.find(x => x.id === comment.id);
           if (match) { match.notionPageId = resp.pageId; save(comments); }
         }
-        showToast("✓ 已保存到 Notion", "success");
+        showToast(resp.notionSynced === false ? "✓ 已保存到本地（Notion 未同步）" : "✓ 已保存到 Notion", "success");
       } else {
         const detail = resp.detail || resp.error || "未知错误";
         console.error("[KB] Notion upsert failed:", detail);

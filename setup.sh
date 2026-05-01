@@ -7,6 +7,7 @@
 set -e
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 BACKEND_DIR="$REPO_DIR/backend"
+DATA_DIR="${KB_DATA_DIR:-$HOME/.knowledge-base-extension}"
 CONFIG_FILE="$HOME/.kb_config"
 
 echo "=== 知识库助手 首次安装 ==="
@@ -99,6 +100,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
 NOTION_TOKEN=${NOTION_TOKEN}
 NOTION_DATABASE_ID=${DATABASE_ID}
 CLAUDE_BIN=${CLAUDE_BIN}
+KB_DATA_DIR=${DATA_DIR}
 RESEARCH_DIR=${BACKEND_DIR}
 EOF
 
@@ -109,12 +111,14 @@ fi
 # ── 4. 初始化数据库 ──────────────────────────────────────
 echo ""
 echo "→ 初始化本地数据库..."
+mkdir -p "$DATA_DIR"
 python3 -c "
 import sqlite3, os
-db = os.path.join('$BACKEND_DIR', 'comments.db')
+db = os.path.join('$DATA_DIR', 'comments.db')
 conn = sqlite3.connect(db)
 conn.execute('''CREATE TABLE IF NOT EXISTS comments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    notion_page_id TEXT,
     page_url TEXT NOT NULL, page_title TEXT, selected_text TEXT,
     comment TEXT NOT NULL, agent_type TEXT, status TEXT DEFAULT \"open\",
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL)''')
@@ -126,15 +130,38 @@ conn.execute('''CREATE TABLE IF NOT EXISTS replies (
 try:
     conn.execute('ALTER TABLE replies ADD COLUMN debug_meta TEXT')
 except: pass
+try:
+    conn.execute('ALTER TABLE comments ADD COLUMN notion_page_id TEXT')
+except: pass
 conn.commit()
 conn.close()
 print('  ✓ 数据库就绪:', db)
 "
 
-# ── 5. 初始化 project_context.md ─────────────────────────
-if [ ! -f "$BACKEND_DIR/project_context.md" ]; then
-  cp "$BACKEND_DIR/project_context.template.md" "$BACKEND_DIR/project_context.md"
-  echo "→ 已生成 backend/project_context.md，请填入你的项目背景（可选，让 AI 更懂你）"
+# ── 5. 初始化用户私有上下文 ─────────────────────────
+if [ ! -f "$DATA_DIR/project_context.md" ]; then
+  cat > "$DATA_DIR/project_context.md" << 'EOF'
+# 项目上下文
+
+（空白，用户还没有填写项目背景。AI 不能假设用户正在做某个项目。）
+
+EOF
+  echo "→ 已生成空的 $DATA_DIR/project_context.md（可选：填入你自己的项目背景）"
+fi
+
+if [ ! -f "$DATA_DIR/user_profile.md" ]; then
+  cat > "$DATA_DIR/user_profile.md" << 'EOF'
+# 用户画像
+
+（空白，系统会根据这台电脑上的本地批注逐步学习。）
+
+EOF
+  echo "→ 已生成空的 $DATA_DIR/user_profile.md"
+fi
+
+if [ ! -f "$DATA_DIR/learned_rules.json" ]; then
+  printf '{\n  "rules": []\n}\n' > "$DATA_DIR/learned_rules.json"
+  echo "→ 已生成空的 $DATA_DIR/learned_rules.json"
 fi
 
 # ── 6. 验证 Notion Token ──────────────────────────────────

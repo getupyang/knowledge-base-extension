@@ -41,9 +41,9 @@ def load_test_cases():
 
 def build_router_input(template: str, case: dict) -> str:
     """填充路由器模板的变量"""
-    user_profile = load_file(os.path.join(ROOT, "user_profile.md"), "[空白，新用户]")
+    user_profile = load_file(os.path.join(ROOT, "user_profile.md"), "（本机还没有可信用户画像。）")
     project_context = load_file(os.path.join(ROOT, "project_context.md"),
-        "项目：意图-行动缺口创业方向。产品：Chrome 知识库插件，评论区 AI agent。目标用户：决策型知识工作者。")
+        "（本机还没有可信项目背景。不要假设用户正在做某个项目。）")
     learned_rules = load_file(os.path.join(ROOT, "learned_rules.json"), '{"rules": []}')
 
     prompt = template.replace("{user_profile}", user_profile)

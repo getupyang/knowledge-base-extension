@@ -5,8 +5,6 @@
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 BACKEND_DIR="$REPO_DIR/backend"
 CONFIG_FILE="$HOME/.kb_config"
-LOG_DIR="$BACKEND_DIR/.logs"
-mkdir -p "$LOG_DIR"
 
 echo "=== 启动工作台 ==="
 
@@ -18,12 +16,16 @@ if [ ! -f "$CONFIG_FILE" ]; then
 fi
 source "$CONFIG_FILE"
 
+export KB_DATA_DIR="${KB_DATA_DIR:-$HOME/.knowledge-base-extension}"
+LOG_DIR="$KB_DATA_DIR/.logs"
+mkdir -p "$LOG_DIR"
+echo "→ 本地记忆目录：$KB_DATA_DIR"
+
 export KB_NOTION_TOKEN="$NOTION_TOKEN"
 export KB_NOTION_DATABASE_ID="$NOTION_DATABASE_ID"
 export KB_CLAUDE_BIN="$CLAUDE_BIN"
 export HOME="$HOME"  # 显式传递，防止 uvicorn 子进程丢失 HOME 导致 claude 找不到认证配置
 # RESEARCH_DIR：server.py 的文档根目录，从 ~/.kb_config 读（指向用户的私人 MD 文件目录）
-# agent_api 的数据目录固定用 BACKEND_DIR
 export RESEARCH_DIR="${RESEARCH_DIR:-$BACKEND_DIR}"
 
 # ── 检查并停止已有进程 ────────────────────────────────────
@@ -46,6 +48,13 @@ SERVER_PID=$!
 echo "→ 启动 Agent API (8766)..."
 nohup python3 -m uvicorn agent_api:app --host 127.0.0.1 --port 8766 > "$LOG_DIR/agent_api.log" 2>&1 &
 AGENT_PID=$!
+
+for i in {1..30}; do
+  if curl -s http://localhost:8766/health > /dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
 
 # ── 启动异步 worker（jobs 表后台任务）──────────────────────
 WORKER_PID_FILE="$LOG_DIR/worker.pid"
