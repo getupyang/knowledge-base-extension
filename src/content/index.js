@@ -262,6 +262,7 @@ const commentSystem = (() => {
   const STORAGE_KEY = () => "kb_comments_" + location.href.split("?")[0];
   let panelEl = null;
   let currentExcerpt = "";
+  const _aiUnreadCommentIds = new Set();
 
   // ── 提前保存 selection（提交时 selection 已消失，需要提前捕获）──
   let _savedSelection = "";
@@ -780,6 +781,10 @@ const commentSystem = (() => {
         transition: border-color 0.18s, box-shadow 0.18s;
       }
       .kb-cmt-card:hover { border-color: var(--kb-line); }
+      .kb-cmt-card.kb-ai-unread {
+        border-color: oklch(0.62 0.12 240);
+        box-shadow: 0 0 0 2px oklch(0.62 0.12 240 / 0.10);
+      }
       .kb-cmt-content {
         max-height: 320px; overflow: hidden; position: relative;
         transition: max-height 0.3s ease;
@@ -902,6 +907,21 @@ const commentSystem = (() => {
       }
       .kb-ai-btn:hover { background: oklch(0.28 0.01 60); }
       .kb-ai-btn:disabled { background: var(--kb-ink-faint); cursor: not-allowed; }
+      .kb-ai-ready-btn {
+        border: 1px solid oklch(0.62 0.12 240 / 0.42);
+        background: var(--kb-blue-soft);
+        color: var(--kb-blue);
+        border-radius: 3px;
+        padding: 4px 9px;
+        font-size: 11px;
+        cursor: pointer;
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        letter-spacing: 0.03em;
+      }
+      .kb-ai-ready-btn:hover {
+        border-color: var(--kb-blue);
+        background: oklch(0.92 0.04 240);
+      }
       .kb-thinking {
         font-size: 12px; color: var(--kb-ink-2); padding: 8px 10px;
         background: var(--kb-paper-2); border-radius: 4px; margin-top: 6px;
@@ -961,6 +981,36 @@ const commentSystem = (() => {
         font-size: 11px; color: var(--kb-ink-mute); margin-left: 10px;
         font-family: "JetBrains Mono", ui-monospace, monospace;
       }
+      #kb-cp-ai-notice {
+        position: absolute;
+        top: 58px;
+        left: 12px;
+        right: 12px;
+        z-index: 3;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 8px 10px;
+        border: 1px solid oklch(0.62 0.12 240 / 0.28);
+        border-radius: 6px;
+        background: oklch(0.98 0.015 240 / 0.96);
+        color: var(--kb-ink);
+        box-shadow: 0 4px 16px rgba(40, 50, 80, 0.10);
+        font-size: 12px;
+        font-family: "Source Han Serif SC", "Noto Serif SC", serif;
+      }
+      #kb-cp-ai-notice.kb-hidden { display: none; }
+      #kb-cp-ai-notice button {
+        border: none;
+        background: var(--kb-blue);
+        color: white;
+        border-radius: 3px;
+        padding: 4px 9px;
+        font-size: 11px;
+        cursor: pointer;
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+      }
       .kb-empty {
         text-align: center; color: var(--kb-ink-faint);
         padding: 60px 20px; font-size: 13px;
@@ -997,6 +1047,7 @@ const commentSystem = (() => {
           <button id="kb-cp-close">收起 ›</button>
         </div>
       </div>
+      <div id="kb-cp-ai-notice" class="kb-hidden"></div>
       <div id="kb-cp-body"></div>
       <div id="kb-cp-input-area" class="kb-input-collapsed">
         <div id="kb-cp-quote-preview"></div>
@@ -1030,8 +1081,19 @@ const commentSystem = (() => {
     });
     // 事件委托：处理评论卡片里的按钮（避免 onclick 属性跨 world 问题）
     document.getElementById("kb-cp-body").addEventListener("click", (e) => {
+      const readyBtn = e.target.closest("[data-jump-ai]");
+      if (readyBtn) {
+        jumpToAiReply(parseInt(readyBtn.dataset.jumpAi, 10));
+        return;
+      }
       const btn = e.target.closest("[data-ask-ai]");
       if (btn) askAI(parseInt(btn.dataset.askAi, 10));
+    });
+    document.getElementById("kb-cp-ai-notice").addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-jump-unread-ai]");
+      if (!btn) return;
+      const firstId = Array.from(_aiUnreadCommentIds)[0];
+      if (firstId) jumpToAiReply(firstId);
     });
 
     // 反向联动：用 data-excerpt-id 找同组 mark，避免多段 mark 文本拼接问题
@@ -1176,6 +1238,61 @@ const commentSystem = (() => {
     body.scrollTop += nextOffsetTop - anchor.offsetTop;
   }
 
+  function _isCommentCardVisible(commentId) {
+    const body = document.getElementById("kb-cp-body");
+    const card = document.getElementById("kb-cmt-" + commentId);
+    if (!body || !card || !panelOpen || panelEl?.classList.contains("kb-btn-hidden")) return false;
+    const bodyRect = body.getBoundingClientRect();
+    const cardRect = card.getBoundingClientRect();
+    const overlap = Math.min(cardRect.bottom, bodyRect.bottom) - Math.max(cardRect.top, bodyRect.top);
+    return overlap > Math.min(140, Math.max(80, cardRect.height * 0.28));
+  }
+
+  function _refreshAiNotice() {
+    const notice = document.getElementById("kb-cp-ai-notice");
+    if (!notice) return;
+    const count = _aiUnreadCommentIds.size;
+    if (!count) {
+      notice.classList.add("kb-hidden");
+      notice.innerHTML = "";
+      return;
+    }
+    notice.classList.remove("kb-hidden");
+    notice.innerHTML = `
+      <span>${count === 1 ? "有 1 条 AI 回复完成" : `有 ${count} 条 AI 回复完成`}</span>
+      <button data-jump-unread-ai="1">查看</button>
+    `;
+  }
+
+  function _markAiReplyReady(commentId) {
+    if (_isCommentCardVisible(commentId)) return;
+    _aiUnreadCommentIds.add(commentId);
+    _refreshAiNotice();
+  }
+
+  function _clearAiReplyReady(commentId) {
+    if (!_aiUnreadCommentIds.delete(commentId)) return;
+    _refreshAiNotice();
+    updateCommentCard(commentId);
+  }
+
+  function jumpToAiReply(commentId) {
+    if (!panelEl) buildPanel();
+    if (!panelOpen) {
+      panelOpen = true;
+      panelEl.classList.remove("kb-btn-hidden");
+      document.body.style.marginRight = "360px";
+      updateBadge();
+    }
+    _clearAiReplyReady(commentId);
+    const card = document.getElementById("kb-cmt-" + commentId);
+    if (card) {
+      card.scrollIntoView({ behavior: "smooth", block: "center" });
+      card.classList.add("kb-flash");
+      setTimeout(() => card.classList.remove("kb-flash"), 900);
+    }
+  }
+
   function _renderCommentCard(c) {
     const t = new Date(c.createdAt);
     const timeStr = `${t.getMonth()+1}/${t.getDate()} ${String(t.getHours()).padStart(2,"0")}:${String(t.getMinutes()).padStart(2,"0")}`;
@@ -1238,7 +1355,7 @@ const commentSystem = (() => {
     }).join("");
     const hasAI = c.replies.some(r => r.isAI);
     return `
-      <div class="kb-cmt-card" id="kb-cmt-${c.id}">
+      <div class="kb-cmt-card ${_aiUnreadCommentIds.has(c.id) ? "kb-ai-unread" : ""}" id="kb-cmt-${c.id}">
         ${c.excerpt ? `<div class="kb-cmt-quote">"${escapeHtml(c.excerpt.slice(0,100))}${c.excerpt.length>100?"…":""}"</div>` : ""}
         <div class="kb-cmt-content" id="kb-cmt-content-${c.id}">
           <div class="kb-cmt-text">${escapeHtml(c.text)}</div>
@@ -1249,6 +1366,8 @@ const commentSystem = (() => {
         <div style="display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap;">
           ${_askAIRunning.has(c.id)
             ? `<span style="color:var(--kb-blue);font-size:11px;font-family:'JetBrains Mono',monospace;letter-spacing:0.04em;">AI 思考中…</span>`
+            : _aiUnreadCommentIds.has(c.id)
+              ? `<button class="kb-ai-ready-btn" data-jump-ai="${c.id}">AI 已回复 · 查看</button>`
             : !hasAI
               ? `<button class="kb-ai-btn" data-ask-ai="${c.id}">请 AI 回复</button>`
               : `<button class="kb-reply-btn" data-open-reply="${c.id}">继续追问</button>`
@@ -1314,6 +1433,7 @@ const commentSystem = (() => {
 
     // 检查每张卡片是否溢出，显示折叠按钮
     comments.forEach(c => _refreshCardOverflow(c.id));
+    _refreshAiNotice();
     // 恢复追问框草稿和展开状态
     for (const [id, draft] of Object.entries(drafts)) {
       const ta = document.getElementById("kb-reply-ta-" + id);
@@ -1679,7 +1799,9 @@ const commentSystem = (() => {
       }
 
       if (reply) {
+        const shouldNotify = !_isCommentCardVisible(commentId);
         addReply(commentId, reply, true, replyDebugMeta);
+        if (shouldNotify) _markAiReplyReady(commentId);
         // 每次 AI 回复后更新 Notion（upsert：有 page 则追加，无则新建）
         const freshC = load().find(x => x.id === commentId);
         if (freshC) updateNotionPage(freshC);
