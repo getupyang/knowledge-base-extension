@@ -612,8 +612,10 @@ const commentSystem = (() => {
     }).catch(err => {
       console.error("[KB] Notion save error:", err.message || err);
       const msg = err.message || String(err);
-      const hint = msg.includes("Failed to fetch") ? "无法连接后端（localhost:8766）" : msg;
-      showToast("✗ Notion 保存失败：" + hint, "error");
+      const hint = msg.includes("Failed to fetch")
+        ? "本地服务未连接；标注可能只保存在当前页面"
+        : msg;
+      showToast("✗ 本地保存链路异常：" + hint, "error");
     });
   }
 
@@ -1457,8 +1459,10 @@ const commentSystem = (() => {
     }).catch(err => {
       console.error("[KB] Notion upsert error:", err.message || err);
       const msg = err.message || String(err);
-      const hint = msg.includes("Failed to fetch") ? "无法连接后端（localhost:8766）" : msg;
-      showToast("✗ Notion 保存失败：" + hint, "error");
+      const hint = msg.includes("Failed to fetch")
+        ? "本地服务未连接；评论可能只保存在当前页面"
+        : msg;
+      showToast("✗ 本地保存链路异常：" + hint, "error");
     });
   }
 

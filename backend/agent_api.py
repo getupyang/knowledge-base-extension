@@ -1946,7 +1946,19 @@ async def notion_upsert(req: NotionUpsertRequest):
         return {"success": True, "pageId": page_id, "notionSynced": True}
     except urllib.error.HTTPError as e:
         detail = e.read().decode() if e.fp else str(e)
-        raise HTTPException(status_code=e.code, detail=detail)
+        return {
+            "success": True,
+            "pageId": req.notionPageId,
+            "notionSynced": False,
+            "notionError": detail,
+        }
+    except urllib.error.URLError as e:
+        return {
+            "success": True,
+            "pageId": req.notionPageId,
+            "notionSynced": False,
+            "notionError": str(e),
+        }
 
 @app.post("/notebook/import-notion")
 def notebook_import_notion(req: NotionImportRequest):
