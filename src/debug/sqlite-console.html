@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SQLite Debug Console</title>
+  <style>
+    :root {
+      --bg: #f7f3ed;
+      --panel: #fffdf9;
+      --ink: #211c18;
+      --muted: #72685f;
+      --line: #ded4c9;
+      --soft: #f1e9df;
+      --accent: #17627e;
+      --green: #3f7651;
+      --yellow: #9a6a18;
+      --red: #a64c3d;
+      --code: #f3eee7;
+      --shadow: 0 1px 8px rgba(34, 24, 16, .08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 14px/1.58 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    button, input, select {
+      font: inherit;
+    }
+    .shell {
+      display: grid;
+      grid-template-columns: minmax(300px, 390px) 1fr;
+      min-height: 100vh;
+    }
+    aside {
+      border-right: 1px solid var(--line);
+      background: #fbf8f2;
+      padding: 18px;
+      overflow: auto;
+      max-height: 100vh;
+      position: sticky;
+      top: 0;
+    }
+    main {
+      padding: 24px;
+      overflow: auto;
+    }
+    h1 {
+      font-size: 22px;
+      line-height: 1.2;
+      margin: 0 0 6px;
+    }
+    h2 {
+      font-size: 17px;
+      margin: 24px 0 10px;
+    }
+    h3 {
+      font-size: 14px;
+      margin: 16px 0 8px;
+      color: #3b322c;
+    }
+    .sub {
+      color: var(--muted);
+      margin: 0 0 16px;
+    }
+    .toolbar {
+      display: grid;
+      grid-template-columns: 1fr 82px;
+      gap: 8px;
+      margin: 14px 0;
+    }
+    input, select {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--panel);
+      color: var(--ink);
+      padding: 8px 10px;
+    }
+    button {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--panel);
+      color: var(--ink);
+      padding: 8px 10px;
+      cursor: pointer;
+    }
+    button:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .comment-list {
+      display: grid;
+      gap: 8px;
+    }
+    .comment-row {
+      display: block;
+      width: 100%;
+      text-align: left;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      box-shadow: var(--shadow);
+    }
+    .comment-row.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(23, 98, 126, .12);
+    }
+    .row-title {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 5px;
+    }
+    .id {
+      font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+      font-size: 12px;
+      color: var(--accent);
+      font-weight: 700;
+      min-width: 42px;
+    }
+    .title {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-weight: 650;
+    }
+    .preview {
+      color: #3f3832;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .meta, .small {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      margin-top: 8px;
+    }
+    .chip {
+      border: 1px solid var(--line);
+      background: var(--soft);
+      border-radius: 999px;
+      padding: 1px 7px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+    .ok { color: var(--green); }
+    .warn { color: var(--yellow); }
+    .bad { color: var(--red); }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 14px;
+      margin-bottom: 14px;
+    }
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+    }
+    .metric {
+      background: var(--soft);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+    }
+    .metric b {
+      display: block;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 3px;
+    }
+    pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: var(--code);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 11px;
+      overflow: auto;
+      max-height: 420px;
+      font: 12px/1.5 "SFMono-Regular", Menlo, Consolas, monospace;
+    }
+    details {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      margin: 9px 0;
+      padding: 10px 12px;
+    }
+    summary {
+      cursor: pointer;
+      font-weight: 650;
+    }
+    .reply {
+      border-left: 4px solid var(--accent);
+      padding-left: 10px;
+      margin: 10px 0;
+    }
+    .empty {
+      color: var(--muted);
+      padding: 18px;
+      text-align: center;
+      border: 1px dashed var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, .4);
+    }
+    .two {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    @media (max-width: 900px) {
+      .shell { grid-template-columns: 1fr; }
+      aside { position: static; max-height: none; }
+      .two { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside>
+      <h1>SQLite Debug Console</h1>
+      <p class="sub">只读查看本地记忆流水线。不会写入 comments.db。</p>
+      <div class="toolbar">
+        <input id="q" placeholder="搜索 comment / page / URL">
+        <button id="search">搜索</button>
+      </div>
+      <div class="toolbar">
+        <input id="comment-id" placeholder="直接输入 comment id">
+        <button id="open-id">打开</button>
+      </div>
+      <div class="small" id="status">加载中...</div>
+      <div class="comment-list" id="comment-list"></div>
+    </aside>
+    <main>
+      <div id="detail" class="empty">选择一条批注查看 ledger / context / growth / jobs。</div>
+    </main>
+  </div>
+
+  <script>
+    const API = "http://localhost:8766";
+    let activeId = null;
+
+    function $(id) {
+      return document.getElementById(id);
+    }
+
+    function esc(value) {
+      return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function short(value, n = 120) {
+      const s = String(value ?? "").replace(/\s+/g, " ").trim();
+      return s.length > n ? s.slice(0, n) + "..." : s;
+    }
+
+    function jsonBlock(value) {
+      return `<pre>${esc(JSON.stringify(value ?? null, null, 2))}</pre>`;
+    }
+
+    function statusClass(value) {
+      if (!value) return "";
+      if (["done", "local_saved", "notion_synced", "success", "open"].includes(value)) return "ok";
+      if (["pending", "running", "queued"].includes(value)) return "warn";
+      if (["failed", "notion_failed"].includes(value)) return "bad";
+      return "";
+    }
+
+    function chip(label, value) {
+      const cls = statusClass(value);
+      return `<span class="chip ${cls}">${esc(label)}${value ? ": " + esc(value) : ""}</span>`;
+    }
+
+    async function api(path) {
+      const res = await fetch(API + path);
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      return res.json();
+    }
+
+    async function loadComments() {
+      const q = $("q").value.trim();
+      $("status").textContent = "加载中...";
+      try {
+        const data = await api(`/debug/comments?limit=50${q ? `&q=${encodeURIComponent(q)}` : ""}`);
+        $("status").textContent = `${data.total} 条 · ${data.db}`;
+        $("comment-list").innerHTML = data.items.map(renderCommentRow).join("") || `<div class="empty">没有匹配记录</div>`;
+        for (const btn of document.querySelectorAll("[data-comment-id]")) {
+          btn.addEventListener("click", () => loadDetail(Number(btn.dataset.commentId)));
+        }
+        const params = new URLSearchParams(location.search);
+        const target = Number(params.get("comment") || data.items[0]?.id || 0);
+        if (target && !activeId) loadDetail(target);
+      } catch (err) {
+        $("status").innerHTML = `<span class="bad">读取失败：${esc(err.message)}</span>`;
+      }
+    }
+
+    function renderCommentRow(item) {
+      return `
+        <button class="comment-row ${item.id === activeId ? "active" : ""}" data-comment-id="${item.id}">
+          <div class="row-title">
+            <span class="id">#${item.id}</span>
+            <span class="title">${esc(item.page_title || "(untitled)")}</span>
+          </div>
+          <div class="preview">${esc(short(item.comment, 140))}</div>
+          <div class="chips">
+            ${chip("reply", item.reply_count)}
+            ${chip("context", item.context_pack_count)}
+            ${chip("local", item.local_status)}
+            ${chip("notion", item.notion_status)}
+            ${chip("growth", item.growth_status)}
+          </div>
+          <div class="meta">${esc(item.updated_at || "")}</div>
+        </button>
+      `;
+    }
+
+    async function loadDetail(id) {
+      activeId = id;
+      history.replaceState(null, "", `?comment=${id}`);
+      document.querySelectorAll("[data-comment-id]").forEach((el) => {
+        el.classList.toggle("active", Number(el.dataset.commentId) === id);
+      });
+      $("detail").className = "empty";
+      $("detail").textContent = `加载 comment#${id}...`;
+      try {
+        const data = await api(`/debug/comments/${id}`);
+        $("detail").className = "";
+        $("detail").innerHTML = renderDetail(data);
+        for (const btn of document.querySelectorAll("[data-debug-log]")) {
+          btn.addEventListener("click", () => loadDebugLog(btn.dataset.debugLog));
+        }
+      } catch (err) {
+        $("detail").className = "empty";
+        $("detail").innerHTML = `<span class="bad">读取 comment#${id} 失败：${esc(err.message)}</span>`;
+      }
+    }
+
+    function renderDetail(data) {
+      const c = data.comment;
+      const ledger = data.ledger || {};
+      return `
+        <section class="panel">
+          <h2>comment#${c.id}</h2>
+          <p><b>${esc(c.page_title || "(untitled)")}</b></p>
+          <p class="small">${esc(c.page_url || "")}</p>
+          <div class="two">
+            <div>
+              <h3>批注</h3>
+              <pre>${esc(c.comment || "")}</pre>
+            </div>
+            <div>
+              <h3>划线</h3>
+              <pre>${esc(c.selected_text || "")}</pre>
+            </div>
+          </div>
+        </section>
+        <section class="summary-grid">
+          <div class="metric"><b>local</b><span class="${statusClass(ledger.local_status)}">${esc(ledger.local_status || "missing")}</span></div>
+          <div class="metric"><b>notion</b><span class="${statusClass(ledger.notion_status)}">${esc(ledger.notion_status || "missing")}</span></div>
+          <div class="metric"><b>growth</b><span class="${statusClass(ledger.growth_status)}">${esc(ledger.growth_status || "missing")}</span></div>
+          <div class="metric"><b>context packs</b>${data.context_packs.length}</div>
+          <div class="metric"><b>replies</b>${data.replies.length}</div>
+          <div class="metric"><b>jobs</b>${data.jobs.length}</div>
+        </section>
+        ${section("Memory Intake Ledger", jsonBlock(data.ledger))}
+        ${renderReplies(data.replies)}
+        ${renderContextPacks(data.context_packs)}
+        ${renderGrowth(data.growth)}
+        ${renderJobs(data.jobs)}
+        ${renderDebugLogs(data.debug_logs)}
+      `;
+    }
+
+    function section(title, body, open = true) {
+      return `<details ${open ? "open" : ""}><summary>${esc(title)}</summary>${body}</details>`;
+    }
+
+    function renderReplies(rows) {
+      if (!rows.length) return section("Replies", `<div class="empty">没有回复</div>`);
+      return section("Replies", rows.map((r) => `
+        <div class="reply">
+          <div class="meta">reply#${r.id} · ${esc(r.author)} · ${esc(r.created_at)}</div>
+          <pre>${esc(r.content || "")}</pre>
+          ${r.debug_meta ? section("debug_meta", jsonBlock(r.debug_meta), false) : ""}
+        </div>
+      `).join(""));
+    }
+
+    function renderContextPacks(rows) {
+      if (!rows.length) return section("Context Packs", `<div class="empty">没有 context pack</div>`);
+      return section("Context Packs", rows.map((r) => `
+        <details open>
+          <summary>context_pack#${r.id} · reply#${r.reply_id || "-"} · ${esc(r.created_at)}</summary>
+          ${jsonBlock(r)}
+        </details>
+      `).join(""));
+    }
+
+    function renderGrowth(growth) {
+      return section("Memory Growth", `
+        <h3>comment_interpretation</h3>${jsonBlock(growth.interpretation)}
+        <h3>active_questions</h3>${jsonBlock(growth.active_questions)}
+        <h3>themes</h3>${jsonBlock(growth.themes)}
+        <h3>rule_candidates</h3>${jsonBlock(growth.rule_candidates)}
+        <h3>project_signals</h3>${jsonBlock(growth.project_signals)}
+        <h3>profile_signals</h3>${jsonBlock(growth.profile_signals)}
+      `);
+    }
+
+    function renderJobs(rows) {
+      return section("Jobs", rows.length ? jsonBlock(rows) : `<div class="empty">没有相关 job</div>`);
+    }
+
+    function renderDebugLogs(rows) {
+      if (!rows.length) return section("Debug Prompt Logs", `<div class="empty">没有 debug log</div>`);
+      return section("Debug Prompt Logs", `
+        ${rows.map((log) => `
+          <div class="panel">
+            <b>${esc(log.filename)}</b>
+            <div class="small">${esc(log.path)} · ${log.size} bytes · ${esc(log.modified_at)}</div>
+            <button data-debug-log="${esc(log.filename)}">加载完整 prompt</button>
+          </div>
+        `).join("")}
+        <div id="debug-log-content"></div>
+      `);
+    }
+
+    async function loadDebugLog(filename) {
+      const box = $("debug-log-content");
+      box.innerHTML = `<div class="empty">加载 ${esc(filename)}...</div>`;
+      try {
+        const data = await api(`/debug/debug-log/${encodeURIComponent(filename)}`);
+        box.innerHTML = `
+          <h3>${esc(data.filename)}</h3>
+          <p class="small">${esc(data.path)}</p>
+          <pre>${esc(data.content)}</pre>
+        `;
+      } catch (err) {
+        box.innerHTML = `<div class="empty bad">加载失败：${esc(err.message)}</div>`;
+      }
+    }
+
+    $("search").addEventListener("click", () => {
+      activeId = null;
+      loadComments();
+    });
+    $("q").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        activeId = null;
+        loadComments();
+      }
+    });
+    $("open-id").addEventListener("click", () => {
+      const id = Number($("comment-id").value.trim());
+      if (id) loadDetail(id);
+    });
+    $("comment-id").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        const id = Number($("comment-id").value.trim());
+        if (id) loadDetail(id);
+      }
+    });
+
+    loadComments();
+  </script>
+</body>
+</html>

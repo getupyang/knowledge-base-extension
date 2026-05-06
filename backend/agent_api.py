@@ -2189,6 +2189,225 @@ def get_failures(since: Optional[str] = None, limit: int = 50):
     return {"failures": out, "total": len(out)}
 
 
+def _debug_rows(conn, sql: str, params: tuple = ()) -> list:
+    conn.row_factory = sqlite3.Row
+    return [dict(row) for row in conn.execute(sql, params).fetchall()]
+
+
+def _debug_one(conn, sql: str, params: tuple = ()) -> Optional[dict]:
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(sql, params).fetchone()
+    return dict(row) if row else None
+
+
+def _debug_json(value, fallback=None):
+    if fallback is None:
+        fallback = {}
+    if value in (None, ""):
+        return fallback
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        return json.loads(value)
+    except Exception:
+        return value
+
+
+def _debug_parse_json_fields(row: Optional[dict], fields: list, fallback=None):
+    if not row:
+        return row
+    out = dict(row)
+    for field in fields:
+        out[field] = _debug_json(out.get(field), fallback)
+    return out
+
+
+def _debug_logs_for_comment(comment_id: int, limit: int = 8) -> list:
+    if not os.path.exists(DEBUG_LOG_DIR):
+        return []
+    marker = f"_id{comment_id}_"
+    logs = []
+    for filename in os.listdir(DEBUG_LOG_DIR):
+        if marker not in filename or not filename.endswith(".md"):
+            continue
+        path = os.path.join(DEBUG_LOG_DIR, filename)
+        try:
+            stat = os.stat(path)
+        except OSError:
+            continue
+        logs.append({
+            "filename": filename,
+            "path": path,
+            "size": stat.st_size,
+            "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+        })
+    logs.sort(key=lambda item: item["modified_at"], reverse=True)
+    return logs[:max(1, min(int(limit or 8), 50))]
+
+
+@app.get("/debug/comments")
+def debug_comments(limit: int = 30, page_url: Optional[str] = None, q: Optional[str] = None):
+    """Read-only SQLite console index: recent comments plus ledger/reply counts."""
+    limit = max(1, min(int(limit or 30), 100))
+    clauses = ["1=1"]
+    params = []
+    if page_url:
+        clauses.append("c.page_url = ?")
+        params.append(page_url)
+    if q:
+        like = f"%{q}%"
+        clauses.append("(c.comment LIKE ? OR c.selected_text LIKE ? OR c.page_title LIKE ? OR c.page_url LIKE ?)")
+        params.extend([like, like, like, like])
+
+    where_sql = " AND ".join(clauses)
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        rows = _debug_rows(conn, f"""
+            SELECT
+                c.id,
+                c.page_title,
+                c.page_url,
+                c.selected_text,
+                c.comment,
+                c.agent_type,
+                c.status,
+                c.created_at,
+                c.updated_at,
+                c.notion_page_id,
+                (SELECT COUNT(*) FROM replies r WHERE r.comment_id = c.id) AS reply_count,
+                (SELECT COUNT(*) FROM replies r WHERE r.comment_id = c.id AND r.author = 'agent') AS agent_reply_count,
+                (SELECT COUNT(*) FROM context_packs cp WHERE cp.comment_id = c.id) AS context_pack_count,
+                (SELECT COUNT(*) FROM jobs j
+                    WHERE j.payload_json LIKE '%"comment_id": ' || c.id || '%'
+                       OR j.payload_json LIKE '%"comment_id":' || c.id || '%') AS job_count,
+                (SELECT substr(r.content, 1, 180) FROM replies r
+                    WHERE r.comment_id = c.id AND r.author = 'agent'
+                    ORDER BY r.created_at DESC LIMIT 1) AS latest_agent_reply_preview,
+                l.local_status,
+                l.notion_status,
+                l.growth_status,
+                l.growth_processed_at,
+                l.growth_decision
+            FROM comments c
+            LEFT JOIN memory_intake_ledger l ON l.comment_id = c.id
+            WHERE {where_sql}
+            ORDER BY c.updated_at DESC
+            LIMIT ?
+        """, tuple(params + [limit]))
+        return {"items": rows, "total": len(rows), "db": DB_PATH}
+    finally:
+        conn.close()
+
+
+@app.get("/debug/comments/{comment_id}")
+def debug_comment_detail(comment_id: int):
+    """Read-only full trace for one comment: replies, context packs, ledger, growth, jobs."""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        comment = _debug_one(conn, "SELECT * FROM comments WHERE id=?", (comment_id,))
+        if not comment:
+            raise HTTPException(status_code=404, detail="comment not found")
+
+        replies = _debug_rows(conn, "SELECT * FROM replies WHERE comment_id=? ORDER BY created_at ASC", (comment_id,))
+        replies = [_debug_parse_json_fields(row, ["debug_meta"]) for row in replies]
+
+        context_packs = _debug_rows(
+            conn,
+            "SELECT * FROM context_packs WHERE comment_id=? ORDER BY created_at ASC",
+            (comment_id,),
+        )
+        context_packs = [
+            _debug_parse_json_fields(
+                row,
+                ["selected_skill_ids", "episodic_comment_ids", "same_page_comment_ids", "selection_reasons"],
+                [],
+            )
+            for row in context_packs
+        ]
+
+        ledger = _debug_parse_json_fields(
+            _debug_one(conn, "SELECT * FROM memory_intake_ledger WHERE comment_id=?", (comment_id,)),
+            ["growth_job_ids"],
+            [],
+        )
+
+        jobs = _debug_rows(
+            conn,
+            """SELECT * FROM jobs
+               WHERE payload_json LIKE ? OR payload_json LIKE ?
+               ORDER BY created_at ASC""",
+            (f'%"comment_id": {comment_id}%', f'%"comment_id":{comment_id}%'),
+        )
+        jobs = [_debug_parse_json_fields(row, ["payload_json"]) for row in jobs]
+
+        interpretation = _debug_parse_json_fields(
+            _debug_one(conn, "SELECT * FROM comment_interpretations WHERE comment_id=?", (comment_id,)),
+            ["interpretation_json", "decision"],
+        )
+        active_questions = _debug_rows(
+            conn,
+            "SELECT * FROM active_question_signals WHERE comment_id=? ORDER BY created_at ASC",
+            (comment_id,),
+        )
+        themes = _debug_rows(
+            conn,
+            "SELECT * FROM theme_signals WHERE comment_id=? ORDER BY created_at ASC",
+            (comment_id,),
+        )
+        themes = [_debug_parse_json_fields(row, ["representative_comment_ids"], []) for row in themes]
+        rule_candidates = _debug_rows(
+            conn,
+            "SELECT * FROM rule_candidates WHERE comment_id=? ORDER BY created_at ASC",
+            (comment_id,),
+        )
+        project_signals = _debug_rows(
+            conn,
+            "SELECT * FROM project_signals WHERE comment_id=? ORDER BY created_at ASC",
+            (comment_id,),
+        )
+        project_signals = [_debug_parse_json_fields(row, ["signal_json"]) for row in project_signals]
+        profile_signals = _debug_rows(
+            conn,
+            "SELECT * FROM profile_signals WHERE comment_id=? ORDER BY created_at ASC",
+            (comment_id,),
+        )
+        profile_signals = [_debug_parse_json_fields(row, ["signal_json"]) for row in profile_signals]
+
+        return {
+            "comment": comment,
+            "replies": replies,
+            "context_packs": context_packs,
+            "ledger": ledger,
+            "growth": {
+                "interpretation": interpretation,
+                "active_questions": active_questions,
+                "themes": themes,
+                "rule_candidates": rule_candidates,
+                "project_signals": project_signals,
+                "profile_signals": profile_signals,
+            },
+            "jobs": jobs,
+            "debug_logs": _debug_logs_for_comment(comment_id),
+            "db": DB_PATH,
+        }
+    finally:
+        conn.close()
+
+
+@app.get("/debug/debug-log/{filename}")
+def debug_log_file(filename: str):
+    """Read one prompt debug log by basename. This is read-only and constrained to DEBUG_LOG_DIR."""
+    safe_name = os.path.basename(filename)
+    if safe_name != filename or not safe_name.endswith(".md"):
+        raise HTTPException(status_code=400, detail="invalid debug log filename")
+    path = os.path.join(DEBUG_LOG_DIR, safe_name)
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="debug log not found")
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+    return {"filename": safe_name, "path": path, "content": content}
+
+
 @app.get("/learning/status")
 def learning_status():
     """学习层状态：查看当前画像、交互计数、下次触发时间"""
