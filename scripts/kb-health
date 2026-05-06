@@ -38,12 +38,23 @@ def load_kb_config():
     return config
 
 CONFIG = load_kb_config()
+for _k, _v in CONFIG.items():
+    os.environ.setdefault(_k, _v)
 DATA_DIR = Path(os.path.expanduser(CONFIG.get("KB_DATA_DIR") or os.environ.get("KB_DATA_DIR") or "~/.knowledge-base-extension"))
 DB_PATH = DATA_DIR / "comments.db"
 LOG_DIR = DATA_DIR / ".logs"
 FAILURE_LOG = LOG_DIR / "failures.jsonl"
 AGENT_LOG = LOG_DIR / "agent_api.log"
 SERVER_LOG = LOG_DIR / "server.log"
+
+sys.path.insert(0, str(BACKEND_DIR))
+try:
+    from llm_client import get_llm_status
+except Exception as e:
+    get_llm_status = None
+    LLM_IMPORT_ERROR = str(e)
+else:
+    LLM_IMPORT_ERROR = None
 
 OK, WARN, FAIL = "ok", "warn", "fail"
 SYM = {OK: "✓", WARN: "⚠", FAIL: "✗"}
@@ -183,24 +194,38 @@ def run_checks():
             results.append(check("失败日志 24h", FAIL,
                                  f"{n} 次失败！系统不稳定，立即排查 .logs/failures.jsonl"))
 
-    # 6. Claude CLI 可用（subprocess 调得通）
-    claude_bin = os.path.expanduser("~/.npm-global/bin/claude")
-    if not os.path.exists(claude_bin):
-        results.append(check("Claude CLI", FAIL, f"找不到 {claude_bin}"))
+    # 6. LLM provider 可用；Claude Code / Codex 是 optional capability
+    if get_llm_status is None:
+        results.append(check("LLM provider", FAIL, f"llm_client import failed: {LLM_IMPORT_ERROR}"))
     else:
-        # 不真实跑 prompt（要钱要时间），只验证 --version 类即时响应
-        try:
-            r = subprocess.run([claude_bin, "--version"],
-                               capture_output=True, timeout=10, text=True)
-            if r.returncode == 0:
-                results.append(check("Claude CLI", OK, r.stdout.strip()))
-            else:
-                results.append(check("Claude CLI", WARN,
-                                     f"--version 返回非 0: {r.stderr[:200]}"))
-        except subprocess.TimeoutExpired:
-            results.append(check("Claude CLI", FAIL, "--version 10秒内未响应"))
-        except Exception as e:
-            results.append(check("Claude CLI", FAIL, str(e)))
+        llm = get_llm_status()
+        if llm.get("error"):
+            results.append(check("LLM provider", FAIL, llm["error"]))
+        else:
+            detail = f"{llm.get('selected_provider')} (config={llm.get('provider_config')}, local_agent={llm.get('local_agent')})"
+            results.append(check("LLM provider", OK, detail))
+
+        for label, key, cmd in [
+            ("Claude Code", "claude_code", "claude"),
+            ("Codex CLI", "codex_cli", "codex"),
+        ]:
+            info = llm.get(key) or {}
+            bin_path = info.get("bin")
+            if not info.get("available") or not bin_path:
+                results.append(check(label, OK, "optional: 未安装或未启用"))
+                continue
+            try:
+                r = subprocess.run([bin_path, "--version"],
+                                   capture_output=True, timeout=10, text=True)
+                if r.returncode == 0:
+                    results.append(check(label, OK, r.stdout.strip() or bin_path))
+                else:
+                    results.append(check(label, WARN,
+                                         f"--version 返回非 0: {(r.stderr or r.stdout)[:200]}"))
+            except subprocess.TimeoutExpired:
+                results.append(check(label, WARN, "--version 10秒内未响应"))
+            except Exception as e:
+                results.append(check(label, WARN, str(e)))
 
     # 7. 飞轮入口：~/research/topics 可访问
     topics = Path.home() / "research" / "topics"

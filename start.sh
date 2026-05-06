@@ -14,7 +14,9 @@ if [ ! -f "$CONFIG_FILE" ]; then
   echo "  请先运行：bash $REPO_DIR/setup.sh"
   exit 1
 fi
+set -a
 source "$CONFIG_FILE"
+set +a
 
 export KB_DATA_DIR="${KB_DATA_DIR:-$HOME/.knowledge-base-extension}"
 LOG_DIR="$KB_DATA_DIR/.logs"
@@ -23,7 +25,10 @@ echo "→ 本地记忆目录：$KB_DATA_DIR"
 
 export KB_NOTION_TOKEN="$NOTION_TOKEN"
 export KB_NOTION_DATABASE_ID="$NOTION_DATABASE_ID"
-export KB_CLAUDE_BIN="$CLAUDE_BIN"
+export KB_CLAUDE_BIN="${MEMAI_CLAUDE_BIN:-${CLAUDE_BIN:-}}"
+export MEMAI_LLM_PROVIDER="${MEMAI_LLM_PROVIDER:-auto}"
+export MEMAI_LOCAL_AGENT="${MEMAI_LOCAL_AGENT:-none}"
+export MEMAI_LLM_FALLBACK="${MEMAI_LLM_FALLBACK:-fail}"
 export HOME="$HOME"  # 显式传递，防止 uvicorn 子进程丢失 HOME 导致 claude 找不到认证配置
 # RESEARCH_DIR：server.py 的文档根目录，从 ~/.kb_config 读（指向用户的私人 MD 文件目录）
 export RESEARCH_DIR="${RESEARCH_DIR:-$BACKEND_DIR}"

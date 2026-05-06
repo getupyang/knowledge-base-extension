@@ -2,7 +2,7 @@
 """
 评论区 Agent API
 端口：8766
-功能：评论存 SQLite + 触发 claude -p agent + 结果写回评论线程
+功能：评论存 SQLite + 触发 LLM agent + 结果写回评论线程
 """
 
 import sqlite3
@@ -19,6 +19,7 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from llm_client import LLMError, LLMTimeoutError, get_llm_client, get_llm_status
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -263,30 +264,18 @@ init_db()
 # 启动诊断日志（帮助新用户排查问题）
 # ──────────────────────────────────────────
 
-def _get_claude_bin():
-    configured = os.environ.get("KB_CLAUDE_BIN")
-    candidates = [
-        configured,
-        os.path.expanduser("~/.npm-global/bin/claude"),
-        shutil.which("claude"),
-        "/usr/local/bin/claude",
-        "/opt/homebrew/bin/claude",
-    ]
-    for candidate in candidates:
-        if candidate and os.path.exists(candidate):
-            return candidate
-    return configured or os.path.expanduser("~/.npm-global/bin/claude")
-
 def _startup_check():
-    claude_bin = _get_claude_bin()
+    llm = get_llm_status()
     notion_ok = bool(os.environ.get("KB_NOTION_TOKEN") or os.environ.get("NOTION_TOKEN"))
     print(f"[agent_api] 数据目录: {DATA_DIR}")
     print(f"[agent_api] 数据库: {DB_PATH} ({'✓' if os.path.exists(DB_PATH) else '✗ 不存在'})")
-    print(f"[agent_api] Claude: {claude_bin} ({'✓' if os.path.exists(claude_bin) else '✗ 未找到'})")
+    print(f"[agent_api] LLM provider: {llm.get('selected_provider') or '✗ 未配置'} ({llm.get('provider_config')})")
+    print(f"[agent_api] Claude Code: {llm['claude_code'].get('bin')} ({'✓' if llm['claude_code'].get('available') else 'optional: 未找到'})")
+    print(f"[agent_api] Codex CLI: {llm['codex_cli'].get('bin')} ({'✓' if llm['codex_cli'].get('available') else 'optional: 未找到'})")
     print(f"[agent_api] Notion Token: {'✓ 已配置' if notion_ok else '✗ 未配置'}")
     print(f"[agent_api] HOME: {os.environ.get('HOME', '未设置')}")
-    if not os.path.exists(claude_bin):
-        print(f"[agent_api] ⚠ claude 二进制未找到，agent 调用将失败。请检查 ~/.kb_config 中的 CLAUDE_BIN")
+    if llm.get("error"):
+        print(f"[agent_api] ⚠ LLM provider 不可用：{llm['error']}")
 
 _startup_check()
 
@@ -510,19 +499,14 @@ def _get_child_env():
     return env
 
 def _call_claude(prompt: str, system_prompt: str, timeout: int = 1800) -> tuple:
-    """调用 claude -p，返回 (content_str, returncode)"""
-    result = subprocess.run(
-        [_get_claude_bin(), "-p", prompt, "--output-format", "json",
-         "--dangerously-skip-permissions", "--system-prompt", system_prompt],
-        capture_output=True, text=True, timeout=timeout, env=_get_child_env()
-    )
-    if result.returncode == 0:
-        try:
-            data = json.loads(result.stdout)
-            return data.get("result", ""), 0
-        except json.JSONDecodeError:
-            return result.stdout, 0
-    return (result.stderr or result.stdout or "")[:1000], result.returncode
+    """Legacy name kept for call-site stability. Calls configured LLM provider."""
+    try:
+        content = get_llm_client().generate_text(prompt, system_prompt=system_prompt, timeout=timeout)
+        return content, 0
+    except LLMTimeoutError as e:
+        raise subprocess.TimeoutExpired(cmd="llm_provider", timeout=timeout) from e
+    except LLMError as e:
+        return str(e)[:1000], 1
 
 def _parse_router_json(text: str) -> dict:
     """从路由器回复中提取 JSON，支持多层降级"""
@@ -558,9 +542,56 @@ def _parse_router_json(text: str) -> dict:
 
     return None  # 完全无法解析
 
+
+def _codex_router_should_use_heuristic() -> bool:
+    """Codex CLI has high process startup latency; avoid spending it on routing."""
+    if os.environ.get("MEMAI_CODEX_USE_LLM_ROUTER") == "1":
+        return False
+    try:
+        return get_llm_status().get("selected_provider") == "codex_cli"
+    except Exception:
+        return False
+
+
+def _heuristic_router_result(comment: str, selected_text: str = "", page_title: str = "") -> dict:
+    text = f"{comment or ''}\n{selected_text or ''}\n{page_title or ''}".lower()
+    explain_words = [
+        "解释", "什么意思", "是什么", "怎么理解", "why", "what is", "explain",
+        "不懂", "看不懂", "讲一下",
+    ]
+    research_words = [
+        "调研", "研究", "竞品", "搜索", "查一下", "找一下", "帮我找", "整理资料",
+        "报告", "对比", "benchmark", "market", "competitor",
+    ]
+    task_words = [
+        "帮我", "做一个", "写一份", "整理", "加入", "记录到", "关注", "以后",
+        "todo", "日报", "雷达", "watchlist",
+    ]
+    if any(w in text for w in research_words):
+        role = "researcher"
+    elif any(w in text for w in explain_words):
+        role = "explainer"
+    else:
+        role = "sparring_partner"
+    intent = "task" if any(w in text for w in task_words + research_words) else "dialogue"
+    return {
+        "intent": intent,
+        "role": role,
+        "confidence": 0.35,
+        "plan": "",
+        "learned": [],
+        "quick_response": "",
+        "_heuristic_router": True,
+    }
+
 def run_router(page_url: str, page_title: str, selected_text: str,
                surrounding_text: str, comment: str, last_ai_reply: str = "") -> dict:
     """调用路由器 prompt（Step 1），返回解析后的 JSON dict"""
+    if _codex_router_should_use_heuristic():
+        result = _heuristic_router_result(comment, selected_text, page_title)
+        print(f"[agent_api] router heuristic: intent={result.get('intent')} role={result.get('role')} provider=codex_cli")
+        return result
+
     template = load_prompt_template("router")
     if not template:
         return None  # 路由器文件缺失，走 v1 fallback
@@ -1010,7 +1041,12 @@ def run_agent_v2(comment_id: int, intent: str, role: str, prompt: str,
     else:
         # 需要调 Step 2
         print(f"[agent_api] v2 Step 2: comment_id={comment_id} role={role} prompt_len={len(prompt)}")
-        system_prompt = "你是知识库助手的评论区 agent。直接回答用户的问题，不要执行任何 session 初始化流程（不要同步 Notion、不要读 todo、不要确认 session 阶段）。只根据下面的 prompt 内容回复。"
+        system_prompt = (
+            "你是知识库助手的评论区 agent。直接回答用户的问题，不要执行任何 session 初始化流程"
+            "（不要同步 Notion、不要读 todo、不要确认 session 阶段）。只根据下面的 prompt 内容回复。"
+            "默认写成简洁的评论区回复：先给结论，少铺垫；除非用户明确要求深度调研或长文，"
+            "否则控制在 300-500 字以内，最多 5 个要点。不要为了显得全面而展开所有分支。"
+        )
         try:
             content, rc = _call_claude(prompt, system_prompt, timeout=1800)
             if rc == 0 and content:
@@ -1075,7 +1111,10 @@ def run_agent_v1_fallback(comment_id: int, agent_type: str,
     role = v1_role_map.get(agent_type, "sparring_partner")
     prompt = build_role_prompt(role, page_url, "", selected_text, surrounding_text, comment)
 
-    system_prompt = "你是知识库助手的评论区 agent。直接回答用户的问题，不要执行任何 session 初始化流程。"
+    system_prompt = (
+        "你是知识库助手的评论区 agent。直接回答用户的问题，不要执行任何 session 初始化流程。"
+        "默认简洁：先给结论，控制在 300-500 字以内，最多 5 个要点。"
+    )
     status = "error"
     content = ""
     try:
@@ -1576,11 +1615,12 @@ def trigger_profile_review():
 @app.get("/debug-env")
 def debug_env():
     """验收用：确认 uvicorn 子进程的关键环境变量正确（不暴露敏感 token）"""
-    claude_bin = _get_claude_bin()
+    llm = get_llm_status()
     return {
         "HOME": os.environ.get("HOME", "（未设置）"),
-        "claude_bin": claude_bin,
-        "claude_bin_exists": os.path.exists(claude_bin),
+        "llm": llm,
+        "claude_bin": llm["claude_code"].get("bin"),
+        "claude_bin_exists": llm["claude_code"].get("available"),
         "notion_token_set": bool(os.environ.get("NOTION_TOKEN") or os.environ.get("KB_NOTION_TOKEN")),
         "data_dir": DATA_DIR,
         "db_path": DB_PATH,
@@ -2361,7 +2401,7 @@ def _llm_distill_skills(rules: list) -> dict:
 
     content, rc = _call_claude(prompt, sys_prompt, timeout=180)
     if rc != 0:
-        raise RuntimeError(f"claude exit {rc}: {content[:300]}")
+        raise RuntimeError(f"LLM provider error {rc}: {content[:300]}")
 
     parsed = _safe_parse_curated_json(content)
     valid_ids = {r.get("id") for r in rules}
@@ -2595,6 +2635,20 @@ def notebook_rules_curated():
     """
     rules = _load_active_rules()
     if len(rules) < 3:
+        active = _read_active_skills()
+        if active.get("skills"):
+            generation = active.get("latest_generation") or {}
+            return {
+                "skills": [{"name": s["name"], "description": s["description"],
+                            "evidence_rule_ids": s["evidence_rule_ids"]} for s in active["skills"]],
+                "uncategorized_rule_ids": [],
+                "_status": "ok",
+                "_message": "当前原始规则不足，先保留上一次已提炼的工作方式。",
+                "_total_rules": generation.get("source_rules_count") or len(rules),
+                "_generation_id": generation.get("id"),
+                "_persisted": True,
+                "_stale_rules_source": True,
+            }
         return {"skills": [], "uncategorized_rule_ids": [], "_status": "insufficient_data",
                 "_message": f"当前只有 {len(rules)} 条 active 规则，先批注几次让 AI 学到东西",
                 "_total_rules": len(rules)}
@@ -2725,7 +2779,7 @@ def notebook_profile_curated():
     try:
         content, rc = _call_claude(prompt, sys_prompt, timeout=120)
         if rc != 0:
-            raise HTTPException(status_code=502, detail=f"claude exit {rc}: {content[:300]}")
+            raise HTTPException(status_code=502, detail=f"LLM provider error {rc}: {content[:300]}")
         parsed = _safe_parse_curated_json(content)
         # 校验字段
         if not isinstance(parsed.get("one_liner"), str):

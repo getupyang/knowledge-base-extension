@@ -562,7 +562,7 @@ function renderThinking(data) {
   const box = $("kb-nb-thinking-active");
   // 优先展示 running 状态
   if (data.running_job) {
-    box.innerHTML = `<div class="kb-nb-thinking-running">AI 正在用 Opus 整理你最近的思考，约 30–60 秒…</div>`;
+    box.innerHTML = `<div class="kb-nb-thinking-running">AI 正在整理你最近的思考，Codex 本地模式可能需要 1–3 分钟…</div>`;
     return;
   }
   if (!data.active) {
@@ -662,9 +662,9 @@ function renderThinkingFailed(job) {
       <p><strong>错误：</strong><code>${escapeHtml(errShort)}</code></p>
       <p>常见原因：</p>
       <ul>
-        <li>Opus 限流（看 <code>backend/.logs/worker.log</code> 是否 429 / quota）</li>
+        <li>当前 LLM 后端不可用、超时或被限流</li>
         <li>JSON 解析失败（worker 已加多策略 fallback，但仍可能踩雷）</li>
-        <li>claude CLI 超时</li>
+        <li>本地 CLI 后端超时</li>
       </ul>
       <p>排查：<code>tail -50 backend/.logs/worker.log</code> + <code>tail backend/.logs/failures.jsonl</code></p>
     </div>

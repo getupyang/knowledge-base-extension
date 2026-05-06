@@ -149,10 +149,16 @@ This is an active prototype, not a finished product.
 | macOS | 12+ | 目前仅支持 Mac |
 | Python 3 | 3.9+ | `python3 --version` |
 | Node.js | 18+ | `node --version` |
-| Claude Code | 最新 | `npm install -g @anthropic-ai/claude-code` |
 | Chrome | 最新 | 用于加载插件 |
-| Claude Pro 账号 | — | Claude Code 需要登录 |
 | Notion 账号 | — | 用于存储批注 |
+| LLM 后端 | — | 二选一：OpenAI-compatible API key，或本地 Claude Code / Codex CLI |
+
+可选本地后端：
+
+- Claude Code：`npm install -g @anthropic-ai/claude-code`，适合已有 Claude 订阅的用户
+- Codex CLI：适合已有 Codex 本地环境的用户
+
+没有本地后端也能使用标准模式，配置 OpenRouter / OpenAI / DeepSeek / Kimi 等兼容 API 即可。
 
 ---
 
@@ -165,15 +171,19 @@ git clone https://github.com/getupyang/knowledge-base-extension.git
 cd knowledge-base-extension
 ```
 
-### 第二步：登录 Claude Code
+### 第二步：准备 LLM 后端
+
+mem-ai 支持两种方式：
+
+1. 本地后端：如果你已经安装并登录 Claude Code / Codex CLI，可以在安装脚本里固定选择一个后端，复用本地订阅额度。
+2. API 标准模式：如果没有本地后端，在 `setup.sh` 中填写 OpenAI-compatible API key。
+
+如果同一台机器同时有 Claude Code 和 Codex CLI，安装脚本会要求你手动选择一个固定后端。mem-ai 不会自动在二者之间切换；后续要切换时，修改 `~/.kb_config` 里的 `MEMAI_LLM_PROVIDER` 后重启。
+
+Claude Code 用户可先登录：
 
 ```bash
 claude login
-```
-
-按提示完成浏览器授权。验证登录成功：
-
-```bash
 claude --version
 ```
 
@@ -226,6 +236,7 @@ bash setup.sh
 - 检查所有依赖是否就绪
 - 安装 Python 依赖（fastapi、uvicorn）
 - 引导你输入 Notion Token 和 Database ID，写入 `~/.kb_config`
+- 引导你固定选择一个 LLM 后端：Claude Code / Codex / API
 - 初始化本地 SQLite 数据库
 - 验证 Notion Token 是否有效
 
@@ -384,12 +395,34 @@ cat ~/.knowledge-base-extension/user_profile.md
 cat ~/.knowledge-base-extension/learned_rules.json
 ```
 
-**Q: `claude` 命令找不到**
+**Q: 没有 Claude Code / Codex 能用吗？**
+
+可以。运行 `bash setup.sh` 时填写 OpenRouter / OpenAI / DeepSeek / Kimi 等 OpenAI-compatible API key，即可使用标准模式。标准模式支持评论区回复、记忆笔记本、profile / skills / thinking 蒸馏；本地文件维护和长链路交付任务需要本地 agent 后端。
+
+**Q: 我有 Claude Code，能不额外花 API 钱吗？**
+
+可以。安装并登录后，`setup.sh` 会检测到 `claude`，默认优先走本地：
 
 ```bash
 npm install -g @anthropic-ai/claude-code
 claude login
 ```
+
+如果同时配置了 API key，本地后端失败时是否自动 fallback 到 API 由 `~/.kb_config` 里的 `MEMAI_LLM_FALLBACK=api|fail` 控制。默认是 `fail`，避免不知情地产生 API 成本。
+
+**Q: 同时安装了 Claude Code 和 Codex，会自动选哪个？**
+
+不会自动选。安装时必须固定选择一个：
+
+```bash
+MEMAI_LLM_PROVIDER=claude_code
+# 或
+MEMAI_LLM_PROVIDER=codex_cli
+# 或
+MEMAI_LLM_PROVIDER=api
+```
+
+切换后重新运行 `bash start.sh`。
 
 **Q: 插件配置页保存后不生效**
 
