@@ -1119,6 +1119,175 @@ const commentSystem = (() => {
     currentExcerpt = "";
   }
 
+  function _readCardUiState(commentId) {
+    const contentEl = document.getElementById("kb-cmt-content-" + commentId);
+    const replyBox = document.getElementById("kb-inline-reply-" + commentId);
+    const replyTa = document.getElementById("kb-reply-ta-" + commentId);
+    return {
+      expanded: !!contentEl?.classList.contains("expanded"),
+      replyOpen: !!replyBox && !replyBox.classList.contains("kb-expand-hidden"),
+      replyDraft: replyTa?.value || "",
+    };
+  }
+
+  function _applyCardUiState(commentId, state) {
+    const contentEl = document.getElementById("kb-cmt-content-" + commentId);
+    const expandBtn = document.getElementById("kb-cmt-expand-" + commentId);
+    const replyBox = document.getElementById("kb-inline-reply-" + commentId);
+    const replyTa = document.getElementById("kb-reply-ta-" + commentId);
+    if (contentEl && state?.expanded) contentEl.classList.add("expanded");
+    if (expandBtn && state?.expanded) expandBtn.textContent = "收起 ↑";
+    if (replyBox && state?.replyOpen) replyBox.classList.remove("kb-expand-hidden");
+    if (replyTa && state?.replyDraft) replyTa.value = state.replyDraft;
+  }
+
+  function _refreshCardOverflow(commentId) {
+    const contentEl = document.getElementById("kb-cmt-content-" + commentId);
+    const expandBtn = document.getElementById("kb-cmt-expand-" + commentId);
+    if (!contentEl || !expandBtn) return;
+    contentEl.classList.remove("overflowing");
+    if (contentEl.scrollHeight > 300 + 10) {
+      contentEl.classList.add("overflowing");
+      expandBtn.classList.remove("kb-expand-hidden");
+    }
+  }
+
+  function _getPanelScrollAnchor(body) {
+    if (!body) return null;
+    const bodyRect = body.getBoundingClientRect();
+    const cards = Array.from(body.querySelectorAll(".kb-cmt-card"));
+    const card = cards.find(el => {
+      const r = el.getBoundingClientRect();
+      return r.bottom > bodyRect.top + 8 && r.top < bodyRect.bottom - 8;
+    });
+    if (!card) return null;
+    return {
+      id: card.id,
+      offsetTop: card.getBoundingClientRect().top - bodyRect.top,
+    };
+  }
+
+  function _restorePanelScrollAnchor(body, anchor) {
+    if (!body || !anchor) return;
+    const card = document.getElementById(anchor.id);
+    if (!card) return;
+    const bodyRect = body.getBoundingClientRect();
+    const nextOffsetTop = card.getBoundingClientRect().top - bodyRect.top;
+    body.scrollTop += nextOffsetTop - anchor.offsetTop;
+  }
+
+  function _renderCommentCard(c) {
+    const t = new Date(c.createdAt);
+    const timeStr = `${t.getMonth()+1}/${t.getDate()} ${String(t.getHours()).padStart(2,"0")}:${String(t.getMinutes()).padStart(2,"0")}`;
+    const repliesHtml = c.replies.map(r => {
+      let debugHtml = "";
+      if (DEBUG_MODE && r.isAI && r.debugMeta) {
+        try {
+          const dm = typeof r.debugMeta === "string" ? JSON.parse(r.debugMeta) : r.debugMeta;
+          if (dm.version) {
+            const ver = dm.version === "v1_fallback" ? "v1↓" : "v2";
+            const roleLabel = dm.role || "?";
+            const intentLabel = dm.intent || "?";
+            const quickLabel = dm.is_quick ? " ⚡quick" : "";
+            const planLabel = dm.is_plan ? " 📋plan" : "";
+            const rulesHtml = (dm.rules_applied || []).length > 0
+              ? `<br>Rules: ${dm.rules_applied.map(r => `「${r}」`).join(" ")}`
+              : "";
+            debugHtml = `
+              <details class="kb-debug">
+                <summary>▶ Debug</summary>
+                <div class="kb-debug-body">
+                  [${ver}] ${intentLabel}/${roleLabel}${quickLabel}${planLabel} · ${dm.elapsed_s}s · ~${dm.prompt_tokens_est || "?"} tokens<br>
+                  状态: ${dm.status}${rulesHtml}
+                </div>
+              </details>`;
+          } else {
+            const ctx = dm.context_layers || {};
+            const notionOk = ctx.notion_memory ? "✓" : "✗";
+            const selOk = ctx.selected_text ? "✓" : "✗";
+            debugHtml = `
+              <details class="kb-debug">
+                <summary>▶ Debug</summary>
+                <div class="kb-debug-body">
+                  [v1] @${dm.agent_type} · ${dm.elapsed_s}s · ~${dm.prompt_tokens_est} tokens<br>
+                  Context: project✓ notion${notionOk} selected_text${selOk}<br>
+                  状态: ${dm.status}
+                </div>
+              </details>`;
+          }
+        } catch (e) { /* 解析失败静默 */ }
+      }
+      const safeText = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      const bodyHtml = r.isAI
+        ? (typeof marked !== "undefined" ? marked.parse(r.text) : safeText(r.text))
+        : `<span>${safeText(r.text)}</span>`;
+      const ageS = Math.max(1, Math.round((Date.now() - new Date(r.createdAt).getTime()) / 1000));
+      const ageStr = ageS < 60 ? `${ageS} 秒前`
+                   : ageS < 3600 ? `${Math.round(ageS/60)} 分钟前`
+                   : ageS < 86400 ? `${Math.round(ageS/3600)} 小时前`
+                   : new Date(r.createdAt).toLocaleString("zh",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"});
+      const labelHtml = r.isAI
+        ? `<span class="kb-reply-tag">AI</span>响应 · ${ageStr}`
+        : `你 · ${ageStr}`;
+      return `
+      <div class="kb-reply ${r.isAI ? "ai" : "user"}">
+        <div class="kb-reply-label">${labelHtml}</div>
+        <div class="kb-reply-body">${bodyHtml}</div>
+        ${debugHtml}
+      </div>`;
+    }).join("");
+    const hasAI = c.replies.some(r => r.isAI);
+    return `
+      <div class="kb-cmt-card" id="kb-cmt-${c.id}">
+        ${c.excerpt ? `<div class="kb-cmt-quote">"${escapeHtml(c.excerpt.slice(0,100))}${c.excerpt.length>100?"…":""}"</div>` : ""}
+        <div class="kb-cmt-content" id="kb-cmt-content-${c.id}">
+          <div class="kb-cmt-text">${escapeHtml(c.text)}</div>
+          <div class="kb-cmt-meta">${timeStr}</div>
+          ${repliesHtml}
+        </div>
+        <button class="kb-cmt-expand kb-expand-hidden" id="kb-cmt-expand-${c.id}" data-expand="${c.id}">展开全部 ↓</button>
+        <div style="display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap;">
+          ${_askAIRunning.has(c.id)
+            ? `<span style="color:var(--kb-blue);font-size:11px;font-family:'JetBrains Mono',monospace;letter-spacing:0.04em;">AI 思考中…</span>`
+            : !hasAI
+              ? `<button class="kb-ai-btn" data-ask-ai="${c.id}">请 AI 回复</button>`
+              : `<button class="kb-reply-btn" data-open-reply="${c.id}">继续追问</button>`
+          }
+        </div>
+        <div class="kb-inline-reply kb-expand-hidden" id="kb-inline-reply-${c.id}">
+          <textarea placeholder="继续追问…（Cmd+Enter 发送）" id="kb-reply-ta-${c.id}"></textarea>
+          <div class="kb-inline-reply-actions">
+            <button class="kb-reply-send" data-send-reply="${c.id}">发送</button>
+            <button class="kb-reply-btn" data-close-reply="${c.id}">取消</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function updateCommentCard(commentId) {
+    const body = document.getElementById("kb-cp-body");
+    const oldCard = document.getElementById("kb-cmt-" + commentId);
+    if (!body || !oldCard) {
+      render();
+      return;
+    }
+    const c = load().find(x => x.id === commentId);
+    if (!c) {
+      oldCard.remove();
+      return;
+    }
+    const uiState = _readCardUiState(commentId);
+    const scrollAnchor = _getPanelScrollAnchor(body);
+    const wrapper = document.createElement("div");
+    wrapper.innerHTML = _renderCommentCard(c).trim();
+    const newCard = wrapper.firstElementChild;
+    oldCard.replaceWith(newCard);
+    _applyCardUiState(commentId, uiState);
+    _refreshCardOverflow(commentId);
+    _restorePanelScrollAnchor(body, scrollAnchor);
+  }
+
   // ── 渲染评论列表 ──
   function render() {
     const body = document.getElementById("kb-cp-body");
@@ -1141,107 +1310,10 @@ const commentSystem = (() => {
       body.innerHTML = '<div class="kb-empty">选中文字 → 点「评论」<br>留下你的判断、疑问或偏好</div>';
       return;
     }
-    body.innerHTML = comments.map(c => {
-      const t = new Date(c.createdAt);
-      const timeStr = `${t.getMonth()+1}/${t.getDate()} ${String(t.getHours()).padStart(2,"0")}:${String(t.getMinutes()).padStart(2,"0")}`;
-      const repliesHtml = c.replies.map(r => {
-        let debugHtml = "";
-        if (DEBUG_MODE && r.isAI && r.debugMeta) {
-          try {
-            const dm = typeof r.debugMeta === "string" ? JSON.parse(r.debugMeta) : r.debugMeta;
-            // v2 格式
-            if (dm.version) {
-              const ver = dm.version === "v1_fallback" ? "v1↓" : "v2";
-              const roleLabel = dm.role || "?";
-              const intentLabel = dm.intent || "?";
-              const quickLabel = dm.is_quick ? " ⚡quick" : "";
-              const planLabel = dm.is_plan ? " 📋plan" : "";
-              const rulesHtml = (dm.rules_applied || []).length > 0
-                ? `<br>Rules: ${dm.rules_applied.map(r => `「${r}」`).join(" ")}`
-                : "";
-              debugHtml = `
-                <details class="kb-debug">
-                  <summary>▶ Debug</summary>
-                  <div class="kb-debug-body">
-                    [${ver}] ${intentLabel}/${roleLabel}${quickLabel}${planLabel} · ${dm.elapsed_s}s · ~${dm.prompt_tokens_est || "?"} tokens<br>
-                    状态: ${dm.status}${rulesHtml}
-                  </div>
-                </details>`;
-            } else {
-              // v1 旧格式兼容
-              const ctx = dm.context_layers || {};
-              const notionOk = ctx.notion_memory ? "✓" : "✗";
-              const selOk = ctx.selected_text ? "✓" : "✗";
-              debugHtml = `
-                <details class="kb-debug">
-                  <summary>▶ Debug</summary>
-                  <div class="kb-debug-body">
-                    [v1] @${dm.agent_type} · ${dm.elapsed_s}s · ~${dm.prompt_tokens_est} tokens<br>
-                    Context: project✓ notion${notionOk} selected_text${selOk}<br>
-                    状态: ${dm.status}
-                  </div>
-                </details>`;
-            }
-          } catch (e) { /* 解析失败静默 */ }
-        }
-        const safeText = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-        const bodyHtml = r.isAI
-          ? (typeof marked !== "undefined" ? marked.parse(r.text) : safeText(r.text))
-          : `<span>${safeText(r.text)}</span>`; // pre-wrap 来自 CSS，不需要 <br>
-        const ageS = Math.max(1, Math.round((Date.now() - new Date(r.createdAt).getTime()) / 1000));
-        const ageStr = ageS < 60 ? `${ageS} 秒前`
-                     : ageS < 3600 ? `${Math.round(ageS/60)} 分钟前`
-                     : ageS < 86400 ? `${Math.round(ageS/3600)} 小时前`
-                     : new Date(r.createdAt).toLocaleString("zh",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"});
-        const labelHtml = r.isAI
-          ? `<span class="kb-reply-tag">AI</span>响应 · ${ageStr}`
-          : `你 · ${ageStr}`;
-        return `
-        <div class="kb-reply ${r.isAI ? "ai" : "user"}">
-          <div class="kb-reply-label">${labelHtml}</div>
-          <div class="kb-reply-body">${bodyHtml}</div>
-          ${debugHtml}
-        </div>`;
-      }).join("");
-      const hasAI = c.replies.some(r => r.isAI);
-      return `
-        <div class="kb-cmt-card" id="kb-cmt-${c.id}">
-          ${c.excerpt ? `<div class="kb-cmt-quote">"${escapeHtml(c.excerpt.slice(0,100))}${c.excerpt.length>100?"…":""}"</div>` : ""}
-          <div class="kb-cmt-content" id="kb-cmt-content-${c.id}">
-            <div class="kb-cmt-text">${escapeHtml(c.text)}</div>
-            <div class="kb-cmt-meta">${timeStr}</div>
-            ${repliesHtml}
-          </div>
-          <button class="kb-cmt-expand kb-expand-hidden" id="kb-cmt-expand-${c.id}" data-expand="${c.id}">展开全部 ↓</button>
-          <div style="display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap;">
-            ${!hasAI
-              ? `<button class="kb-ai-btn" data-ask-ai="${c.id}">请 AI 回复</button>`
-              : _askAIRunning.has(c.id)
-                ? `<span style="color:var(--kb-blue);font-size:11px;font-family:'JetBrains Mono',monospace;letter-spacing:0.04em;">AI 思考中…</span>`
-                : `<button class="kb-reply-btn" data-open-reply="${c.id}">继续追问</button>`
-            }
-          </div>
-          <div class="kb-inline-reply kb-expand-hidden" id="kb-inline-reply-${c.id}">
-            <textarea placeholder="继续追问…（Cmd+Enter 发送）" id="kb-reply-ta-${c.id}"></textarea>
-            <div class="kb-inline-reply-actions">
-              <button class="kb-reply-send" data-send-reply="${c.id}">发送</button>
-              <button class="kb-reply-btn" data-close-reply="${c.id}">取消</button>
-            </div>
-          </div>
-        </div>
-      `;
-    }).join("");
+    body.innerHTML = comments.map(_renderCommentCard).join("");
 
     // 检查每张卡片是否溢出，显示折叠按钮
-    comments.forEach(c => {
-      const contentEl = document.getElementById("kb-cmt-content-" + c.id);
-      const expandBtn = document.getElementById("kb-cmt-expand-" + c.id);
-      if (!contentEl || !expandBtn) return;
-      if (contentEl.scrollHeight > 300 + 10) {
-        contentEl.classList.add("overflowing");
-        expandBtn.classList.remove("kb-expand-hidden");
-      }
-    });
+    comments.forEach(c => _refreshCardOverflow(c.id));
     // 恢复追问框草稿和展开状态
     for (const [id, draft] of Object.entries(drafts)) {
       const ta = document.getElementById("kb-reply-ta-" + id);
@@ -1311,7 +1383,7 @@ const commentSystem = (() => {
 
     // 存到 localStorage replies（isAI=false）
     addReply(commentId, text, false);
-    render();
+    updateCommentCard(commentId);
 
     // 同步到 agent_api（追加 user reply）
     const comments = load();
@@ -1481,6 +1553,7 @@ const commentSystem = (() => {
   async function askAI(commentId) {
     if (_askAIRunning.has(commentId)) return; // AI 还在回复，忽略
     _askAIRunning.add(commentId);
+    updateCommentCard(commentId);
     // 立即禁用追问输入（不等 render，直接操作 DOM）
     _lockReplyInput(commentId, true);
 
@@ -1626,8 +1699,8 @@ const commentSystem = (() => {
 
     removeThinking();
     _askAIRunning.delete(commentId);
+    updateCommentCard(commentId);
     _lockReplyInput(commentId, false);
-    render();
   }
 
   // ── 对外接口：打开评论面板（高亮由调用方处理）──
