@@ -1571,6 +1571,7 @@ const commentSystem = (() => {
         const comments = load();
         const match = comments.find(x => x.id === c.id);
         if (match) { match.agentCommentId = data.id; save(comments); }
+        c.agentCommentId = data.id;
         status.textContent = "✓ 已保存";
       } else {
         status.textContent = "✓ 已保存（agent 离线）";
@@ -1640,6 +1641,7 @@ const commentSystem = (() => {
       if (resp.success) {
         if (resp.notionSynced === false && resp.notionError) console.warn("[KB] Notion not synced:", resp.notionError);
         if (resp.pageId && !comment.notionPageId) {
+          comment.notionPageId = resp.pageId;
           const comments = load();
           const match = comments.find(x => x.id === comment.id);
           if (match) { match.notionPageId = resp.pageId; save(comments); }
@@ -1731,8 +1733,9 @@ const commentSystem = (() => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ comment: conversationComment }),
         });
-        if (!patchResp.ok) console.warn("[KB] PATCH comment failed:", patchResp.status);
-        await fetch(`http://localhost:8766/comments/${agentCommentId}/rerun`, { method: "POST" });
+        if (!patchResp.ok) throw new Error(`无法更新追问内容（HTTP ${patchResp.status}）`);
+        const rerunResp = await fetch(`http://localhost:8766/comments/${agentCommentId}/rerun`, { method: "POST" });
+        if (!rerunResp.ok) throw new Error(`无法重新召唤 AI（HTTP ${rerunResp.status}）`);
       } else {
         const surrounding = getSurroundingText(c.excerpt || "");
         const resp = await fetch("http://localhost:8766/comments", {
