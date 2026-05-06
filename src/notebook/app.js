@@ -69,6 +69,7 @@ function switchTab(tab) {
   // URL 同步
   if (location.hash !== "#" + tab) location.hash = tab;
   // 懒加载具体页
+  if (tab === "chat") loadChat();
   if (tab === "thinking") loadThinking();
   if (tab === "diary") loadDiary();
 }
@@ -678,7 +679,89 @@ function renderThinkingFailed(job) {
 
 $("kb-nb-thinking-refresh").addEventListener("click", () => requestThinking("user_request"));
 
-// ─── 5. 共同日记 ───
+// ─── 5. 问记忆（Memory Chat V0）───
+let _chatSending = false;
+
+function bindCommentRefInteractions(rootEl) {
+  if (!rootEl) return;
+  activateCommentRefs(rootEl);
+  rootEl.querySelectorAll(".kb-nb-cref").forEach(a => {
+    a.addEventListener("mouseenter", () => showCrefHoverFor(a));
+    a.addEventListener("mouseleave", () => hideCrefHover());
+    a.addEventListener("click", async (e) => {
+      e.preventDefault();
+      const id = parseInt(a.dataset.cid, 10);
+      const c = await fetchComment(id);
+      if (c && c.page_url) {
+        window.open(c.page_url, "_blank", "noopener");
+      } else {
+        toast("c#" + id + " 没找到 / 没有来源页");
+      }
+    });
+  });
+}
+
+async function loadChat() {
+  const thread = $("kb-nb-chat-thread");
+  try {
+    const data = await api("/notebook/chat?limit=40");
+    $("kb-nb-count-chat").textContent = data.items.length || 0;
+    if (!data.items.length) {
+      thread.innerHTML = `<div class="kb-nb-empty">还没有记忆问答。</div>`;
+      return;
+    }
+    thread.innerHTML = data.items.map(renderChatMessage).join("");
+    bindCommentRefInteractions(thread);
+    thread.scrollTop = thread.scrollHeight;
+  } catch (e) {
+    thread.innerHTML = `<div class="kb-nb-empty">读取失败</div>`;
+  }
+}
+
+function renderChatMessage(m) {
+  const role = m.role === "user" ? "你" : "AGENT";
+  const body = m.role === "assistant" ? md(m.content || "") : escapeHtml(m.content || "").replace(/\n/g, "<br>");
+  return `
+    <div class="kb-nb-chat-msg ${m.role === "assistant" ? "assistant" : "user"}">
+      <div class="kb-nb-chat-meta">${role} · ${fmtTimeAgo(m.created_at)}</div>
+      <div class="kb-nb-chat-body">${body}</div>
+    </div>
+  `;
+}
+
+async function sendMemoryChat(message) {
+  if (_chatSending) return;
+  _chatSending = true;
+  const btn = $("kb-nb-chat-submit");
+  const input = $("kb-nb-chat-input");
+  btn.disabled = true;
+  btn.textContent = "读取中…";
+  try {
+    await api("/notebook/chat", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({message})
+    });
+    input.value = "";
+    await loadChat();
+  } catch (e) {
+    toast("记忆问答失败");
+  } finally {
+    _chatSending = false;
+    btn.disabled = false;
+    btn.textContent = "发送";
+  }
+}
+
+$("kb-nb-chat-form").addEventListener("submit", e => {
+  e.preventDefault();
+  const input = $("kb-nb-chat-input");
+  const message = (input.value || "").trim();
+  if (!message) return;
+  sendMemoryChat(message);
+});
+
+// ─── 6. 共同日记 ───
 async function loadDiary() {
   try {
     const data = await api("/notebook/diary?limit=80");
@@ -735,7 +818,7 @@ document.querySelectorAll(".kb-nb-page-export, #kb-nb-export-btn").forEach(btn =
 function init() {
   // 默认 tab
   const initial = (location.hash || "#profile-project").replace("#", "");
-  const validTabs = ["profile-project", "rules", "thinking", "diary"];
+  const validTabs = ["chat", "profile-project", "rules", "thinking", "diary"];
   switchTab(validTabs.includes(initial) ? initial : "profile-project");
 
   loadOverview();
@@ -744,6 +827,9 @@ function init() {
   // thinking / diary 在切换 tab 时懒加载，但首次至少触发一次 thinking 计数
   api("/notebook/thinking").then(d => {
     $("kb-nb-count-thinking").textContent = d.archived_count + (d.active ? 1 : 0);
+  }).catch(() => {});
+  api("/notebook/chat?limit=1").then(d => {
+    $("kb-nb-count-chat").textContent = d.items.length ? "…" : 0;
   }).catch(() => {});
 }
 

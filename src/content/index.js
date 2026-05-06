@@ -1353,7 +1353,9 @@ const commentSystem = (() => {
         ${debugHtml}
       </div>`;
     }).join("");
-    const hasAI = c.replies.some(r => r.isAI);
+    const isFailedAIReply = (r) => r.isAI && /^AI 回复失败/.test(r.text || "");
+    const hasSuccessfulAI = c.replies.some(r => r.isAI && !isFailedAIReply(r));
+    const hasFailedAIReply = c.replies.some(isFailedAIReply);
     return `
       <div class="kb-cmt-card ${_aiUnreadCommentIds.has(c.id) ? "kb-ai-unread" : ""}" id="kb-cmt-${c.id}">
         ${c.excerpt ? `<div class="kb-cmt-quote">"${escapeHtml(c.excerpt.slice(0,100))}${c.excerpt.length>100?"…":""}"</div>` : ""}
@@ -1368,8 +1370,8 @@ const commentSystem = (() => {
             ? `<span style="color:var(--kb-blue);font-size:11px;font-family:'JetBrains Mono',monospace;letter-spacing:0.04em;">AI 思考中…</span>`
             : _aiUnreadCommentIds.has(c.id)
               ? `<button class="kb-ai-ready-btn" data-jump-ai="${c.id}">AI 已回复 · 查看</button>`
-            : !hasAI
-              ? `<button class="kb-ai-btn" data-ask-ai="${c.id}">请 AI 回复</button>`
+            : !hasSuccessfulAI
+              ? `<button class="kb-ai-btn" data-ask-ai="${c.id}">${hasFailedAIReply ? "重新召唤 AI" : "请 AI 回复"}</button>`
               : `<button class="kb-reply-btn" data-open-reply="${c.id}">继续追问</button>`
           }
         </div>

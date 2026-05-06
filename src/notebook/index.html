@@ -24,6 +24,12 @@
     <div id="kb-nb-main">
       <nav id="kb-nb-nav">
         <div class="kb-nb-nav-group">
+          <div class="kb-nb-nav-group-title">全局入口</div>
+          <a class="kb-nb-nav-item" data-tab="chat" href="#chat">
+            <span>问记忆</span><span class="kb-nb-nav-count" id="kb-nb-count-chat">—</span>
+          </a>
+        </div>
+        <div class="kb-nb-nav-group">
           <div class="kb-nb-nav-group-title">知识记忆 · 关于你和你的项目</div>
           <a class="kb-nb-nav-item active" data-tab="profile-project" href="#profile-project">
             <span>你 &amp; 项目</span><span class="kb-nb-nav-count" id="kb-nb-count-profile">—</span>
@@ -52,6 +58,22 @@
 
       <!-- 内容区域 -->
       <main id="kb-nb-content">
+        <!-- 问记忆 -->
+        <section class="kb-nb-page kb-nb-hidden" id="kb-tab-chat">
+          <div class="kb-nb-page-header">
+            <span class="kb-nb-page-mono">● 全局入口 · Memory Chat V0</span>
+          </div>
+          <h2 class="kb-nb-page-title">问记忆</h2>
+          <p class="kb-nb-page-subtitle">从你的批注、状态卡、工作方式和最近思考里找证据。</p>
+          <div class="kb-nb-chat-shell">
+            <div id="kb-nb-chat-thread" class="kb-nb-chat-thread">读取中…</div>
+            <form id="kb-nb-chat-form" class="kb-nb-chat-form">
+              <textarea id="kb-nb-chat-input" rows="3" placeholder="问一个关于你历史批注或记忆的问题"></textarea>
+              <button id="kb-nb-chat-submit" type="submit">发送</button>
+            </form>
+          </div>
+        </section>
+
         <!-- 你 & 项目 -->
         <section class="kb-nb-page" id="kb-tab-profile-project">
           <div class="kb-nb-page-header">

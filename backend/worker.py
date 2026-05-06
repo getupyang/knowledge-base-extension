@@ -662,10 +662,292 @@ def handle_synthesize_skills(conn: sqlite3.Connection, job: dict):
     log(f"job#{job['id']} synthesize_skills: persisted generation_id={gen_id} with {len(skills_clean)} skills")
 
 
+MEMORY_GROWTH_PROMPT_TEMPLATE = """你是 mem-ai 的 Memory Growth Pipeline。你的任务不是回复用户，而是把一条新批注解释成可追溯的记忆生长信号。
+
+重要原则：
+- 不要只抽 rule。批注也可能表达当前问题、主题热度、项目变化、用户画像变化，或没有结构化更新。
+- 不确定时写 no_structural_update，但必须解释为什么。
+- 所有字段都只基于输入证据，不要编。
+
+## 当前批注
+comment_id: {comment_id}
+created_at: {created_at}
+page_title: {page_title}
+page_url: {page_url}
+
+划线：
+{selected_text}
+
+周边文本：
+{surrounding_text}
+
+用户批注：
+{comment}
+
+AGENT 回复：
+{agent_reply}
+
+## 输出格式
+只输出一个 JSON 对象，不要 markdown 围栏。schema:
+{{
+  "comment_interpretation": {{
+    "gist": "这条批注核心在说什么",
+    "user_attention": "用户注意力落在哪里",
+    "stance_or_objection": "用户的判断/反对/疑问；没有就写空字符串",
+    "scope": "global_user|project|topic|life|temporary|unknown",
+    "confidence": 0.0
+  }},
+  "rule_candidate": {{
+    "should_create": false,
+    "rule_text": "",
+    "behavior_type": "preference|workflow|anti_pattern|judgment_standard|none",
+    "applies_to": "reply|research|prototype|product_decision|writing|other",
+    "confidence": 0.0,
+    "decision": "candidate|no_rule|duplicate_or_weak"
+  }},
+  "active_question_signal": {{
+    "question": "",
+    "signal_strength": 0.0,
+    "scope": "project|topic|global_user|temporary|unknown"
+  }},
+  "theme_signal": {{
+    "theme": "",
+    "intensity": 0.0
+  }},
+  "project_signal": {{
+    "has_signal": false,
+    "summary": "",
+    "confidence": 0.0,
+    "decision": "none|candidate_project_update"
+  }},
+  "profile_signal": {{
+    "has_signal": false,
+    "summary": "",
+    "confidence": 0.0,
+    "decision": "none|candidate_profile_update"
+  }},
+  "decision": {{
+    "type": "structural_update|no_structural_update",
+    "summary": "一句话说明本次是否产生结构化信号"
+  }}
+}}
+"""
+
+
+def _safe_parse_growth_json(content: str) -> dict:
+    if not content:
+        raise ValueError("empty LLM output")
+    s = content.strip()
+    if "```json" in s:
+        i = s.find("```json") + 7
+        j = s.find("```", i)
+        if j > i:
+            try:
+                return json.loads(s[i:j].strip())
+            except Exception:
+                pass
+    i = s.find("{")
+    j = s.rfind("}")
+    if i >= 0 and j > i:
+        try:
+            return json.loads(s[i:j + 1])
+        except Exception:
+            pass
+    return {
+        "comment_interpretation": {
+            "gist": content.strip()[:600],
+            "user_attention": "",
+            "stance_or_objection": "",
+            "scope": "unknown",
+            "confidence": 0.2,
+        },
+        "rule_candidate": {"should_create": False, "decision": "parse_fallback"},
+        "active_question_signal": {"question": "", "signal_strength": 0.0, "scope": "unknown"},
+        "theme_signal": {"theme": "", "intensity": 0.0},
+        "project_signal": {"has_signal": False, "decision": "parse_fallback"},
+        "profile_signal": {"has_signal": False, "decision": "parse_fallback"},
+        "decision": {"type": "no_structural_update", "summary": "LLM 输出不是合法 JSON，已保留原文摘要。"},
+    }
+
+
+def _growth_now() -> str:
+    return datetime.now().isoformat()
+
+
+def _set_growth_ledger(conn: sqlite3.Connection, comment_id: int, status: str,
+                       decision: str = "", error: str = ""):
+    now = _growth_now()
+    conn.execute(
+        """INSERT INTO memory_intake_ledger
+           (comment_id, local_status, local_saved_at, growth_status, created_at, updated_at)
+           VALUES (?, 'local_saved', ?, ?, ?, ?)
+           ON CONFLICT(comment_id) DO UPDATE SET
+             growth_status=excluded.growth_status,
+             growth_processed_at=CASE WHEN excluded.growth_status IN ('done','failed') THEN excluded.updated_at ELSE memory_intake_ledger.growth_processed_at END,
+             growth_decision=COALESCE(NULLIF(?, ''), memory_intake_ledger.growth_decision),
+             error_summary=COALESCE(NULLIF(?, ''), memory_intake_ledger.error_summary),
+             updated_at=excluded.updated_at""",
+        (comment_id, now, status, now, now, decision[:1000] if decision else "", error[:1000] if error else ""),
+    )
+
+
+def _dict_value(obj, key, default=None):
+    return obj.get(key, default) if isinstance(obj, dict) else default
+
+
+def handle_memory_growth_for_comment(conn: sqlite3.Connection, job: dict):
+    payload = job.get("payload") or {}
+    comment_id = int(payload.get("comment_id") or 0)
+    if not comment_id:
+        raise RuntimeError("memory_growth_for_comment missing comment_id")
+
+    _set_growth_ledger(conn, comment_id, "running")
+    conn.commit()
+
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT id, page_url, page_title, selected_text, surrounding_text, comment, created_at "
+        "FROM comments WHERE id=?",
+        (comment_id,),
+    ).fetchone()
+    if not row:
+        _set_growth_ledger(conn, comment_id, "failed", error="comment not found")
+        conn.commit()
+        raise RuntimeError(f"comment#{comment_id} not found")
+    comment = dict(row)
+    reply_row = conn.execute(
+        "SELECT content FROM replies WHERE comment_id=? AND author='agent' ORDER BY created_at DESC LIMIT 1",
+        (comment_id,),
+    ).fetchone()
+    agent_reply = reply_row["content"] if reply_row else ""
+
+    prompt = MEMORY_GROWTH_PROMPT_TEMPLATE.format(
+        comment_id=comment_id,
+        created_at=comment.get("created_at") or "",
+        page_title=(comment.get("page_title") or "")[:200],
+        page_url=comment.get("page_url") or "",
+        selected_text=(comment.get("selected_text") or "")[:1200],
+        surrounding_text=(comment.get("surrounding_text") or "")[:1600],
+        comment=(comment.get("comment") or "")[:1600],
+        agent_reply=(agent_reply or "")[:1600],
+    )
+    log(f"job#{job['id']} memory_growth: calling LLM for comment#{comment_id}")
+    content = call_claude(prompt, timeout_sec=180)
+    parsed = _safe_parse_growth_json(content)
+    now = _growth_now()
+
+    interpretation = _dict_value(parsed, "comment_interpretation", {}) or {}
+    decision = _dict_value(parsed, "decision", {}) or {}
+    decision_summary = _dict_value(decision, "summary", "") or _dict_value(decision, "type", "no_structural_update")
+    confidence = _dict_value(interpretation, "confidence", None)
+    try:
+        confidence = float(confidence) if confidence is not None else None
+    except Exception:
+        confidence = None
+
+    conn.execute(
+        """INSERT OR REPLACE INTO comment_interpretations
+           (comment_id, interpretation_json, decision, produced_by_job_id, confidence, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (comment_id, json.dumps(interpretation, ensure_ascii=False),
+         json.dumps(decision, ensure_ascii=False), job["id"], confidence, now),
+    )
+
+    rule = _dict_value(parsed, "rule_candidate", {}) or {}
+    if rule.get("should_create") or (rule.get("rule_text") or "").strip():
+        conn.execute(
+            """INSERT INTO rule_candidates
+               (comment_id, rule_text, behavior_type, applies_to, confidence, decision,
+                status, produced_by_job_id, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, 'candidate', ?, ?)""",
+            (
+                comment_id,
+                (rule.get("rule_text") or "").strip(),
+                rule.get("behavior_type") or "none",
+                rule.get("applies_to") or "other",
+                float(rule.get("confidence") or 0),
+                rule.get("decision") or "candidate",
+                job["id"],
+                now,
+            ),
+        )
+
+    question = _dict_value(parsed, "active_question_signal", {}) or {}
+    if (question.get("question") or "").strip():
+        conn.execute(
+            """INSERT INTO active_question_signals
+               (comment_id, question, signal_strength, scope, status, produced_by_job_id, created_at)
+               VALUES (?, ?, ?, ?, 'active', ?, ?)""",
+            (
+                comment_id,
+                question.get("question") or "",
+                float(question.get("signal_strength") or 0),
+                question.get("scope") or "unknown",
+                job["id"],
+                now,
+            ),
+        )
+
+    theme = _dict_value(parsed, "theme_signal", {}) or {}
+    if (theme.get("theme") or "").strip():
+        conn.execute(
+            """INSERT INTO theme_signals
+               (comment_id, theme, intensity, window_start, window_end, evidence_count,
+                representative_comment_ids, produced_by_job_id, created_at)
+               VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)""",
+            (
+                comment_id,
+                theme.get("theme") or "",
+                float(theme.get("intensity") or 0),
+                comment.get("created_at") or now,
+                comment.get("created_at") or now,
+                json.dumps([comment_id]),
+                job["id"],
+                now,
+            ),
+        )
+
+    project_signal = _dict_value(parsed, "project_signal", {}) or {}
+    if project_signal.get("has_signal") or (project_signal.get("summary") or "").strip():
+        conn.execute(
+            """INSERT INTO project_signals
+               (comment_id, signal_json, confidence, decision, produced_by_job_id, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                comment_id,
+                json.dumps(project_signal, ensure_ascii=False),
+                float(project_signal.get("confidence") or 0),
+                project_signal.get("decision") or "candidate_project_update",
+                job["id"],
+                now,
+            ),
+        )
+
+    profile_signal = _dict_value(parsed, "profile_signal", {}) or {}
+    if profile_signal.get("has_signal") or (profile_signal.get("summary") or "").strip():
+        conn.execute(
+            """INSERT INTO profile_signals
+               (comment_id, signal_json, confidence, decision, produced_by_job_id, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                comment_id,
+                json.dumps(profile_signal, ensure_ascii=False),
+                float(profile_signal.get("confidence") or 0),
+                profile_signal.get("decision") or "candidate_profile_update",
+                job["id"],
+                now,
+            ),
+        )
+
+    _set_growth_ledger(conn, comment_id, "done", decision=decision_summary)
+    conn.commit()
+    log(f"job#{job['id']} memory_growth: comment#{comment_id} done ({decision_summary[:80]})")
+
+
 JOB_HANDLERS = {
     "synthesize_thinking": handle_synthesize_thinking,
     "synthesize_skills": handle_synthesize_skills,
-    # M3 扩展点
+    "memory_growth_for_comment": handle_memory_growth_for_comment,
 }
 
 
@@ -683,6 +965,14 @@ def run_one(conn: sqlite3.Connection, job: dict) -> bool:
     except Exception as e:
         tb = traceback.format_exc()
         log(f"job#{job['id']} ({job['kind']}) FAILED attempt {job['attempts']}/{job['max_attempts']}: {e}")
+        if job["kind"] == "memory_growth_for_comment":
+            try:
+                comment_id = int((job.get("payload") or {}).get("comment_id") or 0)
+                if comment_id:
+                    _set_growth_ledger(conn, comment_id, "failed", error=str(e))
+                    conn.commit()
+            except Exception:
+                pass
         log_failure({
             "job_id": job["id"], "kind": job["kind"], "attempt": job["attempts"],
             "error": str(e), "traceback": tb[:2000],

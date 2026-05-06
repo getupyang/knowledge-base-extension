@@ -15,6 +15,7 @@ import threading
 import urllib.error
 import urllib.request
 from datetime import datetime
+from urllib.parse import urlparse
 from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -244,6 +245,152 @@ def init_db():
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_revisions_kind_created ON memory_revisions(kind, created_at DESC)")
 
+    # ── Memory Intake Ledger V0：每条新增批注的本地/Notion/growth 状态留痕 ──
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS memory_intake_ledger (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            comment_id INTEGER NOT NULL UNIQUE,
+            local_status TEXT NOT NULL DEFAULT 'local_saved',
+            local_saved_at TEXT,
+            notion_status TEXT NOT NULL DEFAULT 'pending',
+            notion_synced_at TEXT,
+            notion_error TEXT,
+            growth_status TEXT NOT NULL DEFAULT 'pending',
+            growth_job_ids TEXT NOT NULL DEFAULT '[]',
+            growth_enqueued_at TEXT,
+            growth_processed_at TEXT,
+            growth_decision TEXT,
+            error_summary TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (comment_id) REFERENCES comments(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_intake_growth_status ON memory_intake_ledger(growth_status, updated_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_intake_notion_status ON memory_intake_ledger(notion_status, updated_at)")
+
+    # ── Context Loader V0：每次回复/记忆问答实际装载了哪些资产 ──
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS context_packs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            reply_id INTEGER,
+            comment_id INTEGER,
+            chat_message_id INTEGER,
+            source_type TEXT NOT NULL DEFAULT 'reply',
+            identity_snapshot_id INTEGER,
+            selected_skill_ids TEXT NOT NULL DEFAULT '[]',
+            episodic_comment_ids TEXT NOT NULL DEFAULT '[]',
+            same_page_comment_ids TEXT NOT NULL DEFAULT '[]',
+            current_page_url TEXT,
+            selection_reasons TEXT NOT NULL DEFAULT '{}',
+            token_budget_used INTEGER,
+            query_text TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (reply_id) REFERENCES replies(id),
+            FOREIGN KEY (comment_id) REFERENCES comments(id),
+            FOREIGN KEY (identity_snapshot_id) REFERENCES profile_snapshots(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_context_packs_comment ON context_packs(comment_id, created_at DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_context_packs_reply ON context_packs(reply_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_context_packs_chat ON context_packs(chat_message_id)")
+
+    # ── Memory Growth Pipeline V0：结构化解释与信号缓存，不只抽 rules ──
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS comment_interpretations (
+            comment_id INTEGER PRIMARY KEY,
+            interpretation_json TEXT NOT NULL,
+            decision TEXT,
+            produced_by_job_id INTEGER,
+            confidence REAL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (comment_id) REFERENCES comments(id)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS rule_candidates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            comment_id INTEGER NOT NULL,
+            rule_text TEXT,
+            behavior_type TEXT,
+            applies_to TEXT,
+            confidence REAL,
+            decision TEXT,
+            status TEXT NOT NULL DEFAULT 'candidate',
+            produced_by_job_id INTEGER,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (comment_id) REFERENCES comments(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_rule_candidates_comment ON rule_candidates(comment_id)")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS active_question_signals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            comment_id INTEGER NOT NULL,
+            question TEXT,
+            signal_strength REAL,
+            scope TEXT,
+            status TEXT NOT NULL DEFAULT 'active',
+            produced_by_job_id INTEGER,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (comment_id) REFERENCES comments(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_active_question_signals_status ON active_question_signals(status, created_at DESC)")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS theme_signals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            comment_id INTEGER,
+            theme TEXT NOT NULL,
+            intensity REAL,
+            window_start TEXT,
+            window_end TEXT,
+            evidence_count INTEGER,
+            representative_comment_ids TEXT,
+            produced_by_job_id INTEGER,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (comment_id) REFERENCES comments(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_theme_signals_theme_created ON theme_signals(theme, created_at DESC)")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS project_signals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            comment_id INTEGER NOT NULL,
+            signal_json TEXT NOT NULL,
+            confidence REAL,
+            decision TEXT,
+            produced_by_job_id INTEGER,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (comment_id) REFERENCES comments(id)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS profile_signals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            comment_id INTEGER NOT NULL,
+            signal_json TEXT NOT NULL,
+            confidence REAL,
+            decision TEXT,
+            produced_by_job_id INTEGER,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (comment_id) REFERENCES comments(id)
+        )
+    """)
+
+    # ── Memory Chat V0：notebook 内只读“问记忆”入口的轻量历史 ──
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS memory_chat_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            context_pack_id INTEGER,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (context_pack_id) REFERENCES context_packs(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_chat_created ON memory_chat_messages(created_at DESC)")
+
     # 兼容已有数据库：如果列不存在则添加
     for col, table in [
         ("debug_meta TEXT", "replies"),
@@ -458,6 +605,417 @@ def fetch_attention_memory(limit: int = 15) -> str:
     if local:
         return local
     return fetch_notion_memory(limit)
+
+
+# ──────────────────────────────────────────
+# Memory Intake Ledger / Context Loader V0
+# ──────────────────────────────────────────
+
+def _json(obj) -> str:
+    return json.dumps(obj, ensure_ascii=False)
+
+
+def _record_intake_local_saved(comment_id: int):
+    """Create/refresh the per-comment intake ledger row."""
+    now = _now_iso()
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute(
+            """INSERT INTO memory_intake_ledger
+               (comment_id, local_status, local_saved_at, notion_status, growth_status,
+                created_at, updated_at)
+               VALUES (?, 'local_saved', ?, 'pending', 'pending', ?, ?)
+               ON CONFLICT(comment_id) DO UPDATE SET
+                 local_status='local_saved',
+                 local_saved_at=COALESCE(memory_intake_ledger.local_saved_at, excluded.local_saved_at),
+                 updated_at=excluded.updated_at""",
+            (comment_id, now, now, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _record_intake_notion(comment_id: int, status: str, error: str = ""):
+    if not comment_id:
+        return
+    _record_intake_local_saved(comment_id)
+    now = _now_iso()
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute(
+            """UPDATE memory_intake_ledger
+               SET notion_status=?, notion_synced_at=?,
+                   notion_error=?, updated_at=?
+               WHERE comment_id=?""",
+            (status, now if status == "notion_synced" else None, error[:1000] if error else None, now, comment_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _append_growth_job_id(existing: str, job_id: int) -> str:
+    try:
+        ids = json.loads(existing or "[]")
+        if not isinstance(ids, list):
+            ids = []
+    except Exception:
+        ids = []
+    if job_id not in ids:
+        ids.append(job_id)
+    return _json(ids)
+
+
+def _enqueue_memory_growth_job(comment_id: int, trigger_reason: str = "agent_reply") -> Optional[int]:
+    """Queue durable growth processing for a comment unless it is already queued/done."""
+    if not comment_id:
+        return None
+    _record_intake_local_saved(comment_id)
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.row_factory = sqlite3.Row
+        ledger = conn.execute(
+            "SELECT growth_status, growth_job_ids FROM memory_intake_ledger WHERE comment_id=?",
+            (comment_id,),
+        ).fetchone()
+        if ledger and ledger["growth_status"] in ("enqueued", "running", "done"):
+            return None
+        now = _now_iso()
+        payload = {
+            "comment_id": comment_id,
+            "trigger_reason": trigger_reason,
+        }
+        cur = conn.execute(
+            "INSERT INTO jobs (kind, payload_json, status, max_attempts, created_at) "
+            "VALUES ('memory_growth_for_comment', ?, 'queued', 3, ?)",
+            (_json(payload), now),
+        )
+        job_id = cur.lastrowid
+        conn.execute(
+            """UPDATE memory_intake_ledger
+               SET growth_status='enqueued',
+                   growth_job_ids=?,
+                   growth_enqueued_at=?,
+                   updated_at=?
+               WHERE comment_id=?""",
+            (_append_growth_job_id(ledger["growth_job_ids"] if ledger else "[]", job_id), now, now, comment_id),
+        )
+        conn.commit()
+        return job_id
+    finally:
+        conn.close()
+
+
+def _host(url: str) -> str:
+    try:
+        return (urlparse(url or "").netloc or "").lower()
+    except Exception:
+        return ""
+
+
+_CJK_STOP_TOKENS = {
+    "我", "我们", "这个", "那个", "之前", "以前", "现在", "什么", "怎么", "如何",
+    "是不是", "有没有", "一个", "一下", "可以", "觉得", "帮我", "记忆", "批注",
+}
+
+
+def _keyword_tokens(text: str, max_tokens: int = 18) -> list:
+    text = text or ""
+    lowered = text.lower()
+    tokens = []
+    for word in re.findall(r"[a-zA-Z][a-zA-Z0-9_-]{2,}", lowered):
+        tokens.append(word)
+    for run in re.findall(r"[\u4e00-\u9fff]{2,}", text):
+        if run in _CJK_STOP_TOKENS:
+            continue
+        if 2 <= len(run) <= 5:
+            tokens.append(run)
+        else:
+            for size in (2, 3):
+                for i in range(0, max(0, len(run) - size + 1)):
+                    part = run[i:i + size]
+                    if part not in _CJK_STOP_TOKENS:
+                        tokens.append(part)
+    out = []
+    seen = set()
+    for t in tokens:
+        t = t.strip().lower()
+        if not t or t in seen or t in _CJK_STOP_TOKENS:
+            continue
+        seen.add(t)
+        out.append(t)
+        if len(out) >= max_tokens:
+            break
+    return out
+
+
+def _latest_agent_reply(conn: sqlite3.Connection, comment_id: int) -> str:
+    row = conn.execute(
+        "SELECT content FROM replies WHERE comment_id=? AND author='agent' ORDER BY created_at DESC LIMIT 1",
+        (comment_id,),
+    ).fetchone()
+    return row[0] if row else ""
+
+
+def _comment_ref_line(row: dict, reply: str = "") -> str:
+    cid = row.get("id")
+    date = (row.get("created_at") or "")[:10]
+    title = (row.get("page_title") or "未命名")[:40]
+    comment = (row.get("comment") or "").replace("\n", " ")[:180]
+    selected = (row.get("selected_text") or "").replace("\n", " ")[:120]
+    line = f"- [c#{cid}] {date} 《{title}》：{comment}"
+    if selected:
+        line += f"\n  划线：{selected}"
+    if reply:
+        line += f"\n  当时回复：{reply.replace(chr(10), ' ')[:160]}"
+    return line
+
+
+def _select_working_skills(conn: sqlite3.Connection, query_text: str, limit: int = 3) -> tuple:
+    conn.row_factory = sqlite3.Row
+    rows = [dict(r) for r in conn.execute(
+        "SELECT id, name, description, triggers, created_at FROM working_skills "
+        "WHERE status='active' ORDER BY id DESC"
+    ).fetchall()]
+    if not rows:
+        return [], "no_active_skills"
+    tokens = _keyword_tokens(query_text)
+    scored = []
+    for row in rows:
+        hay = f"{row.get('name','')} {row.get('description','')} {row.get('triggers') or ''}".lower()
+        score = sum(1 for t in tokens if t and t.lower() in hay)
+        if score:
+            scored.append((score, row["id"], row))
+    if scored:
+        scored.sort(key=lambda x: (-x[0], -x[1]))
+        return [r for _, _, r in scored[:limit]], f"keyword_match:{','.join(tokens[:6])}"
+    return rows[:limit], "fallback_latest_active_skills"
+
+
+def _select_comment_memory(conn: sqlite3.Connection, query_text: str, page_url: str = "",
+                           exclude_comment_id: int = None, limit: int = 5,
+                           same_host_only: bool = False) -> tuple:
+    conn.row_factory = sqlite3.Row
+    rows = [dict(r) for r in conn.execute(
+        "SELECT id, page_url, page_title, selected_text, comment, created_at "
+        "FROM comments ORDER BY created_at DESC LIMIT 300"
+    ).fetchall()]
+    host = _host(page_url)
+    tokens = _keyword_tokens(query_text, max_tokens=24)
+    scored = []
+    for idx, row in enumerate(rows):
+        if exclude_comment_id and row["id"] == exclude_comment_id:
+            continue
+        row_host = _host(row.get("page_url") or "")
+        if same_host_only and host and row_host != host and row.get("page_url") != page_url:
+            continue
+        hay = f"{row.get('page_title','')} {row.get('selected_text','')} {row.get('comment','')}".lower()
+        score = 0
+        if page_url and row.get("page_url") == page_url:
+            score += 8
+        if host and row_host == host:
+            score += 4
+        score += sum(1 for t in tokens if t.lower() in hay)
+        if score > 0:
+            scored.append((score, -idx, row))
+    if not scored and not same_host_only:
+        scored = [(0, -idx, r) for idx, r in enumerate(rows) if not exclude_comment_id or r["id"] != exclude_comment_id]
+    scored.sort(key=lambda x: (-x[0], -x[1]))
+    selected = [r for _, _, r in scored[:limit]]
+    reason = "url_host_keyword" if page_url else "query_keyword"
+    if selected and scored[0][0] == 0:
+        reason = "fallback_recent"
+    return selected, reason
+
+
+def _build_context_pack_for_comment(comment_id: int, role: str = "") -> dict:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        current = conn.execute("SELECT * FROM comments WHERE id=?", (comment_id,)).fetchone()
+        if not current:
+            return {}
+        current = dict(current)
+        query_text = " ".join([
+            current.get("page_title") or "",
+            current.get("selected_text") or "",
+            current.get("surrounding_text") or "",
+            current.get("comment") or "",
+            role or "",
+        ])
+        profile = conn.execute(
+            "SELECT * FROM profile_snapshots WHERE status='active' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        profile = dict(profile) if profile else None
+        skills, skill_reason = _select_working_skills(conn, query_text, limit=3)
+        same_page = [dict(r) for r in conn.execute(
+            "SELECT id, page_url, page_title, selected_text, comment, created_at "
+            "FROM comments WHERE page_url=? AND id<>? ORDER BY created_at DESC LIMIT 3",
+            (current.get("page_url") or "", comment_id),
+        ).fetchall()]
+        episodic, episodic_reason = _select_comment_memory(
+            conn, query_text, page_url=current.get("page_url") or "",
+            exclude_comment_id=comment_id, limit=5, same_host_only=True,
+        )
+        latest_thinking = conn.execute(
+            "SELECT id, title, synthesis_md, created_at FROM thinking_summaries "
+            "WHERE status='active' ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        latest_thinking = dict(latest_thinking) if latest_thinking else None
+
+        sections = ["## 本次回复装载的记忆上下文"]
+        if profile:
+            sections.append(
+                "### B · 此刻的你\n"
+                f"{profile.get('one_liner') or ''}\n"
+                f"- 身份：{profile.get('field_who') or '—'}\n"
+                f"- 正在做：{profile.get('field_doing') or '—'}\n"
+                f"- 当前关注：{profile.get('field_focus') or '—'}\n"
+                f"- 阶段：{profile.get('field_phase') or '—'}"
+            )
+        else:
+            sections.append("### B · 此刻的你\n暂无 active profile snapshot。")
+        if latest_thinking:
+            sections.append(
+                "### 最近你在想的事\n"
+                f"{latest_thinking.get('title') or ''}：{latest_thinking.get('synthesis_md') or ''}"
+            )
+        if same_page:
+            sections.append("### D · 当前页面历史批注\n" + "\n".join(_comment_ref_line(r) for r in same_page))
+        else:
+            sections.append("### D · 当前页面历史批注\n这页还没有其他历史批注。")
+        if episodic:
+            lines = []
+            for r in episodic:
+                lines.append(_comment_ref_line(r, _latest_agent_reply(conn, r["id"])))
+            sections.append("### A' · 相关历史批注\n" + "\n".join(lines))
+        else:
+            sections.append("### A' · 相关历史批注\n没有命中同 URL/同 host 的历史批注。")
+        if skills:
+            sections.append("### C · 已养成的工作方式\n" + "\n".join(
+                f"- [skill#{s['id']}] {s.get('name')}: {s.get('description')}" for s in skills
+            ))
+        else:
+            sections.append("### C · 已养成的工作方式\n暂无 active working skills。")
+        context_md = "\n\n".join(sections)
+        return {
+            "comment_id": comment_id,
+            "identity_snapshot_id": profile.get("id") if profile else None,
+            "selected_skill_ids": [s["id"] for s in skills],
+            "episodic_comment_ids": [r["id"] for r in episodic],
+            "same_page_comment_ids": [r["id"] for r in same_page],
+            "current_page_url": current.get("page_url") or "",
+            "selection_reasons": {
+                "identity": "active_profile_snapshot" if profile else "missing",
+                "skills": skill_reason,
+                "episodic": episodic_reason,
+                "same_page": "same_url_latest_3",
+                "thinking": "active_thinking_summary" if latest_thinking else "missing",
+            },
+            "token_budget_used": max(1, len(context_md) // 4),
+            "context_md": context_md,
+        }
+    finally:
+        conn.close()
+
+
+def _build_context_pack_for_query(query: str) -> dict:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        profile = conn.execute(
+            "SELECT * FROM profile_snapshots WHERE status='active' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        profile = dict(profile) if profile else None
+        skills, skill_reason = _select_working_skills(conn, query, limit=4)
+        episodic, episodic_reason = _select_comment_memory(
+            conn, query, page_url="", exclude_comment_id=None, limit=12, same_host_only=False,
+        )
+        latest_thinking = conn.execute(
+            "SELECT id, title, synthesis_md, created_at FROM thinking_summaries "
+            "WHERE status='active' ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        latest_thinking = dict(latest_thinking) if latest_thinking else None
+        sections = ["## 记忆问答装载的上下文"]
+        if profile:
+            sections.append(
+                "### 此刻的你\n"
+                f"{profile.get('one_liner') or ''}\n"
+                f"- 身份：{profile.get('field_who') or '—'}\n"
+                f"- 正在做：{profile.get('field_doing') or '—'}\n"
+                f"- 当前关注：{profile.get('field_focus') or '—'}"
+            )
+        if latest_thinking:
+            sections.append(f"### 最近你在想的事\n{latest_thinking.get('title')}: {latest_thinking.get('synthesis_md')}")
+        if skills:
+            sections.append("### 工作方式\n" + "\n".join(
+                f"- [skill#{s['id']}] {s.get('name')}: {s.get('description')}" for s in skills
+            ))
+        if episodic:
+            lines = []
+            for r in episodic:
+                lines.append(_comment_ref_line(r, _latest_agent_reply(conn, r["id"])))
+            sections.append("### 相关历史批注\n" + "\n".join(lines))
+        else:
+            sections.append("### 相关历史批注\n没有找到明显相关批注。")
+        context_md = "\n\n".join(sections)
+        return {
+            "comment_id": None,
+            "identity_snapshot_id": profile.get("id") if profile else None,
+            "selected_skill_ids": [s["id"] for s in skills],
+            "episodic_comment_ids": [r["id"] for r in episodic],
+            "same_page_comment_ids": [],
+            "current_page_url": "",
+            "selection_reasons": {
+                "identity": "active_profile_snapshot" if profile else "missing",
+                "skills": skill_reason,
+                "episodic": episodic_reason,
+                "mode": "memory_chat_v0",
+            },
+            "token_budget_used": max(1, len(context_md) // 4),
+            "context_md": context_md,
+        }
+    finally:
+        conn.close()
+
+
+def _attach_context_to_prompt(comment_id: int, role: str, prompt: str) -> tuple:
+    pack = _build_context_pack_for_comment(comment_id, role)
+    if not pack:
+        return prompt, None
+    return prompt + "\n\n---\n\n" + pack["context_md"], pack
+
+
+def _insert_context_pack(conn: sqlite3.Connection, pack: dict, reply_id: int = None,
+                         source_type: str = "reply", chat_message_id: int = None,
+                         query_text: str = "") -> Optional[int]:
+    if not pack:
+        return None
+    now = _now_iso()
+    cur = conn.execute(
+        """INSERT INTO context_packs
+           (reply_id, comment_id, chat_message_id, source_type, identity_snapshot_id,
+            selected_skill_ids, episodic_comment_ids, same_page_comment_ids,
+            current_page_url, selection_reasons, token_budget_used, query_text, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            reply_id,
+            pack.get("comment_id"),
+            chat_message_id,
+            source_type,
+            pack.get("identity_snapshot_id"),
+            _json(pack.get("selected_skill_ids") or []),
+            _json(pack.get("episodic_comment_ids") or []),
+            _json(pack.get("same_page_comment_ids") or []),
+            pack.get("current_page_url") or "",
+            _json(pack.get("selection_reasons") or {}),
+            pack.get("token_budget_used"),
+            query_text or "",
+            now,
+        ),
+    )
+    return cur.lastrowid
 
 # ──────────────────────────────────────────
 # v2: @手动路由兼容 + 映射
@@ -1026,7 +1584,7 @@ def _trigger_learning_layer(comment_id: int, user_comment: str, agent_reply: str
 
 def run_agent_v2(comment_id: int, intent: str, role: str, prompt: str,
                  plan: str = "", quick_response: str = "", learned: list = None,
-                 user_comment: str = ""):
+                 user_comment: str = "", context_pack: dict = None):
     """后台线程：v2 agent 执行，结果写回 replies 表"""
     import time
     start_time = time.time()
@@ -1079,6 +1637,12 @@ def run_agent_v2(comment_id: int, intent: str, role: str, prompt: str,
         "reply_tokens_est": len(content) // 4,
         "is_quick": bool(quick_response and quick_response.strip()),
         "is_plan": is_plan_response,
+        "context_refs": {
+            "identity_snapshot_id": context_pack.get("identity_snapshot_id") if context_pack else None,
+            "selected_skill_ids": context_pack.get("selected_skill_ids") if context_pack else [],
+            "episodic_comment_ids": context_pack.get("episodic_comment_ids") if context_pack else [],
+            "same_page_comment_ids": context_pack.get("same_page_comment_ids") if context_pack else [],
+        },
         "rules_applied": [r["rule"] for r in json.loads(load_learned_rules()).get("rules", [])
                           if r.get("active") and r.get("scope") in ("all", f"role:{role}")][:5],
         "status": status
@@ -1087,10 +1651,22 @@ def run_agent_v2(comment_id: int, intent: str, role: str, prompt: str,
     # 写回数据库
     conn = sqlite3.connect(DB_PATH)
     now = datetime.now().isoformat()
-    conn.execute(
+    cur = conn.execute(
         "INSERT INTO replies (comment_id, author, agent_type, content, created_at, debug_meta) VALUES (?, ?, ?, ?, ?, ?)",
         (comment_id, "agent", role, content, now, debug_meta)
     )
+    reply_id = cur.lastrowid
+    try:
+        context_pack_id = _insert_context_pack(conn, context_pack, reply_id=reply_id, source_type="reply")
+        if context_pack_id:
+            meta = json.loads(debug_meta)
+            meta["context_pack_id"] = context_pack_id
+            conn.execute(
+                "UPDATE replies SET debug_meta=? WHERE id=?",
+                (_json(meta), reply_id),
+            )
+    except Exception as e:
+        log_failure(comment_id, "context_pack_persist", e)
     conn.execute("UPDATE comments SET updated_at = ? WHERE id = ?", (now, comment_id))
     conn.commit()
     conn.close()
@@ -1098,6 +1674,7 @@ def run_agent_v2(comment_id: int, intent: str, role: str, prompt: str,
     # 学习层：成功时触发画像/上下文审视
     if status == "success":
         _trigger_learning_layer(comment_id, user_comment, content)
+        _enqueue_memory_growth_job(comment_id, "agent_reply")
 
 # v1 兼容：保留旧 run_agent 作为 fallback
 def run_agent_v1_fallback(comment_id: int, agent_type: str,
@@ -1110,6 +1687,7 @@ def run_agent_v1_fallback(comment_id: int, agent_type: str,
     v1_role_map = {"竞品": "researcher", "调研": "researcher", "思辨": "sparring_partner", "解释": "explainer"}
     role = v1_role_map.get(agent_type, "sparring_partner")
     prompt = build_role_prompt(role, page_url, "", selected_text, surrounding_text, comment)
+    prompt, context_pack = _attach_context_to_prompt(comment_id, role, prompt)
 
     system_prompt = (
         "你是知识库助手的评论区 agent。直接回答用户的问题，不要执行任何 session 初始化流程。"
@@ -1137,19 +1715,36 @@ def run_agent_v1_fallback(comment_id: int, agent_type: str,
         "reply_tokens_est": len(content) // 4,
         "is_quick": False,
         "is_plan": False,
+        "context_refs": {
+            "identity_snapshot_id": context_pack.get("identity_snapshot_id") if context_pack else None,
+            "selected_skill_ids": context_pack.get("selected_skill_ids") if context_pack else [],
+            "episodic_comment_ids": context_pack.get("episodic_comment_ids") if context_pack else [],
+            "same_page_comment_ids": context_pack.get("same_page_comment_ids") if context_pack else [],
+        },
         "rules_applied": [],
         "status": status
     }, ensure_ascii=False)
 
     conn = sqlite3.connect(DB_PATH)
     now = datetime.now().isoformat()
-    conn.execute(
+    cur = conn.execute(
         "INSERT INTO replies (comment_id, author, agent_type, content, created_at, debug_meta) VALUES (?, ?, ?, ?, ?, ?)",
         (comment_id, "agent", agent_type, content, now, debug_meta)
     )
+    reply_id = cur.lastrowid
+    try:
+        context_pack_id = _insert_context_pack(conn, context_pack, reply_id=reply_id, source_type="reply")
+        if context_pack_id:
+            meta = json.loads(debug_meta)
+            meta["context_pack_id"] = context_pack_id
+            conn.execute("UPDATE replies SET debug_meta=? WHERE id=?", (_json(meta), reply_id))
+    except Exception as e:
+        log_failure(comment_id, "context_pack_persist", e)
     conn.execute("UPDATE comments SET updated_at = ? WHERE id = ?", (now, comment_id))
     conn.commit()
     conn.close()
+    if status == "success":
+        _enqueue_memory_growth_job(comment_id, "agent_reply")
 
 # ──────────────────────────────────────────
 # Debug 日志
@@ -1226,9 +1821,11 @@ def create_comment(body: CommentCreate):
 
     conn.commit()
     conn.close()
+    _record_intake_local_saved(comment_id)
 
     # no_agent=True 时仅存储
     if body.no_agent:
+        _enqueue_memory_growth_job(comment_id, "no_agent_comment")
         return {"id": comment_id, "agent_type": agent_type_for_db, "status": "open",
                 "message": "评论已存储，等待手动召唤 AI"}
 
@@ -1255,13 +1852,15 @@ def create_comment(body: CommentCreate):
             print(f"[agent_api] v1 @{v1_agent_type} → v2 intent={intent} role={role}")
             prompt = build_role_prompt(role, body.page_url, body.page_title,
                                       selected, surrounding, cleaned_comment)
+            prompt, context_pack = _attach_context_to_prompt(comment_id, role, prompt)
             write_debug_log(comment_id, f"v1→{role}", prompt, {"v1_agent_type": v1_agent_type})
             # 更新 DB 的 agent_type
             _conn = sqlite3.connect(DB_PATH)
             _conn.execute("UPDATE comments SET agent_type = ? WHERE id = ?", (role, comment_id))
             _conn.commit()
             _conn.close()
-            run_agent_v2(comment_id, intent, role, prompt, user_comment=cleaned_comment)
+            run_agent_v2(comment_id, intent, role, prompt, user_comment=cleaned_comment,
+                         context_pack=context_pack)
             return
 
         # 路径 2：v2 路由器
@@ -1289,11 +1888,12 @@ def create_comment(body: CommentCreate):
         # 构建 Step 2 prompt（task 时 plan 为空，researcher 会进入规划模式）
         prompt = build_role_prompt(role, body.page_url, body.page_title,
                                    selected, surrounding, cleaned_comment)
+        prompt, context_pack = _attach_context_to_prompt(comment_id, role, prompt)
         write_debug_log(comment_id, f"v2_{role}", prompt, router_result)
 
         run_agent_v2(comment_id, intent, role, prompt,
                      quick_response=quick_response, learned=learned,
-                     user_comment=cleaned_comment)
+                     user_comment=cleaned_comment, context_pack=context_pack)
 
     thread = threading.Thread(target=_dispatch, daemon=True)
     thread.start()
@@ -1447,11 +2047,12 @@ def rerun_agent(comment_id: int):
             prompt = build_role_prompt(role, c["page_url"], c.get("page_title", ""),
                                        selected, surrounding, comment,
                                        f"用户已确认以下方案，直接执行：\n\n{plan_text}")
+            prompt, context_pack = _attach_context_to_prompt(comment_id, role, prompt)
             write_debug_log(comment_id, f"v2_plan_exec_{role}", prompt,
                            {"plan_confirmed": True, "plan": plan_text[:500]})
             run_agent_v2(comment_id, "task", role, prompt,
                          plan=f"用户已确认",
-                         user_comment=comment)
+                         user_comment=comment, context_pack=context_pack)
             return
 
         # ── 正常路径：走 v2 路由器 ──
@@ -1469,10 +2070,11 @@ def rerun_agent(comment_id: int):
 
         prompt = build_role_prompt(role, c["page_url"], c.get("page_title", ""),
                                    selected, surrounding, comment)
+        prompt, context_pack = _attach_context_to_prompt(comment_id, role, prompt)
         write_debug_log(comment_id, f"v2_rerun_{role}", prompt, router_result)
         run_agent_v2(comment_id, intent, role, prompt,
                      quick_response=quick_response, learned=learned,
-                     user_comment=comment)
+                     user_comment=comment, context_pack=context_pack)
 
     thread = threading.Thread(target=_rerun, daemon=True)
     thread.start()
@@ -1826,6 +2428,7 @@ def _insert_local_comment_if_missing(notion_page_id: str = None, page_url: str =
                 ),
             )
         conn.commit()
+        _record_intake_local_saved(comment_id)
         return comment_id, True
     finally:
         conn.close()
@@ -1856,6 +2459,7 @@ async def notion_save(req: NotionSaveRequest):
 
     token, db_id = _notion_credentials()
     if not token or not db_id:
+        _record_intake_notion(local_comment_id, "notion_skipped", "notion_not_configured")
         return {
             "success": True,
             "localCommentId": local_comment_id,
@@ -1885,6 +2489,7 @@ async def notion_save(req: NotionSaveRequest):
             data = json.loads(resp.read())
         page_id = data.get("id")
         _link_comment_to_notion(local_comment_id, page_id)
+        _record_intake_notion(local_comment_id, "notion_synced")
         return {
             "success": True,
             "pageId": page_id,
@@ -1894,36 +2499,20 @@ async def notion_save(req: NotionSaveRequest):
         }
     except urllib.error.HTTPError as e:
         detail = e.read().decode() if e.fp else str(e)
-        if not req.localCommentId:
-            _insert_local_comment_if_missing(
-                notion_page_id=req.notionPageId,
-                page_url=req.url,
-                page_title=req.title,
-                selected_text=req.excerpt,
-                comment=req.thought,
-                agent_type="notion_upsert",
-                replies=_parse_notion_conversation(req.aiConversation, _now_iso()),
-            )
+        _record_intake_notion(local_comment_id, "notion_failed", detail)
         return {
             "success": True,
-            "pageId": req.notionPageId,
+            "pageId": None,
+            "localCommentId": local_comment_id,
             "notionSynced": False,
             "notionError": detail,
         }
     except urllib.error.URLError as e:
-        if not req.localCommentId:
-            _insert_local_comment_if_missing(
-                notion_page_id=req.notionPageId,
-                page_url=req.url,
-                page_title=req.title,
-                selected_text=req.excerpt,
-                comment=req.thought,
-                agent_type="notion_upsert",
-                replies=_parse_notion_conversation(req.aiConversation, _now_iso()),
-            )
+        _record_intake_notion(local_comment_id, "notion_failed", str(e))
         return {
             "success": True,
-            "pageId": req.notionPageId,
+            "pageId": None,
+            "localCommentId": local_comment_id,
             "notionSynced": False,
             "notionError": str(e),
         }
@@ -1933,6 +2522,8 @@ async def notion_upsert(req: NotionUpsertRequest):
     """评论 upsert 到 Notion（代理，不经过 Service Worker）"""
     token, db_id = _notion_credentials()
     if not token or not db_id:
+        if req.localCommentId:
+            _record_intake_notion(req.localCommentId, "notion_skipped", "notion_not_configured")
         return {"success": True, "pageId": req.notionPageId, "notionSynced": False,
                 "message": "本地评论已保存；Notion 未配置"}
     headers = _notion_headers(token)
@@ -1973,8 +2564,9 @@ async def notion_upsert(req: NotionUpsertRequest):
         page_id = data.get("id", req.notionPageId)
         if req.localCommentId:
             _link_comment_to_notion(req.localCommentId, page_id)
+            local_comment_id = req.localCommentId
         else:
-            _insert_local_comment_if_missing(
+            local_comment_id, _ = _insert_local_comment_if_missing(
                 notion_page_id=page_id,
                 page_url=req.url,
                 page_title=req.title,
@@ -1983,9 +2575,12 @@ async def notion_upsert(req: NotionUpsertRequest):
                 agent_type="notion_upsert",
                 replies=_parse_notion_conversation(req.aiConversation, _now_iso()),
             )
+        _record_intake_notion(local_comment_id, "notion_synced")
         return {"success": True, "pageId": page_id, "notionSynced": True}
     except urllib.error.HTTPError as e:
         detail = e.read().decode() if e.fp else str(e)
+        if req.localCommentId:
+            _record_intake_notion(req.localCommentId, "notion_failed", detail)
         return {
             "success": True,
             "pageId": req.notionPageId,
@@ -1993,6 +2588,8 @@ async def notion_upsert(req: NotionUpsertRequest):
             "notionError": detail,
         }
     except urllib.error.URLError as e:
+        if req.localCommentId:
+            _record_intake_notion(req.localCommentId, "notion_failed", str(e))
         return {
             "success": True,
             "pageId": req.notionPageId,
@@ -2054,6 +2651,7 @@ def notebook_import_notion(req: NotionImportRequest):
             imported += 1
         else:
             skipped += 1
+        _record_intake_notion(comment_id, "notion_synced")
 
     return {
         "success": True,
@@ -2216,6 +2814,107 @@ def notebook_diary(limit: int = 50, before: str = None):
 
 
 # ──────────────────────────────────────────
+# Memory Chat V0：notebook 全局只读问记忆入口
+# ──────────────────────────────────────────
+
+class MemoryChatRequest(BaseModel):
+    message: str
+
+
+@app.get("/notebook/chat")
+def notebook_chat_history(limit: int = 40):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT id, role, content, context_pack_id, created_at "
+            "FROM memory_chat_messages ORDER BY created_at DESC LIMIT ?",
+            (max(1, min(limit, 100)),),
+        ).fetchall()
+        return {"items": [dict(r) for r in reversed(rows)]}
+    finally:
+        conn.close()
+
+
+@app.post("/notebook/chat")
+def notebook_chat(req: MemoryChatRequest):
+    message = (req.message or "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+
+    now = _now_iso()
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cur = conn.execute(
+            "INSERT INTO memory_chat_messages (role, content, created_at) VALUES ('user', ?, ?)",
+            (message, now),
+        )
+        user_message_id = cur.lastrowid
+        conn.commit()
+    finally:
+        conn.close()
+
+    pack = _build_context_pack_for_query(message)
+    prompt = f"""{pack.get('context_md', '')}
+
+## 用户的问题
+{message}
+
+## 回答要求
+- 只基于上面的记忆上下文回答。
+- 能引用证据时必须写 [c#123] 这样的引用。
+- 如果没有足够证据，直接说没有在现有批注里找到，不要编。
+- 这是只读问答入口，不要承诺已经修改记忆。"""
+    system_prompt = (
+        "你是 mem-ai 记忆笔记本里的只读问答入口。你的任务是帮用户找回、核对、解释自己的历史批注和记忆。"
+        "回答要短，先给结论，再列证据。必须用 [c#id] 引用具体批注；没有证据就说没有找到。"
+    )
+
+    status = "success"
+    try:
+        answer, rc = _call_claude(prompt, system_prompt, timeout=300)
+        if rc != 0 or not answer.strip():
+            status = "error"
+            answer = f"记忆问答调用失败：{answer[:500]}"
+    except Exception as e:
+        status = "error"
+        answer = f"记忆问答调用失败：{type(e).__name__}: {str(e)[:300]}"
+        log_failure(user_message_id, "memory_chat", e)
+
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cur = conn.execute(
+            "INSERT INTO memory_chat_messages (role, content, created_at) VALUES ('assistant', ?, ?)",
+            (answer, _now_iso()),
+        )
+        assistant_message_id = cur.lastrowid
+        context_pack_id = _insert_context_pack(
+            conn, pack, source_type="chat", chat_message_id=assistant_message_id, query_text=message
+        )
+        if context_pack_id:
+            conn.execute(
+                "UPDATE memory_chat_messages SET context_pack_id=? WHERE id=?",
+                (context_pack_id, assistant_message_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {
+        "status": status,
+        "user_message_id": user_message_id,
+        "assistant_message_id": assistant_message_id,
+        "answer": answer,
+        "context_pack_id": context_pack_id,
+        "context_refs": {
+            "identity_snapshot_id": pack.get("identity_snapshot_id"),
+            "selected_skill_ids": pack.get("selected_skill_ids") or [],
+            "episodic_comment_ids": pack.get("episodic_comment_ids") or [],
+        },
+    }
+
+
+# ──────────────────────────────────────────
 # M2: jobs endpoints（异步任务队列）
 # ──────────────────────────────────────────
 
@@ -2226,9 +2925,26 @@ class JobCreate(BaseModel):
 @app.post("/jobs")
 def create_job(req: JobCreate):
     """queue 一个后台任务（worker.py 会 lease 并执行）"""
-    allowed_kinds = {"synthesize_thinking"}  # M3 后会扩展
+    allowed_kinds = {"synthesize_thinking", "memory_growth_for_comment"}  # M3 后会扩展
     if req.kind not in allowed_kinds:
         raise HTTPException(status_code=400, detail=f"unknown kind: {req.kind}")
+    if req.kind == "memory_growth_for_comment":
+        comment_id = int((req.payload or {}).get("comment_id") or 0)
+        if not comment_id:
+            raise HTTPException(status_code=400, detail="comment_id is required")
+        job_id = _enqueue_memory_growth_job(comment_id, (req.payload or {}).get("trigger_reason") or "manual")
+        if job_id:
+            return {"id": job_id, "status": "queued", "deduped": False}
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            row = conn.execute(
+                "SELECT growth_job_ids, growth_status FROM memory_intake_ledger WHERE comment_id=?",
+                (comment_id,),
+            ).fetchone()
+            ids = json.loads(row[0] or "[]") if row else []
+            return {"id": ids[-1] if ids else None, "status": row[1] if row else "unknown", "deduped": True}
+        finally:
+            conn.close()
     conn = sqlite3.connect(DB_PATH)
     try:
         # 防止重复 queue：如果已有同 kind 的 queued/running 任务，直接返回它
