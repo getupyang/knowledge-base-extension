@@ -279,6 +279,10 @@ class Regression:
             "请 AI 回复",
             "继续追问",
             "kb-badge",
+            "_findMarksForExcerpt",
+            "highlightByText(c.excerpt)",
+            "scrollIntoView({ behavior: \"smooth\", block: \"center\" })",
+            "kb-mark-pulse",
         ]
         missing = [term for term in content_terms if term not in content]
         assert_true(not missing, f"content contract terms missing: {missing}")

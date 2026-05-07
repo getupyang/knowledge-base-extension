@@ -1176,7 +1176,11 @@ const commentSystem = (() => {
       const cid = card.id.replace("kb-cmt-", "");
       const c = load().find(x => String(x.id) === cid);
       if (!c || !c.excerpt) return;
-      const marks = _findMarksForExcerpt(c.excerpt);
+      let marks = _findMarksForExcerpt(c.excerpt);
+      if (!marks.length) {
+        highlightByText(c.excerpt);
+        marks = _findMarksForExcerpt(c.excerpt);
+      }
       if (!marks.length) return;
       // 滚到段落容器顶部偏上一点，让上下文一起出现
       const para = _findParagraphFor(marks[0]);
