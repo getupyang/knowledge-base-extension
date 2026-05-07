@@ -339,6 +339,10 @@ const commentSystem = (() => {
   }
   function addHighlight(excerpt, position) {
     const hls = loadHighlights();
+    const samePosition = (a, b) => JSON.stringify(a || {}) === JSON.stringify(b || {});
+    if (hls.some(h => h.excerpt === excerpt && samePosition(h.position, position))) {
+      return null;
+    }
     const h = { id: Date.now(), excerpt, position, createdAt: new Date().toISOString() };
     hls.unshift(h);
     saveHighlights(hls);
@@ -412,6 +416,11 @@ const commentSystem = (() => {
       if (active) m.classList.add("kb-mark-active");
       else m.classList.remove("kb-mark-active");
     });
+  }
+
+  function _findMarksForExcerpt(excerpt) {
+    const id = _excerptId(excerpt);
+    return Array.from(document.querySelectorAll('mark.kb-comment-highlight[data-excerpt-id="' + id + '"]'));
   }
 
   function _bindMarkInteractions(mark, excerpt) {
@@ -588,7 +597,16 @@ const commentSystem = (() => {
   function highlightByText(excerpt) {
     if (!excerpt) return;
     // 用 TreeWalker 找到文本节点中匹配的位置
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        const parent = node.parentElement;
+        if (!parent) return NodeFilter.FILTER_REJECT;
+        if (parent.closest("#kb-comment-panel, #kb-toast, mark.kb-comment-highlight, script, style, textarea")) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    });
     let node;
     while ((node = walker.nextNode())) {
       const idx = node.textContent.indexOf(excerpt);
@@ -611,8 +629,20 @@ const commentSystem = (() => {
     const hls = loadHighlights();
     hls.forEach(h => {
       if (!h.position) return;
+      if (_findMarksForExcerpt(h.excerpt).length) return;
       const range = deserializeRange(h.position);
       if (range) insertMark(range, h.excerpt);
+    });
+  }
+
+  function restoreCommentHighlights() {
+    const seen = new Set();
+    load().forEach(c => {
+      const excerpt = (c.excerpt || "").trim();
+      if (!excerpt || seen.has(excerpt)) return;
+      seen.add(excerpt);
+      if (_findMarksForExcerpt(excerpt).length) return;
+      highlightByText(excerpt);
     });
   }
 
@@ -1133,10 +1163,6 @@ const commentSystem = (() => {
 
     // 反向联动：用 data-excerpt-id 找同组 mark，避免多段 mark 文本拼接问题
     const cpBody = document.getElementById("kb-cp-body");
-    function _findMarksForExcerpt(excerpt) {
-      const id = _excerptId(excerpt);
-      return Array.from(document.querySelectorAll('mark.kb-comment-highlight[data-excerpt-id="' + id + '"]'));
-    }
     // 找 mark 所在的"段落容器"（用于点击卡片时锚定整段，而非 mark 本身）
     function _findParagraphFor(mark) {
       let n = mark.parentElement;
@@ -1984,6 +2010,7 @@ const commentSystem = (() => {
     // 关键：stylesheet 必须先注入，否则 restoreHighlights 重建出来的 mark 会失去 .kb-comment-highlight 的样式（淡橙底）
     injectStyles();
     restoreHighlights();
+    restoreCommentHighlights();
     const comments = load();
     if (comments.length > 0) {
       buildPanel();

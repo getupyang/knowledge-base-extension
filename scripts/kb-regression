@@ -280,7 +280,9 @@ class Regression:
             "继续追问",
             "kb-badge",
             "_findMarksForExcerpt",
+            "restoreCommentHighlights",
             "highlightByText(c.excerpt)",
+            "parent.closest(\"#kb-comment-panel",
             "scrollIntoView({ behavior: \"smooth\", block: \"center\" })",
             "kb-mark-pulse",
         ]
