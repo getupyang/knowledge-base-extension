@@ -96,9 +96,40 @@ function getSurroundingText(excerpt, chars = 200) {
 
 // ─── 页面全文提取（首次评论时调用，按URL缓存到后端）───
 const _pageContentSent = new Set(); // 同一页面同一session只传一次
+const _pageExposureSent = new Set(); // 只在受控阅读源记录 weak seen，不采集全量浏览历史
 function getPageContent(maxChars = 50000) {
   const text = document.body.innerText || "";
   return text.slice(0, maxChars);
+}
+
+function shouldAutoCaptureExposure() {
+  const host = location.hostname;
+  const path = location.pathname || "";
+  if (host === "localhost" && location.port === "8765" && path.startsWith("/topics/")) return true;
+  if (host === "getupyang.github.io" && path.includes("/ai-builder-daily/reports/")) return true;
+  return false;
+}
+
+function capturePageExposureIfAllowed() {
+  if (!shouldAutoCaptureExposure()) return;
+  const url = location.href.split("#")[0];
+  if (_pageExposureSent.has(url)) return;
+  const text = getPageContent();
+  if (!text || text.length < 300) return;
+  _pageExposureSent.add(url);
+  fetch("http://localhost:8766/exposures/seen", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      page_url: url,
+      page_title: document.title,
+      page_content: text,
+      source_type: "seen",
+      capture_reason: "allowlisted_reading_source",
+    }),
+  }).catch(() => {
+    _pageExposureSent.delete(url);
+  });
 }
 
 function escapeHtml(str) {
@@ -1958,6 +1989,7 @@ const commentSystem = (() => {
     }
     // badge 响应式更新：有高亮或评论时常驻显示
     updateBadge();
+    setTimeout(capturePageExposureIfAllowed, 2500);
 
     // 检测受限 iframe（如 ChatGPT Deep Research），DOM 动态插入时也能捕获
     if (!_iframeHinted) {

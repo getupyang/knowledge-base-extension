@@ -474,6 +474,7 @@ async function loadThinking() {
 
 // comment 详情缓存（hover 时按需 fetch）
 const _commentCache = new Map();
+const _pageCache = new Map();
 async function fetchComment(id) {
   if (_commentCache.has(id)) return _commentCache.get(id);
   try {
@@ -485,10 +486,21 @@ async function fetchComment(id) {
     return null;
   }
 }
+async function fetchPageCache(id) {
+  if (_pageCache.has(id)) return _pageCache.get(id);
+  try {
+    const p = await api("/notebook/page-cache/" + id);
+    _pageCache.set(id, p);
+    return p;
+  } catch {
+    _pageCache.set(id, null);
+    return null;
+  }
+}
 
-// 把渲染后的 HTML 里 [c#NNN] 文本节点替换为可点击锚点
+// 把渲染后的 HTML 里 [c#NNN] / [p#NNN] 文本节点替换为可点击锚点
 function activateCommentRefs(rootEl) {
-  const re = /\[c#(\d+)\]/g;
+  const re = /\[(c|p)#(\d+)\]/g;
   const walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT);
   const targets = [];
   let n;
@@ -503,12 +515,18 @@ function activateCommentRefs(rootEl) {
     const matches = [...text.matchAll(re)];
     for (const m of matches) {
       if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
-      const id = parseInt(m[1], 10);
+      const kind = m[1];
+      const id = parseInt(m[2], 10);
       const a = document.createElement("a");
       a.className = "kb-nb-cref";
-      a.dataset.cid = String(id);
-      a.href = "#c" + id;
-      a.textContent = "c#" + id;
+      if (kind === "p") {
+        a.dataset.pid = String(id);
+        a.href = "#p" + id;
+      } else {
+        a.dataset.cid = String(id);
+        a.href = "#c" + id;
+      }
+      a.textContent = kind + "#" + id;
       frag.appendChild(a);
       last = m.index + m[0].length;
     }
@@ -536,13 +554,32 @@ function hideCrefHover() {
   }, 120);
 }
 async function showCrefHoverFor(anchor) {
-  const id = parseInt(anchor.dataset.cid, 10);
+  const isPageRef = !!anchor.dataset.pid;
+  const id = parseInt(isPageRef ? anchor.dataset.pid : anchor.dataset.cid, 10);
   const el = ensureCrefHover();
   const rect = anchor.getBoundingClientRect();
   el.style.left = (rect.left + window.scrollX) + "px";
   el.style.top = (rect.bottom + window.scrollY + 6) + "px";
-  el.innerHTML = `<div class="kb-nb-cref-loading">读取 c#${id}…</div>`;
+  el.innerHTML = `<div class="kb-nb-cref-loading">读取 ${isPageRef ? "p" : "c"}#${id}…</div>`;
   el.style.display = "block";
+  if (isPageRef) {
+    const p = await fetchPageCache(id);
+    if (!p || _crefHoverEl !== el) return;
+    if (el.style.display === "none") return;
+    const t = p.updated_at ? fmtDateShort(p.updated_at) + " · " + fmtClock(p.updated_at) : "";
+    const preview = (p.full_text_preview || p.summary || "").replace(/\s+/g, " ").trim();
+    const event = (p.exposure_events || [])[0];
+    const evidence = event ? `${event.source_type || "seen"} · ${event.capture_reason || ""}` : "page_cache";
+    el.innerHTML = `
+      <div class="kb-nb-cref-meta">p#${id} · ${escapeHtml(t)} · exposure · ${escapeHtml(evidence)}</div>
+      <div class="kb-nb-cref-quote">《${escapeHtml((p.page_title || "未命名").slice(0, 70))}》</div>
+      <div class="kb-nb-cref-body">${escapeHtml(preview.slice(0, 520))}${preview.length > 520 ? "…" : ""}</div>
+      <div class="kb-nb-cref-foot">
+        <a href="${escapeHtml(p.page_url || "#")}" target="_blank" rel="noopener">打开来源页 ↗</a>
+      </div>
+    `;
+    return;
+  }
   const c = await fetchComment(id);
   if (!c || _crefHoverEl !== el) return;
   // 如果鼠标已经移走，且没 keep，就别弹
@@ -598,12 +635,13 @@ function renderThinking(data) {
     a.addEventListener("mouseleave", () => hideCrefHover());
     a.addEventListener("click", async (e) => {
       e.preventDefault();
-      const id = parseInt(a.dataset.cid, 10);
-      const c = await fetchComment(id);
-      if (c && c.page_url) {
-        window.open(c.page_url, "_blank", "noopener");
+      const isPageRef = !!a.dataset.pid;
+      const id = parseInt(isPageRef ? a.dataset.pid : a.dataset.cid, 10);
+      const item = isPageRef ? await fetchPageCache(id) : await fetchComment(id);
+      if (item && item.page_url) {
+        window.open(item.page_url, "_blank", "noopener");
       } else {
-        toast("c#" + id + " 没找到 / 没有来源页");
+        toast((isPageRef ? "p#" : "c#") + id + " 没找到 / 没有来源页");
       }
     });
   });

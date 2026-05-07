@@ -127,6 +127,24 @@ def init_db():
         )
     """)
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS page_exposure_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            page_cache_id INTEGER,
+            page_url TEXT NOT NULL,
+            page_title TEXT,
+            source_type TEXT NOT NULL DEFAULT 'seen',      -- seen | highlighted | commented | imported
+            evidence_level TEXT NOT NULL DEFAULT 'seen',   -- weak seen evidence, not user endorsement
+            capture_reason TEXT,
+            full_text_chars INTEGER,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (page_cache_id) REFERENCES page_cache(id),
+            UNIQUE(page_url, source_type, capture_reason)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_page_exposure_page_cache ON page_exposure_events(page_cache_id, created_at DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_page_exposure_source ON page_exposure_events(source_type, created_at DESC)")
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS replies (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             comment_id INTEGER NOT NULL,
@@ -310,6 +328,8 @@ def init_db():
             selected_skill_ids TEXT NOT NULL DEFAULT '[]',
             episodic_comment_ids TEXT NOT NULL DEFAULT '[]',
             same_page_comment_ids TEXT NOT NULL DEFAULT '[]',
+            exposure_page_ids TEXT NOT NULL DEFAULT '[]',
+            exposure_refs_json TEXT NOT NULL DEFAULT '[]',
             current_page_url TEXT,
             selection_reasons TEXT NOT NULL DEFAULT '{}',
             token_budget_used INTEGER,
@@ -453,6 +473,8 @@ def init_db():
         ("event_id INTEGER", "theme_signals"),
         ("event_id INTEGER", "project_signals"),
         ("event_id INTEGER", "profile_signals"),
+        ("exposure_page_ids TEXT NOT NULL DEFAULT '[]'", "context_packs"),
+        ("exposure_refs_json TEXT NOT NULL DEFAULT '[]'", "context_packs"),
     ]:
         try:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {col}")
@@ -743,6 +765,85 @@ def _record_intake_notion(comment_id: int, status: str, error: str = ""):
         conn.close()
 
 
+def _upsert_page_cache(conn: sqlite3.Connection, page_url: str, page_title: str,
+                       full_text: str, now: str = None) -> Optional[int]:
+    page_url = (page_url or "").strip()
+    full_text = (full_text or "").strip()
+    if not page_url or not full_text:
+        return None
+    now = now or _now_iso()
+    existing = conn.execute(
+        "SELECT id, length(COALESCE(full_text, '')) AS n FROM page_cache WHERE page_url=?",
+        (page_url,),
+    ).fetchone()
+    if existing:
+        page_cache_id = existing[0]
+        existing_len = int(existing[1] or 0)
+        if len(full_text) > existing_len:
+            conn.execute(
+                """UPDATE page_cache
+                   SET page_title=COALESCE(NULLIF(?, ''), page_title),
+                       full_text=?,
+                       updated_at=?
+                   WHERE id=?""",
+                (page_title or "", full_text, now, page_cache_id),
+            )
+        elif page_title:
+            conn.execute(
+                "UPDATE page_cache SET page_title=COALESCE(NULLIF(page_title, ''), ?), updated_at=? WHERE id=?",
+                (page_title, now, page_cache_id),
+            )
+        return int(page_cache_id)
+    cur = conn.execute(
+        """INSERT INTO page_cache (page_url, page_title, full_text, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?)""",
+        (page_url, page_title or "", full_text, now, now),
+    )
+    return int(cur.lastrowid)
+
+
+def _record_page_exposure(conn: sqlite3.Connection, page_url: str, page_title: str,
+                          page_cache_id: Optional[int], source_type: str,
+                          evidence_level: str, capture_reason: str,
+                          full_text_chars: int, now: str = None) -> Optional[int]:
+    page_url = (page_url or "").strip()
+    if not page_url:
+        return None
+    now = now or _now_iso()
+    source_type = source_type or "seen"
+    evidence_level = evidence_level or source_type
+    capture_reason = capture_reason or "unspecified"
+    conn.execute(
+        """INSERT INTO page_exposure_events
+           (page_cache_id, page_url, page_title, source_type, evidence_level,
+            capture_reason, full_text_chars, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(page_url, source_type, capture_reason)
+           DO UPDATE SET
+             page_cache_id=excluded.page_cache_id,
+             page_title=excluded.page_title,
+             full_text_chars=excluded.full_text_chars,
+             updated_at=excluded.updated_at""",
+        (
+            page_cache_id,
+            page_url,
+            page_title or "",
+            source_type,
+            evidence_level,
+            capture_reason,
+            int(full_text_chars or 0),
+            now,
+            now,
+        ),
+    )
+    row = conn.execute(
+        """SELECT id FROM page_exposure_events
+           WHERE page_url=? AND source_type=? AND capture_reason=?""",
+        (page_url, source_type, capture_reason),
+    ).fetchone()
+    return int(row[0]) if row else None
+
+
 def _record_memory_event(comment_id: int, actor: str, event_type: str, content: str,
                          source_type: str, source_id: int, reply_id: Optional[int] = None,
                          growth_status: Optional[str] = None) -> Optional[int]:
@@ -930,6 +1031,107 @@ def _comment_ref_line(row: dict, reply: str = "") -> str:
     return line
 
 
+def _snippet_for_tokens(text: str, tokens: list, chars: int = 420) -> str:
+    text = (text or "").replace("\n", " ").strip()
+    if not text:
+        return ""
+    lowered = text.lower()
+    hit = -1
+    for token in tokens or []:
+        if not token:
+            continue
+        idx = lowered.find(str(token).lower())
+        if idx >= 0:
+            hit = idx
+            break
+    if hit < 0:
+        return text[:chars]
+    start = max(0, hit - chars // 3)
+    end = min(len(text), start + chars)
+    snippet = text[start:end].strip()
+    if start > 0:
+        snippet = "..." + snippet
+    if end < len(text):
+        snippet += "..."
+    return snippet
+
+
+def _page_ref_line(row: dict) -> str:
+    pid = row.get("id")
+    date = (row.get("updated_at") or row.get("created_at") or "")[:10]
+    title = (row.get("page_title") or "未命名")[:60]
+    snippet = (row.get("snippet") or row.get("summary") or "").replace("\n", " ")[:360]
+    source = row.get("page_url") or ""
+    line = f"- [p#{pid}] {date} 《{title}》：{snippet}"
+    if source:
+        line += f"\n  来源：{source[:160]}"
+    line += "\n  证据等级：exposure/seen，只代表系统有证据用户接触过该页面，不代表用户认同或记住。"
+    return line
+
+
+def _select_exposure_memory(conn: sqlite3.Connection, query_text: str, page_url: str = "",
+                            limit: int = 6, same_host_only: bool = False) -> tuple:
+    conn.row_factory = sqlite3.Row
+    rows = [dict(r) for r in conn.execute(
+        """SELECT pc.id, pc.page_url, pc.page_title, pc.summary, pc.full_text,
+                  pc.created_at, pc.updated_at,
+                  (SELECT source_type FROM page_exposure_events e
+                   WHERE e.page_cache_id = pc.id
+                   ORDER BY e.updated_at DESC LIMIT 1) AS latest_source_type,
+                  (SELECT evidence_level FROM page_exposure_events e
+                   WHERE e.page_cache_id = pc.id
+                   ORDER BY e.updated_at DESC LIMIT 1) AS latest_evidence_level
+           FROM page_cache pc
+           ORDER BY pc.updated_at DESC
+           LIMIT 500"""
+    ).fetchall()]
+    host = _host(page_url)
+    tokens = _keyword_tokens(query_text, max_tokens=28)
+    scored = []
+    for idx, row in enumerate(rows):
+        row_host = _host(row.get("page_url") or "")
+        if same_host_only and host and row_host != host and row.get("page_url") != page_url:
+            continue
+        title = (row.get("page_title") or "").lower()
+        url = (row.get("page_url") or "").lower()
+        summary = (row.get("summary") or "").lower()
+        full_text = (row.get("full_text") or "")
+        full_lower = full_text.lower()
+        score = 0
+        matched = []
+        if page_url and row.get("page_url") == page_url:
+            score += 10
+        if host and row_host == host:
+            score += 4
+        for token in tokens:
+            t = token.lower()
+            token_score = 0
+            if t in title:
+                token_score += 12
+            if t in url:
+                token_score += 5
+            if t in summary:
+                token_score += 6
+            if t in full_lower:
+                token_score += min(full_lower.count(t), 4)
+            if token_score:
+                matched.append(token)
+                score += token_score
+        if score > 0:
+            row["matched_tokens"] = matched[:10]
+            row["score"] = score
+            row["snippet"] = _snippet_for_tokens(full_text or row.get("summary") or "", matched or tokens)
+            scored.append((score, -idx, row))
+    scored.sort(key=lambda x: (-x[0], -x[1]))
+    selected = [r for _, _, r in scored[:limit]]
+    if not selected:
+        return [], "no_exposure_match"
+    reason = "page_cache_keyword"
+    if page_url:
+        reason = "page_cache_url_host_keyword"
+    return selected, f"{reason}:{','.join(tokens[:8])}"
+
+
 def _select_working_skills(conn: sqlite3.Connection, query_text: str, limit: int = 3) -> tuple:
     conn.row_factory = sqlite3.Row
     rows = [dict(r) for r in conn.execute(
@@ -1016,6 +1218,9 @@ def _build_context_pack_for_comment(comment_id: int, role: str = "") -> dict:
             conn, query_text, page_url=current.get("page_url") or "",
             exclude_comment_id=comment_id, limit=5, same_host_only=True,
         )
+        exposures, exposure_reason = _select_exposure_memory(
+            conn, query_text, page_url=current.get("page_url") or "", limit=5, same_host_only=False,
+        )
         latest_thinking = conn.execute(
             "SELECT id, title, synthesis_md, created_at FROM thinking_summaries "
             "WHERE status='active' ORDER BY created_at DESC LIMIT 1"
@@ -1050,6 +1255,14 @@ def _build_context_pack_for_comment(comment_id: int, role: str = "") -> dict:
             sections.append("### A' · 相关历史批注\n" + "\n".join(lines))
         else:
             sections.append("### A' · 相关历史批注\n没有命中同 URL/同 host 的历史批注。")
+        if exposures:
+            sections.append(
+                "### E · 看过/缓存过的页面（弱证据）\n"
+                "这些是 exposure memory：只说明系统有页面全文或接触证据，不说明用户认同、理解或记住。\n"
+                + "\n".join(_page_ref_line(r) for r in exposures)
+            )
+        else:
+            sections.append("### E · 看过/缓存过的页面（弱证据）\n没有命中页面全文缓存。")
         if skills:
             sections.append("### C · 已养成的工作方式\n" + "\n".join(
                 f"- [skill#{s['id']}] {s.get('name')}: {s.get('description')}" for s in skills
@@ -1063,12 +1276,26 @@ def _build_context_pack_for_comment(comment_id: int, role: str = "") -> dict:
             "selected_skill_ids": [s["id"] for s in skills],
             "episodic_comment_ids": [r["id"] for r in episodic],
             "same_page_comment_ids": [r["id"] for r in same_page],
+            "exposure_page_ids": [r["id"] for r in exposures],
+            "exposure_refs": [
+                {
+                    "id": r.get("id"),
+                    "page_url": r.get("page_url"),
+                    "page_title": r.get("page_title"),
+                    "snippet": r.get("snippet"),
+                    "score": r.get("score"),
+                    "matched_tokens": r.get("matched_tokens") or [],
+                    "evidence_level": r.get("latest_evidence_level") or "seen",
+                }
+                for r in exposures
+            ],
             "current_page_url": current.get("page_url") or "",
             "selection_reasons": {
                 "identity": "active_profile_snapshot" if profile else "missing",
                 "skills": skill_reason,
                 "episodic": episodic_reason,
                 "same_page": "same_url_latest_3",
+                "exposure": exposure_reason,
                 "thinking": "active_thinking_summary" if latest_thinking else "missing",
             },
             "token_budget_used": max(1, len(context_md) // 4),
@@ -1089,6 +1316,9 @@ def _build_context_pack_for_query(query: str) -> dict:
         skills, skill_reason = _select_working_skills(conn, query, limit=4)
         episodic, episodic_reason = _select_comment_memory(
             conn, query, page_url="", exclude_comment_id=None, limit=12, same_host_only=False,
+        )
+        exposures, exposure_reason = _select_exposure_memory(
+            conn, query, page_url="", limit=8, same_host_only=False,
         )
         latest_thinking = conn.execute(
             "SELECT id, title, synthesis_md, created_at FROM thinking_summaries "
@@ -1117,6 +1347,14 @@ def _build_context_pack_for_query(query: str) -> dict:
             sections.append("### 相关历史批注\n" + "\n".join(lines))
         else:
             sections.append("### 相关历史批注\n没有找到明显相关批注。")
+        if exposures:
+            sections.append(
+                "### 相关看过页面（弱证据）\n"
+                "这些是 exposure memory：只说明系统有页面全文或接触证据，不说明用户认同、理解或记住。\n"
+                + "\n".join(_page_ref_line(r) for r in exposures)
+            )
+        else:
+            sections.append("### 相关看过页面（弱证据）\n没有命中页面全文缓存。")
         context_md = "\n\n".join(sections)
         return {
             "comment_id": None,
@@ -1124,11 +1362,25 @@ def _build_context_pack_for_query(query: str) -> dict:
             "selected_skill_ids": [s["id"] for s in skills],
             "episodic_comment_ids": [r["id"] for r in episodic],
             "same_page_comment_ids": [],
+            "exposure_page_ids": [r["id"] for r in exposures],
+            "exposure_refs": [
+                {
+                    "id": r.get("id"),
+                    "page_url": r.get("page_url"),
+                    "page_title": r.get("page_title"),
+                    "snippet": r.get("snippet"),
+                    "score": r.get("score"),
+                    "matched_tokens": r.get("matched_tokens") or [],
+                    "evidence_level": r.get("latest_evidence_level") or "seen",
+                }
+                for r in exposures
+            ],
             "current_page_url": "",
             "selection_reasons": {
                 "identity": "active_profile_snapshot" if profile else "missing",
                 "skills": skill_reason,
                 "episodic": episodic_reason,
+                "exposure": exposure_reason,
                 "mode": "memory_chat_v0",
             },
             "token_budget_used": max(1, len(context_md) // 4),
@@ -1155,8 +1407,9 @@ def _insert_context_pack(conn: sqlite3.Connection, pack: dict, reply_id: int = N
         """INSERT INTO context_packs
            (reply_id, comment_id, chat_message_id, source_type, identity_snapshot_id,
             selected_skill_ids, episodic_comment_ids, same_page_comment_ids,
-            current_page_url, selection_reasons, token_budget_used, query_text, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            exposure_page_ids, exposure_refs_json, current_page_url, selection_reasons,
+            token_budget_used, query_text, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             reply_id,
             pack.get("comment_id"),
@@ -1166,6 +1419,8 @@ def _insert_context_pack(conn: sqlite3.Connection, pack: dict, reply_id: int = N
             _json(pack.get("selected_skill_ids") or []),
             _json(pack.get("episodic_comment_ids") or []),
             _json(pack.get("same_page_comment_ids") or []),
+            _json(pack.get("exposure_page_ids") or []),
+            _json(pack.get("exposure_refs") or []),
             pack.get("current_page_url") or "",
             _json(pack.get("selection_reasons") or {}),
             pack.get("token_budget_used"),
@@ -1800,6 +2055,7 @@ def run_agent_v2(comment_id: int, intent: str, role: str, prompt: str,
             "selected_skill_ids": context_pack.get("selected_skill_ids") if context_pack else [],
             "episodic_comment_ids": context_pack.get("episodic_comment_ids") if context_pack else [],
             "same_page_comment_ids": context_pack.get("same_page_comment_ids") if context_pack else [],
+            "exposure_page_ids": context_pack.get("exposure_page_ids") if context_pack else [],
         },
         "rules_applied": [r["rule"] for r in json.loads(load_learned_rules()).get("rules", [])
                           if r.get("active") and r.get("scope") in ("all", f"role:{role}")][:5],
@@ -1888,6 +2144,7 @@ def run_agent_v1_fallback(comment_id: int, agent_type: str,
             "selected_skill_ids": context_pack.get("selected_skill_ids") if context_pack else [],
             "episodic_comment_ids": context_pack.get("episodic_comment_ids") if context_pack else [],
             "same_page_comment_ids": context_pack.get("same_page_comment_ids") if context_pack else [],
+            "exposure_page_ids": context_pack.get("exposure_page_ids") if context_pack else [],
         },
         "rules_applied": [],
         "status": status
@@ -1967,6 +2224,13 @@ class ReplyCreate(BaseModel):
 class StatusUpdate(BaseModel):
     status: str  # open / resolved / tracking / archived
 
+class ExposureSeenCreate(BaseModel):
+    page_url: str
+    page_title: str = ""
+    page_content: str
+    source_type: str = "seen"
+    capture_reason: str = "allowlisted_reading_source"
+
 @app.post("/comments")
 def create_comment(body: CommentCreate):
     """新建评论，v2 路由器自动判断 intent/role，保留 @手动路由兼容"""
@@ -1988,12 +2252,20 @@ def create_comment(body: CommentCreate):
     comment_id = cursor.lastrowid
 
     # 全文缓存：按URL去重
+    page_cache_id = None
     if body.page_content and body.page_content.strip():
         try:
-            conn.execute(
-                """INSERT OR IGNORE INTO page_cache (page_url, page_title, full_text, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (body.page_url, body.page_title, body.page_content, now, now)
+            page_cache_id = _upsert_page_cache(conn, body.page_url, body.page_title, body.page_content, now)
+            _record_page_exposure(
+                conn,
+                body.page_url,
+                body.page_title,
+                page_cache_id,
+                source_type="commented",
+                evidence_level="commented",
+                capture_reason="comment_create_page_content",
+                full_text_chars=len(body.page_content),
+                now=now,
             )
         except Exception:
             pass
@@ -2091,6 +2363,42 @@ def create_comment(body: CommentCreate):
         "status": "open",
         "message": "评论已创建，AI 正在思考中..."
     }
+
+
+@app.post("/exposures/seen")
+def record_seen_exposure(body: ExposureSeenCreate):
+    """Record weak exposure memory for allowlisted reading sources.
+
+    This is intentionally not a global browser-history collector. It means:
+    "the local system has evidence the user was exposed to this page", not
+    "the user endorsed, remembered, or commented on this page".
+    """
+    page_url = (body.page_url or "").strip()
+    page_content = (body.page_content or "").strip()
+    if not page_url:
+        raise HTTPException(status_code=400, detail="page_url is required")
+    if not page_content:
+        raise HTTPException(status_code=400, detail="page_content is required")
+    now = _now_iso()
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        page_cache_id = _upsert_page_cache(conn, page_url, body.page_title or "", page_content, now)
+        event_id = _record_page_exposure(
+            conn,
+            page_url,
+            body.page_title or "",
+            page_cache_id,
+            source_type=body.source_type or "seen",
+            evidence_level="seen",
+            capture_reason=body.capture_reason or "allowlisted_reading_source",
+            full_text_chars=len(page_content),
+            now=now,
+        )
+        conn.commit()
+        return {"ok": True, "page_cache_id": page_cache_id, "exposure_event_id": event_id}
+    finally:
+        conn.close()
+
 
 @app.get("/comments")
 def list_comments(page_url: str = None, status: str = None):
@@ -2553,7 +2861,14 @@ def debug_comment_detail(comment_id: int):
         context_packs = [
             _debug_parse_json_fields(
                 row,
-                ["selected_skill_ids", "episodic_comment_ids", "same_page_comment_ids", "selection_reasons"],
+                [
+                    "selected_skill_ids",
+                    "episodic_comment_ids",
+                    "same_page_comment_ids",
+                    "exposure_page_ids",
+                    "exposure_refs_json",
+                    "selection_reasons",
+                ],
                 [],
             )
             for row in context_packs
@@ -3291,6 +3606,33 @@ def notebook_chat_history(limit: int = 40):
         conn.close()
 
 
+@app.get("/notebook/page-cache/{page_id}")
+def notebook_page_cache_detail(page_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT id, page_url, page_title, summary, full_text, created_at, updated_at "
+            "FROM page_cache WHERE id=?",
+            (page_id,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="page cache not found")
+        data = dict(row)
+        full_text = data.pop("full_text") or ""
+        data["full_text_chars"] = len(full_text)
+        data["full_text_preview"] = full_text[:1200]
+        events = conn.execute(
+            "SELECT id, source_type, evidence_level, capture_reason, full_text_chars, created_at, updated_at "
+            "FROM page_exposure_events WHERE page_cache_id=? ORDER BY updated_at DESC LIMIT 8",
+            (page_id,),
+        ).fetchall()
+        data["exposure_events"] = [dict(e) for e in events]
+        return data
+    finally:
+        conn.close()
+
+
 @app.post("/notebook/chat")
 def notebook_chat(req: MemoryChatRequest):
     message = (req.message or "").strip()
@@ -3317,12 +3659,14 @@ def notebook_chat(req: MemoryChatRequest):
 
 ## 回答要求
 - 只基于上面的记忆上下文回答。
-- 能引用证据时必须写 [c#123] 这样的引用。
+- 能引用证据时必须写 [c#123] 或 [p#123] 这样的引用。
+- [c#] 是用户主动批注/追问证据；[p#] 是 exposure 页面证据，只能说明用户看过或本地缓存过，不能推断用户认同。
 - 如果没有足够证据，直接说没有在现有批注里找到，不要编。
 - 这是只读问答入口，不要承诺已经修改记忆。"""
     system_prompt = (
         "你是 mem-ai 记忆笔记本里的只读问答入口。你的任务是帮用户找回、核对、解释自己的历史批注和记忆。"
-        "回答要短，先给结论，再列证据。必须用 [c#id] 引用具体批注；没有证据就说没有找到。"
+        "回答要短，先给结论，再列证据。必须用 [c#id] 引用具体批注，或用 [p#id] 引用看过/缓存过的页面。"
+        "[p#id] 是弱证据，不要把 exposure 说成用户立场；没有证据就说没有找到。"
     )
 
     status = "success"
@@ -3365,6 +3709,7 @@ def notebook_chat(req: MemoryChatRequest):
             "identity_snapshot_id": pack.get("identity_snapshot_id"),
             "selected_skill_ids": pack.get("selected_skill_ids") or [],
             "episodic_comment_ids": pack.get("episodic_comment_ids") or [],
+            "exposure_page_ids": pack.get("exposure_page_ids") or [],
         },
     }
 

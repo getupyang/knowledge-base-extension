@@ -919,6 +919,8 @@
         ["context_packs.selected_skill_ids", "选中的规则/技能 id。不是只做 rules，而是 context pack 的一个组成部分。", "context"],
         ["context_packs.episodic_comment_ids", "被召回的历史批注 id。回答“这次 AI 联想到了哪些过去问题”。", "context"],
         ["context_packs.same_page_comment_ids", "同一页面内被带入的其它批注 id。适合连续读同一篇文章时复盘。", "context"],
+        ["context_packs.exposure_page_ids", "被召回的 page_cache 页面 id，即 p# 证据。它是“看过/缓存过”的弱证据，不等于用户评论或认同。", "context"],
+        ["context_packs.exposure_refs_json", "本次召回 exposure 页面时的标题、URL、片段、命中词和分数快照，用于还原当时为什么把 p# 带进 prompt。", "context"],
         ["context_packs.selection_reasons", "为什么选这些画像、规则、历史批注和同页批注。验收可解释性主要看这里。", "context"],
         ["context_packs.token_budget_used", "Context Loader 估算使用的上下文预算，帮助判断是否塞得过多或过少。", "context"],
         ["comment_interpretations.interpretation_json", "Growth 对用户这条批注的结构化理解：gist、attention、stance、scope、confidence。", "growth"],

@@ -237,16 +237,21 @@ class Regression:
         backend = read_text(BACKEND_DIR / "agent_api.py")
         worker = read_text(BACKEND_DIR / "worker.py")
         content = read_text(SRC_DIR / "content" / "index.js")
+        notebook = read_text(SRC_DIR / "notebook" / "app.js")
         console_html = read_text(SRC_DIR / "debug" / "sqlite-console.html")
 
         backend_terms = [
             "memory_intake_ledger",
             "memory_input_events",
+            "page_exposure_events",
             "context_packs",
+            "exposure_page_ids",
             "memory_event_interpretations",
             "active_question_signals",
             "project_signals",
             "profile_signals",
+            "_select_exposure_memory",
+            "/exposures/seen",
             "_record_intake_notion",
             "/notion/upsert",
         ]
@@ -265,6 +270,9 @@ class Regression:
 
         content_terms = [
             "syncCommentFromBackend",
+            "capturePageExposureIfAllowed",
+            "shouldAutoCaptureExposure",
+            "/exposures/seen",
             "remoteReplyId",
             "updateNotionPage",
             "askAI(commentId);",
@@ -280,6 +288,16 @@ class Regression:
         reply_body = reply_flow.group(1)
         assert_true("/reply" in reply_body, "submitReply must persist the user follow-up to backend")
         assert_true("askAI(commentId);" in reply_body, "submitReply must trigger AI by default after recording")
+
+        notebook_terms = [
+            "/notebook/page-cache/",
+            "fetchPageCache",
+            "[c#NNN] / [p#NNN]",
+            "dataset.pid",
+            "exposure",
+        ]
+        missing = [term for term in notebook_terms if term not in notebook]
+        assert_true(not missing, f"notebook exposure terms missing: {missing}")
 
         console_terms = [
             "Memory Events",
@@ -297,7 +315,7 @@ class Regression:
                 "python syntax ok",
                 f"node syntax ok: {len(js_files)} files",
                 "html inline script syntax ok",
-                "contracts present: ledger/events/growth/context/notion/default-AI-followup/debug-console",
+                "contracts present: ledger/events/growth/context/notion/exposure-memory/default-AI-followup/debug-console",
             ]
         )
 
@@ -347,7 +365,7 @@ class Regression:
                         "page_title": "Regression Article",
                         "selected_text": "Velo 2.0 / 470v",
                         "surrounding_text": "A nearby sentence before the selected text and one after it.",
-                        "page_content": "Full article text captured by the content script for exposure memory.",
+                        "page_content": "Full article text captured by the content script for exposure memory. ProductHunt launch video product evidence.",
                         "comment": "前几天也有个类似产品？",
                         "no_agent": True,
                     },
@@ -359,6 +377,11 @@ class Regression:
                 assert_true(comment and comment["comment"] == "前几天也有个类似产品？", "comment row missing")
                 cache = qone("SELECT * FROM page_cache WHERE page_url=?", ("https://kb-regression.local/article",))
                 assert_true(cache and "Full article text" in cache["full_text"], "page_cache full text missing")
+                exposure_event = qone(
+                    "SELECT * FROM page_exposure_events WHERE page_cache_id=? AND source_type='commented'",
+                    (cache["id"],),
+                )
+                assert_true(exposure_event and exposure_event["evidence_level"] == "commented", "commented exposure event missing")
 
                 ledger = qone("SELECT * FROM memory_intake_ledger WHERE comment_id=?", (comment_id,))
                 assert_true(ledger and ledger["local_status"] == "local_saved", "intake ledger local_saved missing")
@@ -430,6 +453,35 @@ class Regression:
                 assert_true(duplicate.json()["deduped"] is True, "event growth jobs should dedupe")
                 invalid_job = client.post("/jobs", json={"kind": "unknown", "payload": {}})
                 assert_true(invalid_job.status_code == 400, "unknown jobs should be rejected")
+                empty_seen = client.post(
+                    "/exposures/seen",
+                    json={"page_url": "https://kb-regression.local/empty-seen", "page_content": "  "},
+                )
+                assert_true(empty_seen.status_code == 400, "empty seen exposure should be rejected")
+
+                seen_response = client.post(
+                    "/exposures/seen",
+                    json={
+                        "page_url": "https://kb-regression.local/producthunt-daily",
+                        "page_title": "ProductHunt Daily",
+                        "page_content": "A memory notebook product appeared on ProductHunt. It stores exposure memory but does not infer endorsement.",
+                        "source_type": "seen",
+                        "capture_reason": "allowlisted_reading_source",
+                    },
+                )
+                assert_true(seen_response.status_code == 200, seen_response.text)
+                seen_page_id = int(seen_response.json()["page_cache_id"])
+                seen_event = qone(
+                    "SELECT * FROM page_exposure_events WHERE page_cache_id=? AND source_type='seen'",
+                    (seen_page_id,),
+                )
+                assert_true(seen_event and seen_event["evidence_level"] == "seen", "seen exposure event missing")
+                query_pack = agent_api._build_context_pack_for_query("ProductHunt memory notebook exposure")
+                assert_true(seen_page_id in query_pack.get("exposure_page_ids", []), "query context pack did not retrieve exposure page")
+                assert_true("[p#" in query_pack.get("context_md", ""), "query context must cite p# exposure refs")
+                page_detail = client.get(f"/notebook/page-cache/{seen_page_id}")
+                assert_true(page_detail.status_code == 200, page_detail.text)
+                assert_true(page_detail.json()["exposure_events"], "page cache detail should include exposure events")
 
                 now = agent_api._now_iso()
                 conn = sqlite3.connect(db_path)
@@ -453,10 +505,23 @@ class Regression:
                             "selected_skill_ids": [],
                             "episodic_comment_ids": [comment_id],
                             "same_page_comment_ids": [comment_id],
+                            "exposure_page_ids": [seen_page_id],
+                            "exposure_refs": [
+                                {
+                                    "id": seen_page_id,
+                                    "page_url": "https://kb-regression.local/producthunt-daily",
+                                    "page_title": "ProductHunt Daily",
+                                    "snippet": "A memory notebook product appeared on ProductHunt.",
+                                    "score": 10,
+                                    "matched_tokens": ["producthunt", "memory"],
+                                    "evidence_level": "seen",
+                                }
+                            ],
                             "current_page_url": "https://kb-regression.local/article",
                             "selection_reasons": {
                                 "episodic": "same topic",
                                 "same_page": "same page",
+                                "exposure": "page_cache_keyword:producthunt,memory",
                                 "mode": "regression",
                             },
                             "token_budget_used": 128,
@@ -594,6 +659,8 @@ class Regression:
                 detail_json = detail.json()
                 assert_true(len(detail_json["memory_events"]) == 3, "debug detail should expose 3 memory events")
                 assert_true(len(detail_json["context_packs"]) == 1, "debug detail should expose context pack")
+                assert_true(detail_json["context_packs"][0]["exposure_page_ids"] == [seen_page_id], "debug context pack should expose p# ids")
+                assert_true(detail_json["context_packs"][0]["exposure_refs_json"][0]["id"] == seen_page_id, "debug context pack should expose p# refs")
                 assert_true(detail_json["ledger"]["growth_status"] == "enqueued", "debug ledger missing growth status")
                 assert_true(len(detail_json["growth"]["event_interpretations"]) == 1, "event interpretations missing")
                 assert_true(len(detail_json["growth"]["rule_candidates"]) == 1, "rule candidates missing")
@@ -606,6 +673,7 @@ class Regression:
                     [
                         f"temp DB: {db_path}",
                         "covered: comment intake, page_cache, ledger, user events, growth job enqueue/dedupe",
+                        "covered: exposure page cache, seen/commented evidence events, p# context retrieval",
                         "covered: follow-up records then triggers growth; PATCH does not duplicate behavior events",
                         "covered: context pack and growth artifacts visible in debug detail",
                         "covered: empty/missing resource boundaries return 400/404",

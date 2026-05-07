@@ -19,6 +19,7 @@ npm run regression
 - Contract scan:
   - Memory Intake Ledger exists.
   - Memory Input Events exists.
+  - Exposure Memory exists.
   - Context Packs exists.
   - Memory Growth result tables exist.
   - Notion paths still exist.
@@ -32,6 +33,7 @@ Writes run only in a temporary `KB_DATA_DIR`. The user's real DB and Notion are 
 - Create comment with `no_agent=true`.
 - Verify `comments` row.
 - Verify `page_cache` stores page full text.
+- Verify `page_exposure_events` records `commented` evidence.
 - Verify `memory_intake_ledger` is created and growth is enqueued.
 - Verify `memory_input_events.comment_created` is created.
 - Verify `jobs.memory_growth_for_comment` contains `comment_id`, `event_id`, and `trigger_reason`.
@@ -39,12 +41,16 @@ Writes run only in a temporary `KB_DATA_DIR`. The user's real DB and Notion are 
 - Verify `replies.author=user`.
 - Verify `memory_input_events.user_followup`.
 - Verify follow-up growth job enqueue and event-level dedupe.
+- Record weak `seen` exposure through `/exposures/seen`.
+- Verify `p#` exposure pages are retrievable by Context Loader.
+- Verify `/notebook/page-cache/{id}` exposes page metadata and exposure events.
 - Patch the comment conversation snapshot.
 - Verify patch does not create duplicate memory events.
 - Insert deterministic agent reply/context-pack/growth fixtures in the temp DB.
 - Verify Debug Detail exposes:
   - memory events,
   - context packs,
+  - exposure page ids and exposure refs,
   - ledger,
   - jobs,
   - comment interpretation,
@@ -64,6 +70,7 @@ Boundary cases currently enforced:
 - Patch to missing comment returns `404`.
 - Unknown job kind returns `400`.
 - Duplicate event growth job is deduped instead of queued twice.
+- Empty seen exposure returns `400`.
 
 ## 3. Live Read-Only Smoke
 
@@ -77,6 +84,7 @@ The live section reads the real running system but does not write user memory.
   - `KB_REGRESSION_COMMENT_ID`,
   - or the latest live comment.
 - Verifies Debug Detail response shape includes ledger, events, context packs, growth artifacts, jobs, and DB path.
+- Exposure refs in context packs are treated as weak `p#` evidence, separate from active `c#` user comments.
 
 ## 4. Browser Smoke
 
