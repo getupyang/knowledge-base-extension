@@ -48,7 +48,9 @@ function fmtDateShort(iso) {
 }
 
 const SEEN_AGENT_REPLY_KEY = "kb_nb_seen_agent_reply_ids_v1";
+const SEEN_AGENT_REPLY_BASELINE_KEY = "kb_nb_seen_agent_reply_baseline_v1";
 let _diaryUnreadReplyIds = [];
+let _diaryBaselineInitializedNow = false;
 
 function readSeenAgentReplyIds() {
   try {
@@ -61,6 +63,17 @@ function readSeenAgentReplyIds() {
 
 function writeSeenAgentReplyIds(ids) {
   localStorage.setItem(SEEN_AGENT_REPLY_KEY, JSON.stringify(Array.from(ids)));
+}
+
+function ensureAgentReplySeenBaseline(replyIds) {
+  _diaryBaselineInitializedNow = false;
+  if (localStorage.getItem(SEEN_AGENT_REPLY_BASELINE_KEY)) return readSeenAgentReplyIds();
+  const seen = readSeenAgentReplyIds();
+  replyIds.filter(id => id !== undefined && id !== null).map(String).forEach(id => seen.add(id));
+  writeSeenAgentReplyIds(seen);
+  localStorage.setItem(SEEN_AGENT_REPLY_BASELINE_KEY, new Date().toISOString());
+  _diaryBaselineInitializedNow = true;
+  return seen;
 }
 
 function markAgentRepliesSeen(ids) {
@@ -91,7 +104,9 @@ function updateDiaryUnreadNotice() {
   if (!notice) return;
   const count = _diaryUnreadReplyIds.length;
   if (!count) {
-    notice.innerHTML = `<span>没有未读 AI 回复</span>`;
+    notice.innerHTML = _diaryBaselineInitializedNow
+      ? `<span>已建立已读基线，之后新完成的 AI 回复会在这里提醒</span>`
+      : `<span>没有未读 AI 回复</span>`;
     notice.classList.add("empty");
     return;
   }
@@ -866,7 +881,10 @@ async function loadDiary() {
       list.innerHTML = `<div class="kb-nb-empty">还没有批注 · 去网页上划线评注一条试试</div>`;
       return;
     }
-    const seenReplyIds = readSeenAgentReplyIds();
+    const allAgentReplyIds = data.items.flatMap(c =>
+      (c.replies || []).filter(r => r.author === "agent" && r.id !== undefined && r.id !== null).map(r => String(r.id))
+    );
+    const seenReplyIds = ensureAgentReplySeenBaseline(allAgentReplyIds);
     _diaryUnreadReplyIds = [];
     list.innerHTML = data.items.map(c => {
       const t = new Date(c.created_at);
