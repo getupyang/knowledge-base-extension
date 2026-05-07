@@ -138,6 +138,35 @@ def init_db():
             FOREIGN KEY (comment_id) REFERENCES comments(id)
         )
     """)
+    # ── P1.2.1：Memory Events，把“一条划线 thread”和“每次用户表达”拆开 ──
+    # comments 仍是一条划线/一张 Notion 档案；memory_input_events 记录首评、追问、补充、
+    # 纠正、AI 回复等行为事件。用户事件会独立触发 growth。
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS memory_input_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            comment_id INTEGER NOT NULL,
+            reply_id INTEGER,
+            actor TEXT NOT NULL,                  -- 'user' | 'agent' | 'system'
+            event_type TEXT NOT NULL,             -- comment_created | user_followup | agent_reply_added | ...
+            source_type TEXT NOT NULL,            -- comment | reply | patch | system
+            source_id INTEGER NOT NULL,
+            content TEXT NOT NULL,
+            growth_status TEXT NOT NULL DEFAULT 'pending',
+            growth_job_ids TEXT NOT NULL DEFAULT '[]',
+            growth_enqueued_at TEXT,
+            growth_processed_at TEXT,
+            growth_decision TEXT,
+            error_summary TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (comment_id) REFERENCES comments(id),
+            FOREIGN KEY (reply_id) REFERENCES replies(id),
+            UNIQUE(source_type, source_id, event_type)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_input_events_comment_created ON memory_input_events(comment_id, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_input_events_growth_status ON memory_input_events(growth_status, updated_at)")
+
     # ── M2 新增：jobs 异步任务表（durable + crash recovery）──
     # 设计见 ~/mem-ai/docs/memory-backend-design.md §2.10
     conn.execute("""
@@ -308,9 +337,23 @@ def init_db():
         )
     """)
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS memory_event_interpretations (
+            event_id INTEGER PRIMARY KEY,
+            comment_id INTEGER NOT NULL,
+            interpretation_json TEXT NOT NULL,
+            decision TEXT,
+            produced_by_job_id INTEGER,
+            confidence REAL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (event_id) REFERENCES memory_input_events(id),
+            FOREIGN KEY (comment_id) REFERENCES comments(id)
+        )
+    """)
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS rule_candidates (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             comment_id INTEGER NOT NULL,
+            event_id INTEGER,
             rule_text TEXT,
             behavior_type TEXT,
             applies_to TEXT,
@@ -319,7 +362,8 @@ def init_db():
             status TEXT NOT NULL DEFAULT 'candidate',
             produced_by_job_id INTEGER,
             created_at TEXT NOT NULL,
-            FOREIGN KEY (comment_id) REFERENCES comments(id)
+            FOREIGN KEY (comment_id) REFERENCES comments(id),
+            FOREIGN KEY (event_id) REFERENCES memory_input_events(id)
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_rule_candidates_comment ON rule_candidates(comment_id)")
@@ -327,13 +371,15 @@ def init_db():
         CREATE TABLE IF NOT EXISTS active_question_signals (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             comment_id INTEGER NOT NULL,
+            event_id INTEGER,
             question TEXT,
             signal_strength REAL,
             scope TEXT,
             status TEXT NOT NULL DEFAULT 'active',
             produced_by_job_id INTEGER,
             created_at TEXT NOT NULL,
-            FOREIGN KEY (comment_id) REFERENCES comments(id)
+            FOREIGN KEY (comment_id) REFERENCES comments(id),
+            FOREIGN KEY (event_id) REFERENCES memory_input_events(id)
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_active_question_signals_status ON active_question_signals(status, created_at DESC)")
@@ -341,6 +387,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS theme_signals (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             comment_id INTEGER,
+            event_id INTEGER,
             theme TEXT NOT NULL,
             intensity REAL,
             window_start TEXT,
@@ -349,7 +396,8 @@ def init_db():
             representative_comment_ids TEXT,
             produced_by_job_id INTEGER,
             created_at TEXT NOT NULL,
-            FOREIGN KEY (comment_id) REFERENCES comments(id)
+            FOREIGN KEY (comment_id) REFERENCES comments(id),
+            FOREIGN KEY (event_id) REFERENCES memory_input_events(id)
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_theme_signals_theme_created ON theme_signals(theme, created_at DESC)")
@@ -357,24 +405,28 @@ def init_db():
         CREATE TABLE IF NOT EXISTS project_signals (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             comment_id INTEGER NOT NULL,
+            event_id INTEGER,
             signal_json TEXT NOT NULL,
             confidence REAL,
             decision TEXT,
             produced_by_job_id INTEGER,
             created_at TEXT NOT NULL,
-            FOREIGN KEY (comment_id) REFERENCES comments(id)
+            FOREIGN KEY (comment_id) REFERENCES comments(id),
+            FOREIGN KEY (event_id) REFERENCES memory_input_events(id)
         )
     """)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS profile_signals (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             comment_id INTEGER NOT NULL,
+            event_id INTEGER,
             signal_json TEXT NOT NULL,
             confidence REAL,
             decision TEXT,
             produced_by_job_id INTEGER,
             created_at TEXT NOT NULL,
-            FOREIGN KEY (comment_id) REFERENCES comments(id)
+            FOREIGN KEY (comment_id) REFERENCES comments(id),
+            FOREIGN KEY (event_id) REFERENCES memory_input_events(id)
         )
     """)
 
@@ -396,12 +448,48 @@ def init_db():
         ("debug_meta TEXT", "replies"),
         ("surrounding_text TEXT", "comments"),
         ("notion_page_id TEXT", "comments"),
+        ("event_id INTEGER", "rule_candidates"),
+        ("event_id INTEGER", "active_question_signals"),
+        ("event_id INTEGER", "theme_signals"),
+        ("event_id INTEGER", "project_signals"),
+        ("event_id INTEGER", "profile_signals"),
     ]:
         try:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {col}")
         except Exception:
             pass  # 列已存在，忽略
     conn.execute("CREATE INDEX IF NOT EXISTS idx_comments_notion_page_id ON comments(notion_page_id)")
+    # 非破坏性历史映射：让旧 comments/replies 在 Debug Console 里也能按事件查看。
+    # 不自动 enqueue growth，避免突然批量加工用户历史库；未来新增事件会自动入队。
+    conn.execute("""
+        INSERT OR IGNORE INTO memory_input_events
+          (comment_id, reply_id, actor, event_type, source_type, source_id,
+           content, growth_status, created_at, updated_at)
+        SELECT c.id, NULL, 'user', 'comment_created', 'comment', c.id,
+               c.comment,
+               CASE WHEN l.growth_status = 'done' THEN 'done' ELSE 'historical' END,
+               c.created_at, c.updated_at
+        FROM comments c
+        LEFT JOIN memory_intake_ledger l ON l.comment_id = c.id
+    """)
+    conn.execute("""
+        INSERT OR IGNORE INTO memory_input_events
+          (comment_id, reply_id, actor, event_type, source_type, source_id,
+           content, growth_status, created_at, updated_at)
+        SELECT r.comment_id, r.id, 'user', 'user_followup', 'reply', r.id,
+               r.content, 'historical', r.created_at, r.created_at
+        FROM replies r
+        WHERE r.author = 'user'
+    """)
+    conn.execute("""
+        INSERT OR IGNORE INTO memory_input_events
+          (comment_id, reply_id, actor, event_type, source_type, source_id,
+           content, growth_status, created_at, updated_at)
+        SELECT r.comment_id, r.id, 'agent', 'agent_reply_added', 'reply', r.id,
+               r.content, 'skipped', r.created_at, r.created_at
+        FROM replies r
+        WHERE r.author = 'agent'
+    """)
     conn.commit()
     conn.close()
 
@@ -655,6 +743,48 @@ def _record_intake_notion(comment_id: int, status: str, error: str = ""):
         conn.close()
 
 
+def _record_memory_event(comment_id: int, actor: str, event_type: str, content: str,
+                         source_type: str, source_id: int, reply_id: Optional[int] = None,
+                         growth_status: Optional[str] = None) -> Optional[int]:
+    """Record one behavior event inside an annotation thread.
+
+    comments = thread/container. memory_input_events = every user/agent expression.
+    """
+    if not comment_id or not source_id:
+        return None
+    now = _now_iso()
+    status = growth_status or ("pending" if actor == "user" else "skipped")
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            """INSERT OR IGNORE INTO memory_input_events
+               (comment_id, reply_id, actor, event_type, source_type, source_id,
+                content, growth_status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                comment_id,
+                reply_id,
+                actor,
+                event_type,
+                source_type,
+                source_id,
+                content or "",
+                status,
+                now,
+                now,
+            ),
+        )
+        row = conn.execute(
+            "SELECT id FROM memory_input_events WHERE source_type=? AND source_id=? AND event_type=?",
+            (source_type, source_id, event_type),
+        ).fetchone()
+        conn.commit()
+        return int(row["id"]) if row else None
+    finally:
+        conn.close()
+
+
 def _append_growth_job_id(existing: str, job_id: int) -> str:
     try:
         ids = json.loads(existing or "[]")
@@ -667,31 +797,59 @@ def _append_growth_job_id(existing: str, job_id: int) -> str:
     return _json(ids)
 
 
-def _enqueue_memory_growth_job(comment_id: int, trigger_reason: str = "agent_reply") -> Optional[int]:
-    """Queue durable growth processing for a comment unless it is already queued/done."""
+def _enqueue_memory_growth_job(comment_id: int, trigger_reason: str = "agent_reply",
+                               event_id: Optional[int] = None) -> Optional[int]:
+    """Queue durable growth processing.
+
+    P1.2.1: event_id gives each user expression its own growth lifecycle. Without
+    event_id, this keeps the old comment-level dedupe behavior for compatibility.
+    """
     if not comment_id:
         return None
     _record_intake_local_saved(comment_id)
     conn = sqlite3.connect(DB_PATH)
     try:
         conn.row_factory = sqlite3.Row
+        event = None
+        if event_id:
+            event = conn.execute(
+                "SELECT growth_status, growth_job_ids FROM memory_input_events WHERE id=? AND comment_id=?",
+                (event_id, comment_id),
+            ).fetchone()
+            if not event:
+                return None
+            if event["growth_status"] in ("enqueued", "running", "done"):
+                return None
+
         ledger = conn.execute(
             "SELECT growth_status, growth_job_ids FROM memory_intake_ledger WHERE comment_id=?",
             (comment_id,),
         ).fetchone()
-        if ledger and ledger["growth_status"] in ("enqueued", "running", "done"):
+        if not event_id and ledger and ledger["growth_status"] in ("enqueued", "running", "done"):
             return None
         now = _now_iso()
         payload = {
             "comment_id": comment_id,
             "trigger_reason": trigger_reason,
         }
+        if event_id:
+            payload["event_id"] = event_id
         cur = conn.execute(
             "INSERT INTO jobs (kind, payload_json, status, max_attempts, created_at) "
             "VALUES ('memory_growth_for_comment', ?, 'queued', 3, ?)",
             (_json(payload), now),
         )
         job_id = cur.lastrowid
+        if event_id:
+            conn.execute(
+                """UPDATE memory_input_events
+                   SET growth_status='enqueued',
+                       growth_job_ids=?,
+                       growth_enqueued_at=?,
+                       updated_at=?
+                   WHERE id=?""",
+                (_append_growth_job_id(event["growth_job_ids"] if event else "[]", job_id), now, now, event_id),
+            )
         conn.execute(
             """UPDATE memory_intake_ledger
                SET growth_status='enqueued',
@@ -1670,11 +1828,21 @@ def run_agent_v2(comment_id: int, intent: str, role: str, prompt: str,
     conn.execute("UPDATE comments SET updated_at = ? WHERE id = ?", (now, comment_id))
     conn.commit()
     conn.close()
+    _record_memory_event(
+        comment_id,
+        actor="agent",
+        event_type="agent_reply_added",
+        content=content,
+        source_type="reply",
+        source_id=reply_id,
+        reply_id=reply_id,
+        growth_status="skipped",
+    )
 
-    # 学习层：成功时触发画像/上下文审视
+    # 学习层：成功时触发画像/上下文审视。Memory Growth 由用户表达事件触发，
+    # agent reply 只作为后续上下文证据，不默认写成用户记忆。
     if status == "success":
         _trigger_learning_layer(comment_id, user_comment, content)
-        _enqueue_memory_growth_job(comment_id, "agent_reply")
 
 # v1 兼容：保留旧 run_agent 作为 fallback
 def run_agent_v1_fallback(comment_id: int, agent_type: str,
@@ -1743,8 +1911,16 @@ def run_agent_v1_fallback(comment_id: int, agent_type: str,
     conn.execute("UPDATE comments SET updated_at = ? WHERE id = ?", (now, comment_id))
     conn.commit()
     conn.close()
-    if status == "success":
-        _enqueue_memory_growth_job(comment_id, "agent_reply")
+    _record_memory_event(
+        comment_id,
+        actor="agent",
+        event_type="agent_reply_added",
+        content=content,
+        source_type="reply",
+        source_id=reply_id,
+        reply_id=reply_id,
+        growth_status="skipped",
+    )
 
 # ──────────────────────────────────────────
 # Debug 日志
@@ -1822,10 +1998,18 @@ def create_comment(body: CommentCreate):
     conn.commit()
     conn.close()
     _record_intake_local_saved(comment_id)
+    event_id = _record_memory_event(
+        comment_id,
+        actor="user",
+        event_type="comment_created",
+        content=cleaned_comment,
+        source_type="comment",
+        source_id=comment_id,
+    )
+    _enqueue_memory_growth_job(comment_id, "comment_created", event_id=event_id)
 
     # no_agent=True 时仅存储
     if body.no_agent:
-        _enqueue_memory_growth_job(comment_id, "no_agent_comment")
         return {"id": comment_id, "agent_type": agent_type_for_db, "status": "open",
                 "message": "评论已存储，等待手动召唤 AI"}
 
@@ -1970,14 +2154,25 @@ def add_reply(comment_id: int, body: ReplyCreate):
     """用户手动补充回复"""
     conn = sqlite3.connect(DB_PATH)
     now = datetime.now().isoformat()
-    conn.execute(
+    cur = conn.execute(
         "INSERT INTO replies (comment_id, author, content, created_at) VALUES (?, 'user', ?, ?)",
         (comment_id, body.content, now)
     )
+    reply_id = cur.lastrowid
     conn.execute("UPDATE comments SET updated_at = ? WHERE id = ?", (now, comment_id))
     conn.commit()
     conn.close()
-    return {"ok": True}
+    event_id = _record_memory_event(
+        comment_id,
+        actor="user",
+        event_type="user_followup",
+        content=body.content,
+        source_type="reply",
+        source_id=reply_id,
+        reply_id=reply_id,
+    )
+    job_id = _enqueue_memory_growth_job(comment_id, "user_followup", event_id=event_id)
+    return {"ok": True, "reply_id": reply_id, "event_id": event_id, "growth_job_id": job_id}
 
 @app.patch("/comments/{comment_id}/status")
 def update_status(comment_id: int, body: StatusUpdate):
@@ -2277,6 +2472,11 @@ def debug_comments(limit: int = 30, page_url: Optional[str] = None, q: Optional[
                 (SELECT COUNT(*) FROM replies r WHERE r.comment_id = c.id) AS reply_count,
                 (SELECT COUNT(*) FROM replies r WHERE r.comment_id = c.id AND r.author = 'agent') AS agent_reply_count,
                 (SELECT COUNT(*) FROM context_packs cp WHERE cp.comment_id = c.id) AS context_pack_count,
+                (SELECT COUNT(*) FROM memory_input_events e WHERE e.comment_id = c.id) AS memory_event_count,
+                (SELECT COUNT(*) FROM memory_input_events e
+                    WHERE e.comment_id = c.id AND e.actor = 'user') AS user_event_count,
+                (SELECT COUNT(*) FROM memory_input_events e
+                    WHERE e.comment_id = c.id AND e.actor = 'user' AND e.growth_status = 'done') AS user_event_growth_done_count,
                 (SELECT COUNT(*) FROM jobs j
                     WHERE j.payload_json LIKE '%"comment_id": ' || c.id || '%'
                        OR j.payload_json LIKE '%"comment_id":' || c.id || '%') AS job_count,
@@ -2310,6 +2510,22 @@ def debug_comment_detail(comment_id: int):
 
         replies = _debug_rows(conn, "SELECT * FROM replies WHERE comment_id=? ORDER BY created_at ASC", (comment_id,))
         replies = [_debug_parse_json_fields(row, ["debug_meta"]) for row in replies]
+
+        memory_events = _debug_rows(
+            conn,
+            "SELECT * FROM memory_input_events WHERE comment_id=? ORDER BY created_at ASC",
+            (comment_id,),
+        )
+        memory_events = [_debug_parse_json_fields(row, ["growth_job_ids"], []) for row in memory_events]
+        event_interpretations = _debug_rows(
+            conn,
+            "SELECT * FROM memory_event_interpretations WHERE comment_id=? ORDER BY created_at ASC",
+            (comment_id,),
+        )
+        event_interpretations = [
+            _debug_parse_json_fields(row, ["interpretation_json", "decision"])
+            for row in event_interpretations
+        ]
 
         context_packs = _debug_rows(
             conn,
@@ -2376,10 +2592,12 @@ def debug_comment_detail(comment_id: int):
         return {
             "comment": comment,
             "replies": replies,
+            "memory_events": memory_events,
             "context_packs": context_packs,
             "ledger": ledger,
             "growth": {
                 "interpretation": interpretation,
+                "event_interpretations": event_interpretations,
                 "active_questions": active_questions,
                 "themes": themes,
                 "rule_candidates": rule_candidates,
@@ -3149,17 +3367,28 @@ def create_job(req: JobCreate):
         raise HTTPException(status_code=400, detail=f"unknown kind: {req.kind}")
     if req.kind == "memory_growth_for_comment":
         comment_id = int((req.payload or {}).get("comment_id") or 0)
+        event_id = int((req.payload or {}).get("event_id") or 0)
         if not comment_id:
             raise HTTPException(status_code=400, detail="comment_id is required")
-        job_id = _enqueue_memory_growth_job(comment_id, (req.payload or {}).get("trigger_reason") or "manual")
+        job_id = _enqueue_memory_growth_job(
+            comment_id,
+            (req.payload or {}).get("trigger_reason") or "manual",
+            event_id=event_id or None,
+        )
         if job_id:
             return {"id": job_id, "status": "queued", "deduped": False}
         conn = sqlite3.connect(DB_PATH)
         try:
-            row = conn.execute(
-                "SELECT growth_job_ids, growth_status FROM memory_intake_ledger WHERE comment_id=?",
-                (comment_id,),
-            ).fetchone()
+            if event_id:
+                row = conn.execute(
+                    "SELECT growth_job_ids, growth_status FROM memory_input_events WHERE id=? AND comment_id=?",
+                    (event_id, comment_id),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT growth_job_ids, growth_status FROM memory_intake_ledger WHERE comment_id=?",
+                    (comment_id,),
+                ).fetchone()
             ids = json.loads(row[0] or "[]") if row else []
             return {"id": ids[-1] if ids else None, "status": row[1] if row else "unknown", "deduped": True}
         finally:

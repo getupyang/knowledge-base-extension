@@ -662,16 +662,27 @@ def handle_synthesize_skills(conn: sqlite3.Connection, job: dict):
     log(f"job#{job['id']} synthesize_skills: persisted generation_id={gen_id} with {len(skills_clean)} skills")
 
 
-MEMORY_GROWTH_PROMPT_TEMPLATE = """你是 mem-ai 的 Memory Growth Pipeline。你的任务不是回复用户，而是把一条新批注解释成可追溯的记忆生长信号。
+MEMORY_GROWTH_PROMPT_TEMPLATE = """你是 mem-ai 的 Memory Growth Pipeline。你的任务不是回复用户，而是把一次用户表达事件解释成可追溯的记忆生长信号。
 
 重要原则：
-- 不要只抽 rule。批注也可能表达当前问题、主题热度、项目变化、用户画像变化，或没有结构化更新。
+- 不要只抽 rule。用户表达也可能是当前问题、主题热度、项目变化、用户画像变化、个人经历补充，或没有结构化更新。
+- 本次重点是“当前事件”，不要被同一条划线 thread 里较早的内容淹没。
+- AGENT 回复只作为上下文证据，不要把 AI 的话误当成用户记忆。
 - 不确定时写 no_structural_update，但必须解释为什么。
 - 所有字段都只基于输入证据，不要编。
 
-## 当前批注
+## 当前记忆事件
+event_id: {event_id}
+event_type: {event_type}
+actor: {actor}
+event_created_at: {event_created_at}
+
+用户本次表达：
+{event_content}
+
+## 所属批注 thread
 comment_id: {comment_id}
-created_at: {created_at}
+thread_created_at: {created_at}
 page_title: {page_title}
 page_url: {page_url}
 
@@ -681,10 +692,10 @@ page_url: {page_url}
 周边文本：
 {surrounding_text}
 
-用户批注：
+首条批注 / 当前 thread 摘要：
 {comment}
 
-AGENT 回复：
+最新 AGENT 回复（仅作上下文证据）：
 {agent_reply}
 
 ## 输出格式
@@ -791,6 +802,31 @@ def _set_growth_ledger(conn: sqlite3.Connection, comment_id: int, status: str,
     )
 
 
+def _set_event_growth_ledger(conn: sqlite3.Connection, event_id: int, status: str,
+                             decision: str = "", error: str = ""):
+    if not event_id:
+        return
+    now = _growth_now()
+    conn.execute(
+        """UPDATE memory_input_events
+           SET growth_status=?,
+               growth_processed_at=CASE WHEN ? IN ('done','failed') THEN ? ELSE growth_processed_at END,
+               growth_decision=COALESCE(NULLIF(?, ''), growth_decision),
+               error_summary=COALESCE(NULLIF(?, ''), error_summary),
+               updated_at=?
+           WHERE id=?""",
+        (
+            status,
+            status,
+            now,
+            decision[:1000] if decision else "",
+            error[:1000] if error else "",
+            now,
+            event_id,
+        ),
+    )
+
+
 def _dict_value(obj, key, default=None):
     return obj.get(key, default) if isinstance(obj, dict) else default
 
@@ -798,10 +834,13 @@ def _dict_value(obj, key, default=None):
 def handle_memory_growth_for_comment(conn: sqlite3.Connection, job: dict):
     payload = job.get("payload") or {}
     comment_id = int(payload.get("comment_id") or 0)
+    event_id = int(payload.get("event_id") or 0)
     if not comment_id:
         raise RuntimeError("memory_growth_for_comment missing comment_id")
 
     _set_growth_ledger(conn, comment_id, "running")
+    if event_id:
+        _set_event_growth_ledger(conn, event_id, "running")
     conn.commit()
 
     conn.row_factory = sqlite3.Row
@@ -812,9 +851,31 @@ def handle_memory_growth_for_comment(conn: sqlite3.Connection, job: dict):
     ).fetchone()
     if not row:
         _set_growth_ledger(conn, comment_id, "failed", error="comment not found")
+        if event_id:
+            _set_event_growth_ledger(conn, event_id, "failed", error="comment not found")
         conn.commit()
         raise RuntimeError(f"comment#{comment_id} not found")
     comment = dict(row)
+    event = None
+    if event_id:
+        event_row = conn.execute(
+            "SELECT * FROM memory_input_events WHERE id=? AND comment_id=?",
+            (event_id, comment_id),
+        ).fetchone()
+        if not event_row:
+            _set_growth_ledger(conn, comment_id, "failed", error="memory event not found")
+            _set_event_growth_ledger(conn, event_id, "failed", error="memory event not found")
+            conn.commit()
+            raise RuntimeError(f"memory_event#{event_id} not found")
+        event = dict(event_row)
+    else:
+        event = {
+            "id": 0,
+            "actor": "user",
+            "event_type": "comment_snapshot",
+            "content": comment.get("comment") or "",
+            "created_at": comment.get("created_at") or "",
+        }
     reply_row = conn.execute(
         "SELECT content FROM replies WHERE comment_id=? AND author='agent' ORDER BY created_at DESC LIMIT 1",
         (comment_id,),
@@ -822,6 +883,11 @@ def handle_memory_growth_for_comment(conn: sqlite3.Connection, job: dict):
     agent_reply = reply_row["content"] if reply_row else ""
 
     prompt = MEMORY_GROWTH_PROMPT_TEMPLATE.format(
+        event_id=event.get("id") or "",
+        event_type=event.get("event_type") or "",
+        actor=event.get("actor") or "",
+        event_created_at=event.get("created_at") or "",
+        event_content=(event.get("content") or "")[:1600],
         comment_id=comment_id,
         created_at=comment.get("created_at") or "",
         page_title=(comment.get("page_title") or "")[:200],
@@ -852,16 +918,32 @@ def handle_memory_growth_for_comment(conn: sqlite3.Connection, job: dict):
         (comment_id, json.dumps(interpretation, ensure_ascii=False),
          json.dumps(decision, ensure_ascii=False), job["id"], confidence, now),
     )
+    if event_id:
+        conn.execute(
+            """INSERT OR REPLACE INTO memory_event_interpretations
+               (event_id, comment_id, interpretation_json, decision, produced_by_job_id, confidence, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                event_id,
+                comment_id,
+                json.dumps(interpretation, ensure_ascii=False),
+                json.dumps(decision, ensure_ascii=False),
+                job["id"],
+                confidence,
+                now,
+            ),
+        )
 
     rule = _dict_value(parsed, "rule_candidate", {}) or {}
     if rule.get("should_create") or (rule.get("rule_text") or "").strip():
         conn.execute(
             """INSERT INTO rule_candidates
-               (comment_id, rule_text, behavior_type, applies_to, confidence, decision,
+               (comment_id, event_id, rule_text, behavior_type, applies_to, confidence, decision,
                 status, produced_by_job_id, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, 'candidate', ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, 'candidate', ?, ?)""",
             (
                 comment_id,
+                event_id or None,
                 (rule.get("rule_text") or "").strip(),
                 rule.get("behavior_type") or "none",
                 rule.get("applies_to") or "other",
@@ -876,10 +958,11 @@ def handle_memory_growth_for_comment(conn: sqlite3.Connection, job: dict):
     if (question.get("question") or "").strip():
         conn.execute(
             """INSERT INTO active_question_signals
-               (comment_id, question, signal_strength, scope, status, produced_by_job_id, created_at)
-               VALUES (?, ?, ?, ?, 'active', ?, ?)""",
+               (comment_id, event_id, question, signal_strength, scope, status, produced_by_job_id, created_at)
+               VALUES (?, ?, ?, ?, ?, 'active', ?, ?)""",
             (
                 comment_id,
+                event_id or None,
                 question.get("question") or "",
                 float(question.get("signal_strength") or 0),
                 question.get("scope") or "unknown",
@@ -892,15 +975,16 @@ def handle_memory_growth_for_comment(conn: sqlite3.Connection, job: dict):
     if (theme.get("theme") or "").strip():
         conn.execute(
             """INSERT INTO theme_signals
-               (comment_id, theme, intensity, window_start, window_end, evidence_count,
+               (comment_id, event_id, theme, intensity, window_start, window_end, evidence_count,
                 representative_comment_ids, produced_by_job_id, created_at)
-               VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)""",
             (
                 comment_id,
+                event_id or None,
                 theme.get("theme") or "",
                 float(theme.get("intensity") or 0),
-                comment.get("created_at") or now,
-                comment.get("created_at") or now,
+                event.get("created_at") or comment.get("created_at") or now,
+                event.get("created_at") or comment.get("created_at") or now,
                 json.dumps([comment_id]),
                 job["id"],
                 now,
@@ -911,10 +995,11 @@ def handle_memory_growth_for_comment(conn: sqlite3.Connection, job: dict):
     if project_signal.get("has_signal") or (project_signal.get("summary") or "").strip():
         conn.execute(
             """INSERT INTO project_signals
-               (comment_id, signal_json, confidence, decision, produced_by_job_id, created_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+               (comment_id, event_id, signal_json, confidence, decision, produced_by_job_id, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (
                 comment_id,
+                event_id or None,
                 json.dumps(project_signal, ensure_ascii=False),
                 float(project_signal.get("confidence") or 0),
                 project_signal.get("decision") or "candidate_project_update",
@@ -927,10 +1012,11 @@ def handle_memory_growth_for_comment(conn: sqlite3.Connection, job: dict):
     if profile_signal.get("has_signal") or (profile_signal.get("summary") or "").strip():
         conn.execute(
             """INSERT INTO profile_signals
-               (comment_id, signal_json, confidence, decision, produced_by_job_id, created_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+               (comment_id, event_id, signal_json, confidence, decision, produced_by_job_id, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (
                 comment_id,
+                event_id or None,
                 json.dumps(profile_signal, ensure_ascii=False),
                 float(profile_signal.get("confidence") or 0),
                 profile_signal.get("decision") or "candidate_profile_update",
@@ -940,8 +1026,11 @@ def handle_memory_growth_for_comment(conn: sqlite3.Connection, job: dict):
         )
 
     _set_growth_ledger(conn, comment_id, "done", decision=decision_summary)
+    if event_id:
+        _set_event_growth_ledger(conn, event_id, "done", decision=decision_summary)
     conn.commit()
-    log(f"job#{job['id']} memory_growth: comment#{comment_id} done ({decision_summary[:80]})")
+    event_part = f" event#{event_id}" if event_id else ""
+    log(f"job#{job['id']} memory_growth: comment#{comment_id}{event_part} done ({decision_summary[:80]})")
 
 
 JOB_HANDLERS = {
@@ -968,8 +1057,12 @@ def run_one(conn: sqlite3.Connection, job: dict) -> bool:
         if job["kind"] == "memory_growth_for_comment":
             try:
                 comment_id = int((job.get("payload") or {}).get("comment_id") or 0)
+                event_id = int((job.get("payload") or {}).get("event_id") or 0)
                 if comment_id:
                     _set_growth_ledger(conn, comment_id, "failed", error=str(e))
+                if event_id:
+                    _set_event_growth_ledger(conn, event_id, "failed", error=str(e))
+                if comment_id or event_id:
                     conn.commit()
             except Exception:
                 pass

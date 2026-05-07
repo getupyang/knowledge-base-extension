@@ -1,3 +1,6 @@
+const KB_CONTENT_VERSION = "0.3.1-ai-unread-notice";
+console.info(`[KB] content script loaded: ${KB_CONTENT_VERSION}`);
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "ADD_COMMENT") {
     // 右键菜单触发：selection 已消失，先用文字匹配高亮，再打开评论面板
@@ -671,6 +674,7 @@ const commentSystem = (() => {
       panelEl.classList.remove("kb-btn-hidden");
       document.body.style.marginRight = "360px";
       render();
+      syncVisibleCommentsFromBackend({ notify: false });
     } else {
       panelEl.classList.add("kb-btn-hidden");
       document.body.style.marginRight = "";
@@ -1276,6 +1280,67 @@ const commentSystem = (() => {
     updateCommentCard(commentId);
   }
 
+  const _backendSyncRunning = new Set();
+
+  function _remoteReplyAlreadyLocal(localReplies, remote, isAI, text) {
+    return localReplies.some(r => {
+      if (r.isAI !== isAI) return false;
+      if (r.remoteReplyId && Number(r.remoteReplyId) === Number(remote.id)) return true;
+      return (r.text || "").trim() === (text || "").trim();
+    });
+  }
+
+  async function syncCommentFromBackend(commentId, opts = {}) {
+    if (_backendSyncRunning.has(commentId)) return false;
+    const localBefore = load().find(x => x.id === commentId);
+    if (!localBefore?.agentCommentId) return false;
+    _backendSyncRunning.add(commentId);
+    try {
+      const resp = await fetch(`http://localhost:8766/comments/${localBefore.agentCommentId}`);
+      if (!resp.ok) return false;
+      const remote = await resp.json();
+      const comments = load();
+      const c = comments.find(x => x.id === commentId);
+      if (!c) return false;
+      c.replies = Array.isArray(c.replies) ? c.replies : [];
+      let changed = false;
+      let addedAI = false;
+      for (const rr of remote.replies || []) {
+        const text = rr.content || "";
+        if (!text.trim()) continue;
+        const isAI = rr.author === "agent";
+        if (_remoteReplyAlreadyLocal(c.replies, rr, isAI, text)) continue;
+        c.replies.push({
+          id: Date.now() + c.replies.length,
+          remoteReplyId: rr.id,
+          text,
+          isAI,
+          debugMeta: rr.debug_meta || null,
+          createdAt: rr.created_at || new Date().toISOString(),
+        });
+        changed = true;
+        if (isAI) addedAI = true;
+      }
+      if (!changed) return false;
+      c.replies.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+      save(comments);
+      if (addedAI && opts.notify && !_isCommentCardVisible(commentId)) {
+        _markAiReplyReady(commentId);
+      }
+      updateCommentCard(commentId);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      _backendSyncRunning.delete(commentId);
+    }
+  }
+
+  function syncVisibleCommentsFromBackend(opts = {}) {
+    const comments = load().filter(c => c.agentCommentId);
+    comments.forEach(c => syncCommentFromBackend(c.id, opts));
+  }
+
   function jumpToAiReply(commentId) {
     if (!panelEl) buildPanel();
     if (!panelOpen) {
@@ -1291,6 +1356,26 @@ const commentSystem = (() => {
       card.classList.add("kb-flash");
       setTimeout(() => card.classList.remove("kb-flash"), 900);
     }
+  }
+
+  function debugMarkUnreadAiReply() {
+    buildPanel();
+    if (!panelOpen) {
+      panelOpen = true;
+      panelEl.classList.remove("kb-btn-hidden");
+      document.body.style.marginRight = "360px";
+      updateBadge();
+    }
+    const comments = load();
+    if (!comments.length) {
+      showToast("先在当前页面留一条评论，再测试 AI 未读提醒", "error");
+      return;
+    }
+    const target = comments.find(c => !_isCommentCardVisible(c.id)) || comments[comments.length - 1];
+    _aiUnreadCommentIds.add(target.id);
+    updateCommentCard(target.id);
+    _refreshAiNotice();
+    showToast(`已模拟当前脚本版本：${KB_CONTENT_VERSION}`, "success");
   }
 
   function _renderCommentCard(c) {
@@ -1853,6 +1938,7 @@ const commentSystem = (() => {
     panelEl.classList.remove("kb-btn-hidden");
     document.body.style.marginRight = "360px";
     render();
+    syncVisibleCommentsFromBackend({ notify: false });
     updateBadge();
     // 展开输入区 + 聚焦（这是划线触发的）
     expandInputArea(true);
@@ -1868,6 +1954,7 @@ const commentSystem = (() => {
       buildPanel();
       panelEl.classList.add("kb-btn-hidden");
       render();
+      syncVisibleCommentsFromBackend({ notify: true });
     }
     // badge 响应式更新：有高亮或评论时常驻显示
     updateBadge();
@@ -1901,7 +1988,20 @@ const commentSystem = (() => {
     if (e.data && e.data.__kb_test === 'open_comment') {
       open(e.data.excerpt, e.data.url, e.data.title);
     }
+    if (e.data && e.data.__kb_test === 'simulate_unread_ai_reply') {
+      debugMarkUnreadAiReply();
+    }
   });
 
-  return { open, render, load, doHighlight, doHighlightAndOpenComment, highlightByText, saveHighlightToNotion };
+  return {
+    open,
+    render,
+    load,
+    doHighlight,
+    doHighlightAndOpenComment,
+    highlightByText,
+    saveHighlightToNotion,
+    debugMarkUnreadAiReply,
+    version: KB_CONTENT_VERSION,
+  };
 })();

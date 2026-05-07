@@ -13,9 +13,11 @@
       --line: #ded4c9;
       --soft: #f1e9df;
       --accent: #17627e;
+      --blue: #285f89;
       --green: #3f7651;
       --yellow: #9a6a18;
       --red: #a64c3d;
+      --violet: #6a5472;
       --code: #f3eee7;
       --shadow: 0 1px 8px rgba(34, 24, 16, .08);
     }
@@ -127,6 +129,8 @@
       overflow: hidden;
       text-overflow: ellipsis;
       font-weight: 650;
+      flex: 1;
+      min-width: 0;
     }
     .preview {
       color: #3f3832;
@@ -153,9 +157,94 @@
       color: var(--muted);
       font-size: 11px;
     }
+    .verdict {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      border: 1px solid currentColor;
+      padding: 2px 8px;
+      font-size: 12px;
+      font-weight: 700;
+      background: rgba(255, 255, 255, .48);
+      white-space: nowrap;
+    }
+    .verdict.complete { color: var(--green); }
+    .verdict.pending { color: var(--yellow); }
+    .verdict.gap { color: var(--violet); }
+    .verdict.failed { color: var(--red); }
     .ok { color: var(--green); }
     .warn { color: var(--yellow); }
     .bad { color: var(--red); }
+    .gap { color: var(--violet); }
+    .audit-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+    .audit-title {
+      margin: 0;
+      font-size: 17px;
+    }
+    .audit-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .audit-list {
+      display: grid;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .audit-row {
+      display: grid;
+      grid-template-columns: 92px 1fr;
+      gap: 10px;
+      padding: 9px 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(241, 233, 223, .58);
+    }
+    .audit-row b {
+      display: block;
+      margin-bottom: 2px;
+    }
+    .audit-meta {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .field-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .field-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(241, 233, 223, .5);
+      padding: 10px;
+    }
+    .field-card b {
+      display: block;
+      margin-bottom: 4px;
+    }
+    .field-card code, .mono {
+      font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+      font-size: 12px;
+    }
+    .field-card p {
+      margin: 4px 0;
+      color: #403832;
+    }
+    .copy-feedback {
+      color: var(--muted);
+      font-size: 12px;
+      min-width: 68px;
+    }
     .panel {
       background: var(--panel);
       border: 1px solid var(--line);
@@ -277,9 +366,93 @@
     function statusClass(value) {
       if (!value) return "";
       if (["done", "local_saved", "notion_synced", "success", "open"].includes(value)) return "ok";
-      if (["pending", "running", "queued"].includes(value)) return "warn";
+      if (["pending", "running", "queued", "enqueued"].includes(value)) return "warn";
       if (["failed", "notion_failed"].includes(value)) return "bad";
       return "";
+    }
+
+    const VERDICT_LABELS = {
+      complete: "完整",
+      pending: "等待中",
+      gap: "有缺口",
+      failed: "失败",
+    };
+
+    const STATUS_LABELS = {
+      complete: "通过",
+      pending: "等待",
+      gap: "缺口",
+      failed: "失败",
+    };
+
+    const SEVERITY = { complete: 0, gap: 1, pending: 2, failed: 3 };
+
+    function worstStatus(checks) {
+      return checks.reduce((worst, item) => (
+        SEVERITY[item.status] > SEVERITY[worst] ? item.status : worst
+      ), "complete");
+    }
+
+    function verdictBadge(status) {
+      return `<span class="verdict ${esc(status)}">${esc(VERDICT_LABELS[status] || status)}</span>`;
+    }
+
+    function auditFromItem(item) {
+      const checks = [];
+      const localStatus = item.local_status || "missing";
+      const notionStatus = item.notion_status || "missing";
+      const growthStatus = item.growth_status || "missing";
+      const agentReplyCount = Number(item.agent_reply_count || 0);
+      const contextPackCount = Number(item.context_pack_count || 0);
+      const userEventCount = Number(item.user_event_count || 0);
+      const userEventGrowthDoneCount = Number(item.user_event_growth_done_count || 0);
+      const latestReply = String(item.latest_agent_reply_preview || "");
+
+      checks.push({
+        status: localStatus === "local_saved" ? "complete" : "gap",
+      });
+
+      checks.push({
+        status: userEventCount > 0
+          ? userEventGrowthDoneCount >= userEventCount
+            ? "complete"
+            : "pending"
+          : "gap",
+      });
+
+      checks.push({
+        status: notionStatus === "notion_synced"
+          ? "complete"
+          : notionStatus === "notion_failed"
+            ? "failed"
+            : notionStatus === "pending" || notionStatus === "running"
+              ? "pending"
+              : "gap",
+      });
+
+      checks.push({
+        status: agentReplyCount > 0
+          ? latestReply.includes("AI 回复失败")
+            ? "failed"
+            : "complete"
+          : "gap",
+      });
+
+      checks.push({
+        status: contextPackCount > 0 ? "complete" : agentReplyCount > 0 ? "gap" : "pending",
+      });
+
+      checks.push({
+        status: growthStatus === "done"
+          ? "complete"
+          : growthStatus === "failed"
+            ? "failed"
+            : growthStatus === "pending" || growthStatus === "running" || growthStatus === "queued"
+              ? "pending"
+              : "gap",
+      });
+
+      return { status: worstStatus(checks), checks };
     }
 
     function chip(label, value) {
@@ -312,15 +485,18 @@
     }
 
     function renderCommentRow(item) {
+      const audit = auditFromItem(item);
       return `
         <button class="comment-row ${item.id === activeId ? "active" : ""}" data-comment-id="${item.id}">
           <div class="row-title">
             <span class="id">#${item.id}</span>
             <span class="title">${esc(item.page_title || "(untitled)")}</span>
+            ${verdictBadge(audit.status)}
           </div>
           <div class="preview">${esc(short(item.comment, 140))}</div>
           <div class="chips">
             ${chip("reply", item.reply_count)}
+            ${chip("events", item.memory_event_count)}
             ${chip("context", item.context_pack_count)}
             ${chip("local", item.local_status)}
             ${chip("notion", item.notion_status)}
@@ -346,15 +522,326 @@
         for (const btn of document.querySelectorAll("[data-debug-log]")) {
           btn.addEventListener("click", () => loadDebugLog(btn.dataset.debugLog));
         }
+        for (const btn of document.querySelectorAll("[data-copy-audit]")) {
+          btn.addEventListener("click", () => copyAuditSummary(btn, data));
+        }
       } catch (err) {
         $("detail").className = "empty";
         $("detail").innerHTML = `<span class="bad">读取 comment#${id} 失败：${esc(err.message)}</span>`;
       }
     }
 
+    function asArray(value) {
+      return Array.isArray(value) ? value : [];
+    }
+
+    function isPendingStatus(value) {
+      return ["pending", "running", "queued", "enqueued"].includes(String(value || ""));
+    }
+
+    function isFailedStatus(value) {
+      return ["failed", "notion_failed"].includes(String(value || ""));
+    }
+
+    function latestAgentReply(replies) {
+      return asArray(replies).filter((reply) => reply.author === "agent").at(-1) || null;
+    }
+
+    function replyLooksFailed(reply) {
+      if (!reply) return false;
+      const meta = reply.debug_meta || {};
+      const content = String(reply.content || "");
+      return content.includes("AI 回复失败") || meta.status === "failed" || Boolean(meta.error);
+    }
+
+    function growthOutputSummary(growth) {
+      const g = growth || {};
+      const parts = [];
+      if (g.interpretation) parts.push("interpretation");
+      if (asArray(g.active_questions).length) parts.push(`${asArray(g.active_questions).length} active question`);
+      if (asArray(g.themes).length) parts.push(`${asArray(g.themes).length} theme`);
+      if (asArray(g.rule_candidates).length) parts.push(`${asArray(g.rule_candidates).length} rule candidate`);
+      if (asArray(g.project_signals).length) parts.push(`${asArray(g.project_signals).length} project signal`);
+      if (asArray(g.profile_signals).length) parts.push(`${asArray(g.profile_signals).length} profile signal`);
+      return parts;
+    }
+
+    function makeCheck(key, title, status, detail, fieldRefs = []) {
+      return { key, title, status, detail, fieldRefs };
+    }
+
+    function buildAudit(data) {
+      const comment = data.comment || {};
+      const ledger = data.ledger || {};
+      const replies = asArray(data.replies);
+      const agentReplies = replies.filter((reply) => reply.author === "agent");
+      const latestAgent = latestAgentReply(replies);
+      const contextPacks = asArray(data.context_packs);
+      const events = asArray(data.memory_events);
+      const userEvents = events.filter((event) => event.actor === "user");
+      const pendingUserEvents = userEvents.filter((event) => isPendingStatus(event.growth_status));
+      const failedUserEvents = userEvents.filter((event) => isFailedStatus(event.growth_status));
+      const doneUserEvents = userEvents.filter((event) => event.growth_status === "done");
+      const jobs = asArray(data.jobs);
+      const growth = data.growth || {};
+      const debugLogs = asArray(data.debug_logs);
+      const failedJobs = jobs.filter((job) => isFailedStatus(job.status));
+      const pendingJobs = jobs.filter((job) => isPendingStatus(job.status));
+      const growthStatus = ledger.growth_status || "missing";
+      const latestContextId = latestAgent?.debug_meta?.context_pack_id;
+      const latestContextPack = latestContextId
+        ? contextPacks.find((pack) => Number(pack.id) === Number(latestContextId))
+        : latestAgent
+          ? contextPacks.find((pack) => Number(pack.reply_id) === Number(latestAgent.id))
+          : null;
+      const growthOutputs = growthOutputSummary(growth);
+      const checks = [];
+
+      checks.push(makeCheck(
+        "local",
+        "本地入账",
+        ledger.id && ledger.local_status === "local_saved" ? "complete" : "gap",
+        ledger.id
+          ? `ledger#${ledger.id} local_status=${ledger.local_status || "missing"}`
+          : "没有 memory_intake_ledger 行，说明这条批注没有进入入账流水线。",
+        ["memory_intake_ledger.id", "local_status", "local_saved_at"],
+      ));
+
+      checks.push(makeCheck(
+        "notion",
+        "Notion 同步",
+        ledger.notion_status === "notion_synced" && comment.notion_page_id
+          ? "complete"
+          : isFailedStatus(ledger.notion_status) || ledger.notion_error
+            ? "failed"
+            : isPendingStatus(ledger.notion_status)
+              ? "pending"
+              : "gap",
+        ledger.notion_status === "notion_synced" && comment.notion_page_id
+          ? `notion_page_id=${comment.notion_page_id}`
+          : ledger.notion_error || `notion_status=${ledger.notion_status || "missing"}，notion_page_id=${comment.notion_page_id || "missing"}`,
+        ["notion_status", "notion_synced_at", "notion_page_id", "notion_error"],
+      ));
+
+      checks.push(makeCheck(
+        "reply",
+        "AI 回复",
+        latestAgent
+          ? replyLooksFailed(latestAgent) ? "failed" : "complete"
+          : "gap",
+        latestAgent
+          ? `latest agent reply#${latestAgent.id} · role=${latestAgent.agent_type || "unknown"} · ${short(latestAgent.content, 90)}`
+          : "没有 author=agent 的 reply；用户前端就不会看到 AI 回复。",
+        ["replies.author", "replies.agent_type", "replies.content", "replies.debug_meta"],
+      ));
+
+      checks.push(makeCheck(
+        "memory_events",
+        "Memory Events",
+        failedUserEvents.length
+          ? "failed"
+          : pendingUserEvents.length
+            ? "pending"
+            : userEvents.length && doneUserEvents.length >= userEvents.length
+              ? "complete"
+              : userEvents.length
+                ? "gap"
+                : "gap",
+        userEvents.length
+          ? `${userEvents.length} 个用户表达事件，${doneUserEvents.length} 个 growth done，${pendingUserEvents.length} 个等待中，${failedUserEvents.length} 个失败。`
+          : "没有用户 memory event；说明这条 thread 还停留在旧 comment 容器模型。",
+        ["memory_events.actor", "memory_events.event_type", "memory_events.growth_status", "memory_events.growth_job_ids"],
+      ));
+
+      checks.push(makeCheck(
+        "context",
+        "Context Pack",
+        latestAgent
+          ? latestContextPack
+            ? "complete"
+            : contextPacks.length
+              ? "gap"
+              : "gap"
+          : "pending",
+        latestAgent
+          ? latestContextPack
+            ? `latest reply 绑定 context_pack#${latestContextPack.id}，token_budget_used=${latestContextPack.token_budget_used || 0}`
+            : contextPacks.length
+              ? `已有 ${contextPacks.length} 个 context pack，但最新 reply#${latestAgent.id} 没有明确绑定。`
+              : "没有 context pack；这次 AI 回复缺少可还原的上下文拼装现场。"
+          : "先产生 AI 回复后才能判断 context pack。",
+        ["context_packs.reply_id", "identity_snapshot_id", "selected_skill_ids", "episodic_comment_ids", "selection_reasons"],
+      ));
+
+      checks.push(makeCheck(
+        "growth_job",
+        "Growth Job",
+        failedJobs.length || isFailedStatus(growthStatus) || ledger.error_summary
+          ? "failed"
+          : pendingJobs.length || isPendingStatus(growthStatus)
+            ? "pending"
+            : growthStatus === "done"
+              ? "complete"
+              : "gap",
+        failedJobs.length
+          ? `${failedJobs.length} 个 job failed：${failedJobs.map((job) => `#${job.id}`).join(", ")}`
+          : pendingJobs.length
+            ? `${pendingJobs.length} 个 job 等待或运行中：${pendingJobs.map((job) => `#${job.id}:${job.status}`).join(", ")}`
+            : `growth_status=${growthStatus}，growth_job_ids=${JSON.stringify(ledger.growth_job_ids || [])}`,
+        ["jobs.kind", "jobs.status", "jobs.error", "growth_status", "growth_job_ids"],
+      ));
+
+      checks.push(makeCheck(
+        "growth_output",
+        "Growth 产物",
+        growthStatus === "done"
+          ? growth.interpretation
+            ? "complete"
+            : "gap"
+          : isPendingStatus(growthStatus)
+            ? "pending"
+            : isFailedStatus(growthStatus)
+              ? "failed"
+              : "gap",
+        growthOutputs.length
+          ? growthOutputs.join(" · ")
+          : "没有 interpretation / active question / theme / rule / project/profile signal 可验收。",
+        ["comment_interpretations", "active_question_signals", "theme_signals", "rule_candidates", "project_signals", "profile_signals"],
+      ));
+
+      checks.push(makeCheck(
+        "debug_log",
+        "Prompt Debug Log",
+        latestAgent
+          ? debugLogs.length ? "complete" : "gap"
+          : "pending",
+        debugLogs.length
+          ? `${debugLogs.length} 个 prompt log，可打开还原当时给 LLM 的完整输入。`
+          : "没有 prompt log；无法逐字复盘 agent prompt。",
+        ["debug_logs.filename", "debug_logs.path"],
+      ));
+
+      checks.push(makeCheck(
+        "no_failure",
+        "失败信号",
+        failedJobs.length || replyLooksFailed(latestAgent) || ledger.error_summary ? "failed" : "complete",
+        failedJobs.length || replyLooksFailed(latestAgent) || ledger.error_summary
+          ? ledger.error_summary || "存在失败 reply 或 failed job。"
+          : "没有 ledger error、failed job 或失败 reply。",
+        ["memory_intake_ledger.error_summary", "jobs.error", "replies.debug_meta.status"],
+      ));
+
+      const status = worstStatus(checks);
+      return {
+        status,
+        checks,
+        facts: {
+          commentId: comment.id,
+          replyCount: replies.length,
+          agentReplyCount: agentReplies.length,
+          contextPackCount: contextPacks.length,
+          memoryEventCount: events.length,
+          userEventCount: userEvents.length,
+          jobCount: jobs.length,
+          debugLogCount: debugLogs.length,
+          ledger: `${ledger.local_status || "missing"} / ${ledger.notion_status || "missing"} / ${ledger.growth_status || "missing"}`,
+          growthOutputs,
+        },
+      };
+    }
+
+    function renderAcceptance(data, audit) {
+      const facts = audit.facts;
+      return `
+        <section class="panel">
+          <div class="audit-head">
+            <div>
+              <h2 class="audit-title">验收状态 ${verdictBadge(audit.status)}</h2>
+              <p class="sub">这是开发者视角的流水线健康判定：批注是否入账、是否有前端可见 reply、是否有 context pack、growth 是否完成、Notion 是否同步。</p>
+            </div>
+            <div class="audit-actions">
+              <button data-copy-audit="${esc(data.comment.id)}">复制验收摘要</button>
+              <span class="copy-feedback" data-copy-status="${esc(data.comment.id)}"></span>
+            </div>
+          </div>
+          <section class="summary-grid">
+            <div class="metric"><b>reply</b>${facts.replyCount} total / ${facts.agentReplyCount} agent</div>
+            <div class="metric"><b>memory events</b>${facts.memoryEventCount} total / ${facts.userEventCount} user</div>
+            <div class="metric"><b>context</b>${facts.contextPackCount} packs</div>
+            <div class="metric"><b>growth outputs</b>${facts.growthOutputs.length ? esc(facts.growthOutputs.join(" · ")) : "none"}</div>
+            <div class="metric"><b>debug logs</b>${facts.debugLogCount}</div>
+          </section>
+          <div class="audit-list">
+            ${audit.checks.map((check) => `
+              <div class="audit-row">
+                <div>${verdictBadge(check.status)}</div>
+                <div>
+                  <b>${esc(check.title)}</b>
+                  <div>${esc(check.detail)}</div>
+                  <div class="audit-meta">${esc(check.fieldRefs.join(" · "))}</div>
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        </section>
+      `;
+    }
+
+    function auditSummaryText(data, audit) {
+      const c = data.comment || {};
+      const facts = audit.facts;
+      const lines = [
+        `comment#${facts.commentId} 验收状态：${VERDICT_LABELS[audit.status] || audit.status}`,
+        `page: ${c.page_title || "(untitled)"}`,
+        `url: ${c.page_url || ""}`,
+        `reply: ${facts.replyCount} total / ${facts.agentReplyCount} agent`,
+        `memory_events: ${facts.memoryEventCount} total / ${facts.userEventCount} user`,
+        `context_packs: ${facts.contextPackCount}`,
+        `jobs: ${facts.jobCount}`,
+        `debug_logs: ${facts.debugLogCount}`,
+        `ledger: ${facts.ledger}`,
+        `growth_outputs: ${facts.growthOutputs.length ? facts.growthOutputs.join(" · ") : "none"}`,
+        "",
+        "checks:",
+      ];
+      for (const check of audit.checks) {
+        lines.push(`- ${STATUS_LABELS[check.status] || check.status}｜${check.title}｜${check.detail}`);
+      }
+      return lines.join("\n");
+    }
+
+    async function copyText(text) {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    }
+
+    async function copyAuditSummary(btn, data) {
+      const audit = buildAudit(data);
+      const target = Array.from(document.querySelectorAll("[data-copy-status]"))
+        .find((el) => el.dataset.copyStatus === btn.dataset.copyAudit);
+      try {
+        await copyText(auditSummaryText(data, audit));
+        if (target) target.textContent = "已复制";
+      } catch (err) {
+        if (target) target.textContent = `复制失败：${err.message}`;
+      }
+    }
+
     function renderDetail(data) {
       const c = data.comment;
       const ledger = data.ledger || {};
+      const audit = buildAudit(data);
       return `
         <section class="panel">
           <h2>comment#${c.id}</h2>
@@ -371,25 +858,102 @@
             </div>
           </div>
         </section>
+        ${renderAcceptance(data, audit)}
         <section class="summary-grid">
           <div class="metric"><b>local</b><span class="${statusClass(ledger.local_status)}">${esc(ledger.local_status || "missing")}</span></div>
           <div class="metric"><b>notion</b><span class="${statusClass(ledger.notion_status)}">${esc(ledger.notion_status || "missing")}</span></div>
           <div class="metric"><b>growth</b><span class="${statusClass(ledger.growth_status)}">${esc(ledger.growth_status || "missing")}</span></div>
+          <div class="metric"><b>memory events</b>${asArray(data.memory_events).length}</div>
           <div class="metric"><b>context packs</b>${data.context_packs.length}</div>
           <div class="metric"><b>replies</b>${data.replies.length}</div>
           <div class="metric"><b>jobs</b>${data.jobs.length}</div>
         </section>
         ${section("Memory Intake Ledger", jsonBlock(data.ledger))}
+        ${renderMemoryEvents(data.memory_events, data.growth?.event_interpretations)}
         ${renderReplies(data.replies)}
         ${renderContextPacks(data.context_packs)}
         ${renderGrowth(data.growth)}
         ${renderJobs(data.jobs)}
         ${renderDebugLogs(data.debug_logs)}
+        ${renderFieldGuide()}
       `;
     }
 
     function section(title, body, open = true) {
       return `<details ${open ? "open" : ""}><summary>${esc(title)}</summary>${body}</details>`;
+    }
+
+    function fieldCard(name, desc, owner) {
+      return `
+        <div class="field-card">
+          <b><code>${esc(name)}</code></b>
+          <p>${esc(desc)}</p>
+          <p class="audit-meta">${esc(owner)}</p>
+        </div>
+      `;
+    }
+
+    function renderFieldGuide() {
+      const fields = [
+        ["comments.id", "批注主键。前端、Notion 回写、ledger、context pack、growth 都靠它串起来。", "comment"],
+        ["comments.page_url / page_title", "批注发生的页面来源。后续 Exposure Memory 会把页面/日报全文索引接进来。", "comment"],
+        ["comments.selected_text", "用户划线的原文片段，是 AI 回答和记忆增长的核心证据之一。", "comment"],
+        ["comments.surrounding_text", "划线附近上下文；不是每个页面都一定能抓全，但有它时能减少误读。", "comment"],
+        ["comments.comment", "用户写下的真实问题、判断或追问。Memory Growth 主要从这里识别偏好、主题和规则候选。", "comment"],
+        ["comments.agent_type / status", "评论区当前 agent 路由状态。v2_pending 表示由新版 router/worker 接管过。", "comment"],
+        ["comments.notion_page_id", "这条批注镜像到 Notion 后的 page id。用户界面不一定展示，但开发验收要看。", "comment"],
+        ["memory_events.id", "每一次用户或 agent 在同一条划线 thread 里的表达事件。它解决“同一条 Notion 档案里多次表达被吞掉”的问题。", "event"],
+        ["memory_events.event_type", "事件类型：comment_created / user_followup / agent_reply_added 等。用户事件会独立触发 growth。", "event"],
+        ["memory_events.growth_status", "事件级 growth 状态。对话状态下每次用户追问都应该从 pending/enqueued 走到 done 或 failed。", "event"],
+        ["memory_events.source_type / source_id", "事件来源表和来源主键。comment_created 指向 comments.id，user_followup 指向 replies.id。", "event"],
+        ["replies.author", "reply 的作者。author=agent 才是前端应该展示的 AI 回复；author=user 是继续追问。", "reply"],
+        ["replies.agent_type", "本次回复实际使用的 agent 角色，例如 researcher / sparring_partner。", "reply"],
+        ["replies.debug_meta", "AI 回复的运行元信息：版本、意图、角色、耗时、context_pack_id、命中的规则等。", "reply"],
+        ["memory_intake_ledger.local_status", "本地入账状态。local_saved 表示 comments.db 已保存批注并进入流水线。", "ledger"],
+        ["memory_intake_ledger.notion_status", "Notion 镜像状态。notion_synced 表示本地记录已同步到 Notion。", "ledger"],
+        ["memory_intake_ledger.growth_status", "Memory Growth 状态。done 表示 growth worker 已处理；pending/running 表示还在队列或执行中。", "ledger"],
+        ["memory_intake_ledger.growth_job_ids", "触发这条批注记忆增长的 job id 列表，用来追踪异步任务。", "ledger"],
+        ["memory_intake_ledger.error_summary", "流水线级错误摘要。出现内容时，优先排查 failures 和 jobs.error。", "ledger"],
+        ["context_packs.reply_id", "这个 context pack 服务于哪条 AI reply。能把一次回复和当时拼进去的记忆现场绑定。", "context"],
+        ["context_packs.identity_snapshot_id", "本次回复使用的用户画像快照 id。用于回答“AI 当时拿到了哪份长期画像”。", "context"],
+        ["context_packs.selected_skill_ids", "选中的规则/技能 id。不是只做 rules，而是 context pack 的一个组成部分。", "context"],
+        ["context_packs.episodic_comment_ids", "被召回的历史批注 id。回答“这次 AI 联想到了哪些过去问题”。", "context"],
+        ["context_packs.same_page_comment_ids", "同一页面内被带入的其它批注 id。适合连续读同一篇文章时复盘。", "context"],
+        ["context_packs.selection_reasons", "为什么选这些画像、规则、历史批注和同页批注。验收可解释性主要看这里。", "context"],
+        ["context_packs.token_budget_used", "Context Loader 估算使用的上下文预算，帮助判断是否塞得过多或过少。", "context"],
+        ["comment_interpretations.interpretation_json", "Growth 对用户这条批注的结构化理解：gist、attention、stance、scope、confidence。", "growth"],
+        ["comment_interpretations.decision", "Growth 的处理决策，说明这次是否值得产生结构更新。", "growth"],
+        ["active_question_signals", "用户正在追踪但还没完全解决的问题。未来问记忆和主动提醒会用它。", "growth"],
+        ["theme_signals", "短期主题热度信号，代表用户最近在密集关注什么。", "growth"],
+        ["rule_candidates", "候选行为规则，不会直接变成系统铁律；后续需要审计、合并、提升置信度。", "growth"],
+        ["project_signals / profile_signals", "项目层或用户画像层的候选更新。它们代表可成长记忆，不等于已经永久改写画像。", "growth"],
+        ["jobs.kind", "异步任务类型。memory_growth_for_comment 表示为单条批注做记忆增长。", "job"],
+        ["jobs.status / attempts / error", "任务状态、重试次数和错误。pending/running/failed 会直接影响验收状态。", "job"],
+        ["debug_logs", "写到本地的 prompt 复盘文件。用来逐字查看这次 AI 回答到底拼了什么。", "debug"],
+      ];
+      return section("字段说明", `
+        <p class="sub">这些字段是开发者验收用，不直接面向普通用户。普通用户只需要看到：AI 是否答了、引用了哪些记忆、是否让记忆变得更好。</p>
+        <div class="field-grid">${fields.map((row) => fieldCard(row[0], row[1], row[2])).join("")}</div>
+      `, false);
+    }
+
+    function renderMemoryEvents(rows, interpretations = []) {
+      rows = asArray(rows);
+      interpretations = asArray(interpretations);
+      if (!rows.length) return section("Memory Events", `<div class="empty">没有 memory event。旧数据可能还没有事件层。</div>`);
+      const interpByEvent = new Map(interpretations.map((item) => [Number(item.event_id), item]));
+      return section("Memory Events", rows.map((event) => {
+        const interp = interpByEvent.get(Number(event.id));
+        return `
+          <details open>
+            <summary>event#${event.id} · ${esc(event.actor)} · ${esc(event.event_type)} · <span class="${statusClass(event.growth_status)}">${esc(event.growth_status)}</span></summary>
+            <div class="meta">source=${esc(event.source_type)}#${esc(event.source_id)} · reply#${event.reply_id || "-"} · ${esc(event.created_at)}</div>
+            <pre>${esc(event.content || "")}</pre>
+            ${interp ? section("event_interpretation", jsonBlock(interp), false) : ""}
+            ${section("raw_event", jsonBlock(event), false)}
+          </details>
+        `;
+      }).join(""));
     }
 
     function renderReplies(rows) {
@@ -416,6 +980,7 @@
     function renderGrowth(growth) {
       return section("Memory Growth", `
         <h3>comment_interpretation</h3>${jsonBlock(growth.interpretation)}
+        <h3>event_interpretations</h3>${jsonBlock(growth.event_interpretations)}
         <h3>active_questions</h3>${jsonBlock(growth.active_questions)}
         <h3>themes</h3>${jsonBlock(growth.themes)}
         <h3>rule_candidates</h3>${jsonBlock(growth.rule_candidates)}
