@@ -15,6 +15,7 @@
   --kb-blue:       oklch(0.55 0.12 240);
   --kb-blue-soft:  oklch(0.95 0.03 240);
   --kb-green:      oklch(0.55 0.10 145);
+  --kb-shell-max:  1360px;
 }
 
 * { box-sizing: border-box; }
@@ -31,6 +32,12 @@ body {
 }
 button { font-family: inherit; font-size: inherit; }
 a { color: inherit; }
+
+#app {
+  width: min(100%, var(--kb-shell-max));
+  min-height: 100%;
+  margin: 0 auto;
+}
 
 /* 顶栏 */
 #kb-nb-header {
