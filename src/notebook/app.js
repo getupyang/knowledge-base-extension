@@ -99,10 +99,50 @@ function markAgentRepliesSeen(ids) {
   updateDiaryUnreadNotice();
 }
 
+function scrollToFirstUnreadReply() {
+  const firstId = _diaryUnreadReplyIds[0];
+  if (!firstId) return;
+  switchTab("diary");
+  setTimeout(() => {
+    const item = document.querySelector(`[data-agent-reply-id="${CSS.escape(String(firstId))}"]`);
+    if (item) {
+      item.scrollIntoView({behavior: "smooth", block: "center"});
+      item.classList.add("flash");
+      setTimeout(() => item.classList.remove("flash"), 900);
+    }
+  }, 80);
+}
+
 function updateDiaryUnreadNotice() {
   const notice = $("kb-nb-diary-unread-notice");
-  if (!notice) return;
   const count = _diaryUnreadReplyIds.length;
+  const diaryNav = document.querySelector('.kb-nb-nav-item[data-tab="diary"]');
+  const diaryCount = $("kb-nb-count-diary");
+  const aiBanner = $("kb-nb-ai-return-banner");
+
+  if (diaryNav) diaryNav.classList.toggle("has-unread", count > 0);
+  if (diaryCount) {
+    if (count > 0) {
+      diaryCount.textContent = String(count);
+      diaryCount.classList.add("unread");
+      diaryCount.title = `${count} 条未读 AI 回复`;
+    } else {
+      diaryCount.textContent = diaryCount.dataset.total || diaryCount.textContent || "—";
+      diaryCount.classList.remove("unread");
+      diaryCount.title = "";
+    }
+  }
+  if (aiBanner) {
+    aiBanner.classList.toggle("kb-nb-hidden", count <= 0);
+    if (count > 0) {
+      aiBanner.innerHTML = `
+        <div><strong>AI 回来了</strong><span>${count} 条回复待看</span></div>
+        <button data-open-unread-replies>查看</button>
+      `;
+    }
+  }
+
+  if (!notice) return;
   if (!count) {
     notice.innerHTML = _diaryBaselineInitializedNow
       ? `<span>已建立已读基线，之后新完成的 AI 回复会在这里提醒</span>`
@@ -154,6 +194,10 @@ document.querySelectorAll(".kb-nb-nav-item").forEach(a => {
   });
 });
 
+$("kb-nb-ai-return-banner").addEventListener("click", e => {
+  if (e.target.closest("[data-open-unread-replies]")) scrollToFirstUnreadReply();
+});
+
 // ─── 1. 顶部 overview + 底部 callout ───
 let _notionImportStarted = false;
 
@@ -187,6 +231,11 @@ async function loadOverview() {
     const sync = $("kb-nb-overview-sync");
     sync.textContent = `同步 ${fmtClock(data.latest_sync)} · ${data.comment_count} 条评注 · ${data.page_count} 篇文章`;
     $("kb-nb-overview-meta").textContent = `共 ${data.page_count} 篇 · 评注 ${data.comment_count} 条`;
+    const diaryCount = $("kb-nb-count-diary");
+    if (diaryCount) {
+      diaryCount.dataset.total = data.comment_count || 0;
+      if (!_diaryUnreadReplyIds.length) diaryCount.textContent = data.comment_count || 0;
+    }
     // 底部 callout：用最新 thinking_summary 的 title 当一句话观察
     const callout = $("kb-nb-callout-body");
     if (data.latest_thinking) {
@@ -944,13 +993,7 @@ async function loadDiary() {
 $("kb-nb-diary-list").addEventListener("click", e => {
   const jumpBtn = e.target.closest("[data-jump-unread-reply]");
   if (jumpBtn) {
-    const firstId = _diaryUnreadReplyIds[0];
-    const item = firstId ? document.querySelector(`[data-agent-reply-id="${CSS.escape(String(firstId))}"]`) : null;
-    if (item) {
-      item.scrollIntoView({behavior: "smooth", block: "center"});
-      item.classList.add("flash");
-      setTimeout(() => item.classList.remove("flash"), 900);
-    }
+    scrollToFirstUnreadReply();
     return;
   }
 
@@ -1001,6 +1044,7 @@ function init() {
   api("/notebook/chat?limit=1").then(d => {
     $("kb-nb-count-chat").textContent = d.items.length ? "…" : 0;
   }).catch(() => {});
+  loadDiary();
 }
 
 init();
