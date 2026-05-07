@@ -4,6 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "regression": "scripts/kb-regression",
     "test:claude": "node scripts/test-claude-collector.js"
   },
   "keywords": [],

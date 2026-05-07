@@ -1971,6 +1971,9 @@ class StatusUpdate(BaseModel):
 def create_comment(body: CommentCreate):
     """新建评论，v2 路由器自动判断 intent/role，保留 @手动路由兼容"""
     v1_agent_type, cleaned_comment = parse_agent_type(body.comment)
+    cleaned_comment = (cleaned_comment or "").strip()
+    if not cleaned_comment:
+        raise HTTPException(status_code=400, detail="comment is required")
     now = datetime.now().isoformat()
 
     # 存储时 agent_type 先记录 v1 类型（兼容），后面会被 v2 覆盖
@@ -2140,33 +2143,48 @@ class CommentPatch(BaseModel):
 def patch_comment(comment_id: int, body: CommentPatch):
     """更新评论内容（用于追问时把完整对话历史写入）"""
     conn = sqlite3.connect(DB_PATH)
-    if body.comment is not None:
-        conn.execute(
-            "UPDATE comments SET comment = ?, updated_at = ? WHERE id = ?",
-            (body.comment, datetime.now().isoformat(), comment_id)
-        )
-    conn.commit()
-    conn.close()
+    try:
+        exists = conn.execute("SELECT id FROM comments WHERE id = ?", (comment_id,)).fetchone()
+        if not exists:
+            raise HTTPException(status_code=404, detail="Comment not found")
+        if body.comment is not None:
+            if not body.comment.strip():
+                raise HTTPException(status_code=400, detail="comment is required")
+            conn.execute(
+                "UPDATE comments SET comment = ?, updated_at = ? WHERE id = ?",
+                (body.comment, datetime.now().isoformat(), comment_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
     return {"ok": True}
 
 @app.post("/comments/{comment_id}/reply")
 def add_reply(comment_id: int, body: ReplyCreate):
     """用户手动补充回复"""
+    content = (body.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="content is required")
     conn = sqlite3.connect(DB_PATH)
-    now = datetime.now().isoformat()
-    cur = conn.execute(
-        "INSERT INTO replies (comment_id, author, content, created_at) VALUES (?, 'user', ?, ?)",
-        (comment_id, body.content, now)
-    )
-    reply_id = cur.lastrowid
-    conn.execute("UPDATE comments SET updated_at = ? WHERE id = ?", (now, comment_id))
-    conn.commit()
-    conn.close()
+    try:
+        exists = conn.execute("SELECT id FROM comments WHERE id = ?", (comment_id,)).fetchone()
+        if not exists:
+            raise HTTPException(status_code=404, detail="Comment not found")
+        now = datetime.now().isoformat()
+        cur = conn.execute(
+            "INSERT INTO replies (comment_id, author, content, created_at) VALUES (?, 'user', ?, ?)",
+            (comment_id, content, now)
+        )
+        reply_id = cur.lastrowid
+        conn.execute("UPDATE comments SET updated_at = ? WHERE id = ?", (now, comment_id))
+        conn.commit()
+    finally:
+        conn.close()
     event_id = _record_memory_event(
         comment_id,
         actor="user",
         event_type="user_followup",
-        content=body.content,
+        content=content,
         source_type="reply",
         source_id=reply_id,
         reply_id=reply_id,

@@ -1,0 +1,709 @@
+#!/usr/bin/env python3
+"""
+kb-regression: pre-commit regression gate for the mem-ai browser extension.
+
+The command deliberately separates write tests from live smoke tests:
+- write-heavy API/DB regression runs against a temporary KB_DATA_DIR;
+- the user's real DB is only read through localhost debug endpoints.
+"""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import io
+import json
+import os
+import re
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import textwrap
+import time
+import urllib.error
+import urllib.request
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable
+
+
+ROOT = Path(__file__).resolve().parents[1]
+BACKEND_DIR = ROOT / "backend"
+SRC_DIR = ROOT / "src"
+API_BASE = "http://127.0.0.1:8766"
+LOCALHOST_ENV = {
+    "http_proxy": None,
+    "https_proxy": None,
+    "HTTP_PROXY": None,
+    "HTTPS_PROXY": None,
+    "ALL_PROXY": None,
+    "all_proxy": None,
+    "NO_PROXY": "127.0.0.1,localhost,::1",
+    "no_proxy": "127.0.0.1,localhost,::1",
+}
+
+
+class RegressionError(AssertionError):
+    pass
+
+
+@dataclass
+class Result:
+    name: str
+    status: str
+    detail: str
+    elapsed: float
+
+
+def indent(value: str, prefix: str = "    ") -> str:
+    value = (value or "").strip()
+    if not value:
+        return ""
+    return "\n".join(prefix + line for line in value.splitlines())
+
+
+def assert_true(condition: Any, message: str) -> None:
+    if not condition:
+        raise RegressionError(message)
+
+
+def run_cmd(
+    args: list[str],
+    *,
+    cwd: Path = ROOT,
+    env: dict[str, str | None] | None = None,
+    timeout: int = 60,
+) -> str:
+    merged_env = os.environ.copy()
+    if env:
+        for key, value in env.items():
+            if value is None:
+                merged_env.pop(key, None)
+            else:
+                merged_env[key] = value
+    result = subprocess.run(
+        args,
+        cwd=str(cwd),
+        env=merged_env,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    if result.returncode != 0:
+        raise RegressionError(
+            "command failed: "
+            + " ".join(args)
+            + f"\nexit={result.returncode}"
+            + (f"\nstdout:\n{result.stdout.strip()}" if result.stdout.strip() else "")
+            + (f"\nstderr:\n{result.stderr.strip()}" if result.stderr.strip() else "")
+        )
+    return result.stdout.strip()
+
+
+def http_json(path: str, *, timeout: int = 5) -> dict[str, Any]:
+    url = path if path.startswith("http") else API_BASE + path
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            body = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        raise RegressionError(f"GET {url} returned HTTP {exc.code}") from exc
+    except Exception as exc:
+        raise RegressionError(f"GET {url} failed: {exc}") from exc
+    try:
+        return json.loads(body)
+    except Exception as exc:
+        raise RegressionError(f"GET {url} returned non-JSON: {body[:200]}") from exc
+
+
+@contextlib.contextmanager
+def patched_env(values: dict[str, str | None]):
+    old_values = {key: os.environ.get(key) for key in values}
+    for key, value in values.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+    try:
+        yield
+    finally:
+        for key, value in old_values.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+class Regression:
+    def __init__(self, args: argparse.Namespace):
+        self.args = args
+        self.results: list[Result] = []
+        self.state: dict[str, Any] = {}
+
+    def step(self, name: str, fn: Callable[[], str | None]) -> None:
+        print(f"\n== {name} ==")
+        start = time.time()
+        try:
+            detail = fn() or ""
+        except Exception as exc:
+            elapsed = time.time() - start
+            detail = str(exc)
+            self.results.append(Result(name, "FAIL", detail, elapsed))
+            print(f"[FAIL] {name} ({elapsed:.1f}s)")
+            print(indent(detail))
+            return
+        elapsed = time.time() - start
+        self.results.append(Result(name, "PASS", detail, elapsed))
+        print(f"[PASS] {name} ({elapsed:.1f}s)")
+        if detail:
+            print(indent(detail))
+
+    def run(self) -> int:
+        print("=== kb-regression ===")
+        print(f"repo: {ROOT}")
+        print("live DB policy: read-only")
+        print("write tests: temporary KB_DATA_DIR only")
+
+        self.step("static syntax and contract checks", self.static_checks)
+        self.step("hermetic API and DB regression", self.hermetic_backend_regression)
+        if not self.args.skip_live:
+            self.step("live health and debug API smoke", self.live_smoke)
+        if not self.args.skip_browser:
+            self.step("debug console browser smoke", self.browser_smoke)
+
+        failures = [r for r in self.results if r.status == "FAIL"]
+        print("\n=== summary ===")
+        for result in self.results:
+            print(f"{result.status:4} {result.name} ({result.elapsed:.1f}s)")
+        if failures:
+            print(f"\n{len(failures)} regression section(s) failed.")
+            return 1
+        print("\nAll regression sections passed.")
+        return 0
+
+    def static_checks(self) -> str:
+        with tempfile.TemporaryDirectory(prefix="kb-pycache-") as pycache_dir:
+            run_cmd(
+                [
+                    sys.executable,
+                    "-m",
+                    "py_compile",
+                    "backend/llm_client.py",
+                    "backend/agent_api.py",
+                    "backend/worker.py",
+                    "backend/server.py",
+                    "scripts/kb-health",
+                    "scripts/kb-regression",
+                ],
+                env={"PYTHONPYCACHEPREFIX": pycache_dir},
+            )
+
+        js_files = [
+            "src/background/index.js",
+            "src/collectors/claude.js",
+            "src/content/index.js",
+            "src/content/marked.min.js",
+            "src/notebook/app.js",
+            "src/popup/popup.js",
+            "src/sidepanel/sidepanel.js",
+            "scripts/test-claude-collector.js",
+            "scripts/test-comment-system.js",
+        ]
+        for js_file in js_files:
+            run_cmd(["node", "--check", js_file])
+
+        inline_parser = r"""
+          const fs = require('fs');
+          const html = fs.readFileSync(process.argv[1], 'utf8');
+          const scripts = [...html.matchAll(/<script\b(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi)];
+          for (const [index, match] of scripts.entries()) {
+            try { new Function(match[1]); }
+            catch (error) {
+              console.error(`inline script #${index + 1} failed: ${error.message}`);
+              process.exit(1);
+            }
+          }
+          console.log(`inline scripts ok: ${scripts.length}`);
+        """
+        run_cmd(["node", "-e", inline_parser, "src/debug/sqlite-console.html"])
+
+        for json_file in ["package.json", "manifest.json"]:
+            json.loads(read_text(ROOT / json_file))
+
+        backend = read_text(BACKEND_DIR / "agent_api.py")
+        worker = read_text(BACKEND_DIR / "worker.py")
+        content = read_text(SRC_DIR / "content" / "index.js")
+        console_html = read_text(SRC_DIR / "debug" / "sqlite-console.html")
+
+        backend_terms = [
+            "memory_intake_ledger",
+            "memory_input_events",
+            "context_packs",
+            "memory_event_interpretations",
+            "active_question_signals",
+            "project_signals",
+            "profile_signals",
+            "_record_intake_notion",
+            "/notion/upsert",
+        ]
+        missing = [term for term in backend_terms if term not in backend]
+        assert_true(not missing, f"backend contract terms missing: {missing}")
+
+        worker_terms = [
+            "memory_growth_for_comment",
+            "_set_event_growth_ledger",
+            "event_id",
+            "memory_event_interpretations",
+            "profile_signals",
+        ]
+        missing = [term for term in worker_terms if term not in worker]
+        assert_true(not missing, f"worker contract terms missing: {missing}")
+
+        content_terms = [
+            "syncCommentFromBackend",
+            "remoteReplyId",
+            "updateNotionPage",
+            "askAI(commentId);",
+            "请 AI 回复",
+            "继续追问",
+            "kb-badge",
+        ]
+        missing = [term for term in content_terms if term not in content]
+        assert_true(not missing, f"content contract terms missing: {missing}")
+
+        reply_flow = re.search(r"async function submitReply\(commentId\)([\s\S]+?)\n  }\n\n  //", content)
+        assert_true(reply_flow, "submitReply function not found")
+        reply_body = reply_flow.group(1)
+        assert_true("/reply" in reply_body, "submitReply must persist the user follow-up to backend")
+        assert_true("askAI(commentId);" in reply_body, "submitReply must trigger AI by default after recording")
+
+        console_terms = [
+            "Memory Events",
+            "Context Packs",
+            "event_interpretations",
+            "验收状态",
+            "字段说明",
+            "复制验收摘要",
+        ]
+        missing = [term for term in console_terms if term not in console_html]
+        assert_true(not missing, f"debug console terms missing: {missing}")
+
+        return "\n".join(
+            [
+                "python syntax ok",
+                f"node syntax ok: {len(js_files)} files",
+                "html inline script syntax ok",
+                "contracts present: ledger/events/growth/context/notion/default-AI-followup/debug-console",
+            ]
+        )
+
+    def hermetic_backend_regression(self) -> str:
+        with tempfile.TemporaryDirectory(prefix="kb-regression-") as temp_dir:
+            env = {
+                "KB_DATA_DIR": temp_dir,
+                "KB_DISABLE_LEGACY_DB_MIGRATION": "1",
+            }
+            with patched_env(env):
+                sys.path.insert(0, str(BACKEND_DIR))
+                with contextlib.redirect_stdout(io.StringIO()):
+                    import agent_api  # type: ignore
+                from fastapi.testclient import TestClient
+
+                client = TestClient(agent_api.app)
+                db_path = Path(agent_api.DB_PATH)
+                assert_true(str(db_path).startswith(temp_dir), f"DB path is not temporary: {db_path}")
+                assert_true(db_path.exists(), f"temporary DB not created: {db_path}")
+
+                def qone(sql: str, params: tuple[Any, ...] = ()) -> sqlite3.Row | None:
+                    conn = sqlite3.connect(db_path)
+                    conn.row_factory = sqlite3.Row
+                    try:
+                        return conn.execute(sql, params).fetchone()
+                    finally:
+                        conn.close()
+
+                def qall(sql: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
+                    conn = sqlite3.connect(db_path)
+                    conn.row_factory = sqlite3.Row
+                    try:
+                        return conn.execute(sql, params).fetchall()
+                    finally:
+                        conn.close()
+
+                empty_comment = client.post(
+                    "/comments",
+                    json={"page_url": "https://kb-regression.local/empty", "comment": "   ", "no_agent": True},
+                )
+                assert_true(empty_comment.status_code == 400, "empty comment should be rejected")
+
+                response = client.post(
+                    "/comments",
+                    json={
+                        "page_url": "https://kb-regression.local/article",
+                        "page_title": "Regression Article",
+                        "selected_text": "Velo 2.0 / 470v",
+                        "surrounding_text": "A nearby sentence before the selected text and one after it.",
+                        "page_content": "Full article text captured by the content script for exposure memory.",
+                        "comment": "前几天也有个类似产品？",
+                        "no_agent": True,
+                    },
+                )
+                assert_true(response.status_code == 200, response.text)
+                comment_id = int(response.json()["id"])
+
+                comment = qone("SELECT * FROM comments WHERE id=?", (comment_id,))
+                assert_true(comment and comment["comment"] == "前几天也有个类似产品？", "comment row missing")
+                cache = qone("SELECT * FROM page_cache WHERE page_url=?", ("https://kb-regression.local/article",))
+                assert_true(cache and "Full article text" in cache["full_text"], "page_cache full text missing")
+
+                ledger = qone("SELECT * FROM memory_intake_ledger WHERE comment_id=?", (comment_id,))
+                assert_true(ledger and ledger["local_status"] == "local_saved", "intake ledger local_saved missing")
+                assert_true(ledger["growth_status"] == "enqueued", "comment growth should be enqueued")
+
+                first_event = qone(
+                    "SELECT * FROM memory_input_events WHERE comment_id=? AND event_type='comment_created'",
+                    (comment_id,),
+                )
+                assert_true(first_event and first_event["actor"] == "user", "comment_created event missing")
+                assert_true(first_event["growth_status"] == "enqueued", "comment_created event not enqueued")
+
+                first_job = qone("SELECT * FROM jobs WHERE id=?", (json.loads(first_event["growth_job_ids"])[-1],))
+                first_payload = json.loads(first_job["payload_json"])
+                assert_true(first_payload["event_id"] == first_event["id"], "comment job missing event_id")
+                assert_true(first_payload["trigger_reason"] == "comment_created", "comment job trigger mismatch")
+
+                bad_reply = client.post(f"/comments/{comment_id}/reply", json={"content": "  "})
+                assert_true(bad_reply.status_code == 400, "empty follow-up should be rejected")
+                missing_reply = client.post("/comments/999999/reply", json={"content": "orphan?"})
+                assert_true(missing_reply.status_code == 404, "follow-up to missing comment should be rejected")
+
+                reply_response = client.post(
+                    f"/comments/{comment_id}/reply",
+                    json={"content": "我继续追问：它和 MTP 有什么区别？"},
+                )
+                assert_true(reply_response.status_code == 200, reply_response.text)
+                reply_body = reply_response.json()
+                reply_id = int(reply_body["reply_id"])
+                event_id = int(reply_body["event_id"])
+                job_id = int(reply_body["growth_job_id"])
+
+                reply = qone("SELECT * FROM replies WHERE id=?", (reply_id,))
+                assert_true(reply and reply["author"] == "user", "user reply row missing")
+                followup_event = qone("SELECT * FROM memory_input_events WHERE id=?", (event_id,))
+                assert_true(followup_event and followup_event["event_type"] == "user_followup", "user_followup event missing")
+                assert_true(followup_event["growth_status"] == "enqueued", "follow-up growth not enqueued")
+                followup_job = qone("SELECT * FROM jobs WHERE id=?", (job_id,))
+                followup_payload = json.loads(followup_job["payload_json"])
+                assert_true(followup_payload["trigger_reason"] == "user_followup", "follow-up job trigger mismatch")
+
+                event_count_before_patch = qone(
+                    "SELECT COUNT(*) AS n FROM memory_input_events WHERE comment_id=?",
+                    (comment_id,),
+                )["n"]
+                bad_patch = client.patch(f"/comments/{comment_id}", json={"comment": "  "})
+                assert_true(bad_patch.status_code == 400, "empty patch should be rejected")
+                missing_patch = client.patch("/comments/999999", json={"comment": "missing"})
+                assert_true(missing_patch.status_code == 404, "patch to missing comment should be rejected")
+                patch_response = client.patch(
+                    f"/comments/{comment_id}",
+                    json={"comment": "前几天也有个类似产品？\n\n---追问---\n\n我继续追问：它和 MTP 有什么区别？"},
+                )
+                assert_true(patch_response.status_code == 200, patch_response.text)
+                event_count_after_patch = qone(
+                    "SELECT COUNT(*) AS n FROM memory_input_events WHERE comment_id=?",
+                    (comment_id,),
+                )["n"]
+                assert_true(event_count_after_patch == event_count_before_patch, "PATCH must not duplicate memory events")
+
+                duplicate = client.post(
+                    "/jobs",
+                    json={
+                        "kind": "memory_growth_for_comment",
+                        "payload": {"comment_id": comment_id, "event_id": event_id, "trigger_reason": "manual"},
+                    },
+                )
+                assert_true(duplicate.status_code == 200, duplicate.text)
+                assert_true(duplicate.json()["deduped"] is True, "event growth jobs should dedupe")
+                invalid_job = client.post("/jobs", json={"kind": "unknown", "payload": {}})
+                assert_true(invalid_job.status_code == 400, "unknown jobs should be rejected")
+
+                now = agent_api._now_iso()
+                conn = sqlite3.connect(db_path)
+                try:
+                    cur = conn.execute(
+                        "INSERT INTO replies (comment_id, author, agent_type, content, created_at, debug_meta) "
+                        "VALUES (?, 'agent', 'sparring_partner', ?, ?, ?)",
+                        (
+                            comment_id,
+                            "短回复：我先记录你的比较方向，再给出一个可验证的问题。",
+                            now,
+                            json.dumps({"version": "regression", "status": "success"}, ensure_ascii=False),
+                        ),
+                    )
+                    agent_reply_id = cur.lastrowid
+                    pack_id = agent_api._insert_context_pack(
+                        conn,
+                        {
+                            "comment_id": comment_id,
+                            "identity_snapshot_id": None,
+                            "selected_skill_ids": [],
+                            "episodic_comment_ids": [comment_id],
+                            "same_page_comment_ids": [comment_id],
+                            "current_page_url": "https://kb-regression.local/article",
+                            "selection_reasons": {
+                                "episodic": "same topic",
+                                "same_page": "same page",
+                                "mode": "regression",
+                            },
+                            "token_budget_used": 128,
+                            "context_md": "## Regression Context Pack",
+                        },
+                        reply_id=agent_reply_id,
+                        source_type="reply",
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+
+                agent_event_id = agent_api._record_memory_event(
+                    comment_id,
+                    actor="agent",
+                    event_type="agent_reply_added",
+                    content="短回复：我先记录你的比较方向，再给出一个可验证的问题。",
+                    source_type="reply",
+                    source_id=agent_reply_id,
+                    reply_id=agent_reply_id,
+                    growth_status="skipped",
+                )
+                assert_true(pack_id, "context pack was not inserted")
+                assert_true(agent_event_id, "agent reply event was not inserted")
+
+                conn = sqlite3.connect(db_path)
+                try:
+                    decision_json = json.dumps({"remember": True, "reason": "regression fixture"}, ensure_ascii=False)
+                    conn.execute(
+                        "INSERT OR REPLACE INTO comment_interpretations "
+                        "(comment_id, interpretation_json, decision, produced_by_job_id, confidence, created_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (
+                            comment_id,
+                            json.dumps({"gist": "user compares launch video products"}, ensure_ascii=False),
+                            decision_json,
+                            job_id,
+                            0.8,
+                            now,
+                        ),
+                    )
+                    conn.execute(
+                        "INSERT OR REPLACE INTO memory_event_interpretations "
+                        "(event_id, comment_id, interpretation_json, decision, produced_by_job_id, confidence, created_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            event_id,
+                            comment_id,
+                            json.dumps({"gist": "user asks a follow-up about MTP"}, ensure_ascii=False),
+                            decision_json,
+                            job_id,
+                            0.84,
+                            now,
+                        ),
+                    )
+                    conn.execute(
+                        "INSERT INTO rule_candidates "
+                        "(comment_id, event_id, rule_text, behavior_type, applies_to, confidence, decision, produced_by_job_id, created_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            comment_id,
+                            event_id,
+                            "When comparing products, preserve the user's original comparison axis.",
+                            "preference",
+                            "product_research",
+                            0.77,
+                            decision_json,
+                            job_id,
+                            now,
+                        ),
+                    )
+                    conn.execute(
+                        "INSERT INTO active_question_signals "
+                        "(comment_id, event_id, question, signal_strength, scope, produced_by_job_id, created_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            comment_id,
+                            event_id,
+                            "What makes an AI launch-video product memorable?",
+                            0.7,
+                            "project",
+                            job_id,
+                            now,
+                        ),
+                    )
+                    conn.execute(
+                        "INSERT INTO theme_signals "
+                        "(comment_id, event_id, theme, intensity, evidence_count, representative_comment_ids, produced_by_job_id, created_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            comment_id,
+                            event_id,
+                            "AI product launch media",
+                            0.72,
+                            1,
+                            json.dumps([comment_id]),
+                            job_id,
+                            now,
+                        ),
+                    )
+                    conn.execute(
+                        "INSERT INTO project_signals "
+                        "(comment_id, event_id, signal_json, confidence, decision, produced_by_job_id, created_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            comment_id,
+                            event_id,
+                            json.dumps({"project": "mem-ai", "signal": "product comparison expectation"}, ensure_ascii=False),
+                            0.8,
+                            decision_json,
+                            job_id,
+                            now,
+                        ),
+                    )
+                    conn.execute(
+                        "INSERT INTO profile_signals "
+                        "(comment_id, event_id, signal_json, confidence, decision, produced_by_job_id, created_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            comment_id,
+                            event_id,
+                            json.dumps({"interest": "AI video launch products"}, ensure_ascii=False),
+                            0.75,
+                            decision_json,
+                            job_id,
+                            now,
+                        ),
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+
+                detail = client.get(f"/debug/comments/{comment_id}")
+                assert_true(detail.status_code == 200, detail.text)
+                detail_json = detail.json()
+                assert_true(len(detail_json["memory_events"]) == 3, "debug detail should expose 3 memory events")
+                assert_true(len(detail_json["context_packs"]) == 1, "debug detail should expose context pack")
+                assert_true(detail_json["ledger"]["growth_status"] == "enqueued", "debug ledger missing growth status")
+                assert_true(len(detail_json["growth"]["event_interpretations"]) == 1, "event interpretations missing")
+                assert_true(len(detail_json["growth"]["rule_candidates"]) == 1, "rule candidates missing")
+                assert_true(len(detail_json["growth"]["active_questions"]) == 1, "active questions missing")
+                assert_true(len(detail_json["growth"]["themes"]) == 1, "themes missing")
+                assert_true(len(detail_json["growth"]["project_signals"]) == 1, "project signals missing")
+                assert_true(len(detail_json["growth"]["profile_signals"]) == 1, "profile signals missing")
+
+                return "\n".join(
+                    [
+                        f"temp DB: {db_path}",
+                        "covered: comment intake, page_cache, ledger, user events, growth job enqueue/dedupe",
+                        "covered: follow-up records then triggers growth; PATCH does not duplicate behavior events",
+                        "covered: context pack and growth artifacts visible in debug detail",
+                        "covered: empty/missing resource boundaries return 400/404",
+                    ]
+                )
+
+    def live_smoke(self) -> str:
+        with patched_env(LOCALHOST_ENV):
+            health = run_cmd([str(ROOT / "scripts" / "kb-health"), "--json"], env=LOCALHOST_ENV, timeout=20)
+            payload = json.loads(health)
+            summary = payload.get("summary", {})
+            assert_true(summary.get("fail", 0) == 0, f"kb-health failures: {summary}")
+            assert_true(summary.get("warn", 0) == 0, f"kb-health warnings: {summary}")
+
+            index = http_json("/debug/comments?limit=1")
+            assert_true("items" in index and "total" in index and "db" in index, "debug comments index shape changed")
+            assert_true(isinstance(index["items"], list), "debug comments items must be a list")
+
+            if not index["items"]:
+                return "kb-health green; live debug API reachable; no live comments to inspect"
+
+            requested_id = self.args.comment_id or os.environ.get("KB_REGRESSION_COMMENT_ID")
+            comment_id = int(requested_id or index["items"][0]["id"])
+            detail = http_json(f"/debug/comments/{comment_id}")
+            for key in ["comment", "replies", "memory_events", "context_packs", "ledger", "growth", "jobs", "db"]:
+                assert_true(key in detail, f"debug detail missing key: {key}")
+            growth = detail["growth"]
+            for key in [
+                "interpretation",
+                "event_interpretations",
+                "active_questions",
+                "themes",
+                "rule_candidates",
+                "project_signals",
+                "profile_signals",
+            ]:
+                assert_true(key in growth, f"debug growth missing key: {key}")
+            self.state["live_comment_id"] = comment_id
+
+        return "\n".join(
+            [
+                "kb-health green",
+                f"debug API read-only sample: comment#{comment_id}",
+                f"memory_events={len(detail['memory_events'])}, context_packs={len(detail['context_packs'])}, jobs={len(detail['jobs'])}",
+            ]
+        )
+
+    def browser_smoke(self) -> str:
+        comment_id = self.args.comment_id or self.state.get("live_comment_id") or os.environ.get("KB_REGRESSION_COMMENT_ID")
+        url = self.args.debug_url
+        if not url:
+            url = (SRC_DIR / "debug" / "sqlite-console.html").resolve().as_uri()
+        if comment_id and "comment=" not in url:
+            joiner = "&" if "?" in url else "?"
+            url = f"{url}{joiner}comment={int(comment_id)}"
+
+        browser_script = r"""
+          const { chromium } = require('playwright');
+          const url = process.argv[1];
+          const expectedComment = process.argv[2] || '';
+          (async () => {
+            const browser = await chromium.launch({ headless: true, args: ['--no-proxy-server'] });
+            const page = await browser.newPage();
+            const errors = [];
+            page.on('pageerror', error => errors.push(error.message));
+            await page.goto(url, { waitUntil: 'networkidle' });
+            await page.waitForSelector('text=SQLite Debug Console', { timeout: 10000 });
+            if (expectedComment) {
+              await page.waitForSelector(`text=comment#${expectedComment}`, { timeout: 10000 });
+            }
+            const text = await page.locator('body').innerText();
+            const required = expectedComment
+              ? ['验收状态', 'Memory Events', 'Context Packs', '字段说明', '复制验收摘要']
+              : ['SQLite Debug Console'];
+            const missing = required.filter(item => !text.includes(item));
+            await browser.close();
+            if (errors.length || missing.length) {
+              console.error(JSON.stringify({ errors, missing, preview: text.slice(0, 800) }, null, 2));
+              process.exit(1);
+            }
+            console.log(`debug console ok: ${url}`);
+          })().catch(error => {
+            console.error(error);
+            process.exit(1);
+          });
+        """
+        out = run_cmd(["node", "-e", browser_script, url, str(comment_id or "")], env=LOCALHOST_ENV, timeout=30)
+        return out
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run the mem-ai extension regression gate.")
+    parser.add_argument("--skip-live", action="store_true", help="Skip read-only localhost smoke checks.")
+    parser.add_argument("--skip-browser", action="store_true", help="Skip Playwright debug console smoke.")
+    parser.add_argument("--comment-id", type=int, default=None, help="Live comment id to inspect in debug smoke.")
+    parser.add_argument("--debug-url", default="", help="Debug console URL/file to open in browser smoke.")
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    sys.exit(Regression(parse_args()).run())
