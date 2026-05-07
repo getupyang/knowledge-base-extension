@@ -47,6 +47,64 @@ function fmtDateShort(iso) {
   return (d.getMonth()+1) + "-" + String(d.getDate()).padStart(2,"0");
 }
 
+const SEEN_AGENT_REPLY_KEY = "kb_nb_seen_agent_reply_ids_v1";
+let _diaryUnreadReplyIds = [];
+
+function readSeenAgentReplyIds() {
+  try {
+    const arr = JSON.parse(localStorage.getItem(SEEN_AGENT_REPLY_KEY) || "[]");
+    return new Set(Array.isArray(arr) ? arr.map(String) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function writeSeenAgentReplyIds(ids) {
+  localStorage.setItem(SEEN_AGENT_REPLY_KEY, JSON.stringify(Array.from(ids)));
+}
+
+function markAgentRepliesSeen(ids) {
+  const normalized = (Array.isArray(ids) ? ids : [ids]).filter(id => id !== undefined && id !== null).map(String);
+  if (!normalized.length) return;
+  const seen = readSeenAgentReplyIds();
+  normalized.forEach(id => seen.add(id));
+  writeSeenAgentReplyIds(seen);
+  normalized.forEach(id => {
+    const item = document.querySelector(`[data-agent-reply-id="${CSS.escape(id)}"]`);
+    if (item) {
+      item.classList.remove("unread");
+      const badge = item.querySelector(".kb-nb-diary-unread-tag");
+      if (badge) badge.remove();
+      const btn = item.querySelector("[data-read-reply]");
+      if (btn) {
+        btn.textContent = "已读";
+        btn.disabled = true;
+      }
+    }
+  });
+  _diaryUnreadReplyIds = _diaryUnreadReplyIds.filter(id => !normalized.includes(String(id)));
+  updateDiaryUnreadNotice();
+}
+
+function updateDiaryUnreadNotice() {
+  const notice = $("kb-nb-diary-unread-notice");
+  if (!notice) return;
+  const count = _diaryUnreadReplyIds.length;
+  if (!count) {
+    notice.innerHTML = `<span>没有未读 AI 回复</span>`;
+    notice.classList.add("empty");
+    return;
+  }
+  notice.classList.remove("empty");
+  notice.innerHTML = `
+    <span>${count} 条未读 AI 回复</span>
+    <span class="kb-nb-diary-unread-actions">
+      <button data-jump-unread-reply>查看第一条</button>
+      <button data-mark-all-ai-read>全部标为已读</button>
+    </span>
+  `;
+}
+
 async function api(path, opts = {}) {
   try {
     const r = await fetch(API_BASE + path, opts);
@@ -808,6 +866,8 @@ async function loadDiary() {
       list.innerHTML = `<div class="kb-nb-empty">还没有批注 · 去网页上划线评注一条试试</div>`;
       return;
     }
+    const seenReplyIds = readSeenAgentReplyIds();
+    _diaryUnreadReplyIds = [];
     list.innerHTML = data.items.map(c => {
       const t = new Date(c.created_at);
       const ts = `${(t.getMonth()+1)}-${String(t.getDate()).padStart(2,"0")} ${String(t.getHours()).padStart(2,"0")}:${String(t.getMinutes()).padStart(2,"0")}`;
@@ -822,11 +882,24 @@ async function loadDiary() {
       const repliesHtml = aiReplies.map(r => {
         const rt = new Date(r.created_at);
         const rts = `${(rt.getMonth()+1)}-${String(rt.getDate()).padStart(2,"0")} ${String(rt.getHours()).padStart(2,"0")}:${String(rt.getMinutes()).padStart(2,"0")}`;
-        const preview = (r.content || "").replace(/\s+/g, " ").trim().slice(0, 200);
+        const replyId = String(r.id);
+        const unread = !seenReplyIds.has(replyId);
+        if (unread) _diaryUnreadReplyIds.push(replyId);
+        const raw = r.content || "";
+        const compact = raw.replace(/\s+/g, " ").trim();
+        const preview = compact.slice(0, 220);
+        const isLong = compact.length > 220 || raw.length > 320;
         return `
-          <div class="kb-nb-diary-item agent">
-            <div class="kb-nb-diary-meta">AGENT · ${rts}</div>
-            <div class="kb-nb-diary-text">${escapeHtml(preview)}${(r.content || "").length > 200 ? "…" : ""}</div>
+          <div class="kb-nb-diary-item agent ${unread ? "unread" : ""}" data-agent-reply-id="${escapeHtml(replyId)}">
+            <div class="kb-nb-diary-meta">
+              AGENT · ${rts}
+              ${unread ? `<span class="kb-nb-diary-unread-tag">未读</span>` : ""}
+            </div>
+            <div class="kb-nb-diary-text kb-nb-diary-preview">${escapeHtml(preview)}${isLong ? "…" : ""}</div>
+            <div class="kb-nb-diary-text kb-nb-diary-full">${md(raw)}</div>
+            <div class="kb-nb-diary-actions">
+              <button data-read-reply="${escapeHtml(replyId)}">${isLong ? "展开阅读" : "标为已读"}</button>
+            </div>
           </div>
         `;
       }).join("");
@@ -840,10 +913,51 @@ async function loadDiary() {
         ${repliesHtml}
       `;
     }).join("");
+    list.innerHTML = `
+      <div class="kb-nb-diary-unread-notice" id="kb-nb-diary-unread-notice"></div>
+      ${list.innerHTML}
+    `;
+    updateDiaryUnreadNotice();
   } catch (e) {
     $("kb-nb-diary-list").innerHTML = `<div class="kb-nb-empty">读取失败</div>`;
   }
 }
+
+$("kb-nb-diary-list").addEventListener("click", e => {
+  const jumpBtn = e.target.closest("[data-jump-unread-reply]");
+  if (jumpBtn) {
+    const firstId = _diaryUnreadReplyIds[0];
+    const item = firstId ? document.querySelector(`[data-agent-reply-id="${CSS.escape(String(firstId))}"]`) : null;
+    if (item) {
+      item.scrollIntoView({behavior: "smooth", block: "center"});
+      item.classList.add("flash");
+      setTimeout(() => item.classList.remove("flash"), 900);
+    }
+    return;
+  }
+
+  const markAllBtn = e.target.closest("[data-mark-all-ai-read]");
+  if (markAllBtn) {
+    markAgentRepliesSeen(_diaryUnreadReplyIds);
+    toast("已标记全部 AI 回复为已读");
+    return;
+  }
+
+  const readBtn = e.target.closest("[data-read-reply]");
+  if (readBtn) {
+    const id = readBtn.dataset.readReply;
+    const item = document.querySelector(`[data-agent-reply-id="${CSS.escape(String(id))}"]`);
+    if (item) item.classList.add("expanded");
+    markAgentRepliesSeen(id);
+    return;
+  }
+
+  const item = e.target.closest("[data-agent-reply-id]");
+  if (item) {
+    item.classList.add("expanded");
+    markAgentRepliesSeen(item.dataset.agentReplyId);
+  }
+});
 
 // ─── 6. 导出（占位）───
 document.querySelectorAll(".kb-nb-page-export, #kb-nb-export-btn").forEach(btn => {

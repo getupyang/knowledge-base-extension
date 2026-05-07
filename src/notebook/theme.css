@@ -686,6 +686,52 @@ a { color: inherit; }
   border-left: 1px solid var(--kb-line-2);
   padding-left: 20px; margin-left: 8px;
 }
+.kb-nb-diary-unread-notice {
+  margin: 0 0 4px -12px;
+  padding: 8px 10px;
+  border: 1px solid oklch(0.55 0.12 240 / 0.28);
+  background: oklch(0.97 0.02 240);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--kb-blue);
+}
+.kb-nb-diary-unread-notice.empty {
+  color: var(--kb-ink-faint);
+  background: var(--kb-paper-2);
+  border-color: var(--kb-line-2);
+}
+.kb-nb-diary-unread-actions {
+  display: flex; gap: 6px; flex-wrap: wrap;
+}
+.kb-nb-diary-unread-notice button,
+.kb-nb-diary-actions button {
+  border: 1px solid var(--kb-line);
+  background: var(--kb-paper);
+  color: var(--kb-ink-2);
+  border-radius: 3px;
+  padding: 4px 8px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px;
+  cursor: pointer;
+}
+.kb-nb-diary-unread-notice button:hover,
+.kb-nb-diary-actions button:hover {
+  border-color: var(--kb-blue);
+  color: var(--kb-blue);
+}
+.kb-nb-diary-actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.kb-nb-diary-actions button:disabled:hover {
+  border-color: var(--kb-line);
+  color: var(--kb-ink-2);
+}
 .kb-nb-diary-item {
   position: relative;
   padding: 4px 0 8px;
@@ -698,14 +744,59 @@ a { color: inherit; }
 .kb-nb-diary-item.agent::before {
   border-color: var(--kb-blue); background: var(--kb-blue);
 }
+.kb-nb-diary-item.agent.unread {
+  margin-left: -8px;
+  padding: 10px 10px 12px;
+  border: 1px solid oklch(0.55 0.12 240 / 0.28);
+  border-radius: 4px;
+  background: oklch(0.97 0.02 240);
+}
+.kb-nb-diary-item.agent.unread::before {
+  left: -17px;
+  box-shadow: 0 0 0 4px oklch(0.55 0.12 240 / 0.12);
+}
+.kb-nb-diary-item.agent.flash {
+  animation: kb-nb-diary-flash 0.8s ease-in-out 1;
+}
+@keyframes kb-nb-diary-flash {
+  0%, 100% { box-shadow: none; }
+  30% { box-shadow: 0 0 0 4px oklch(0.55 0.12 240 / 0.18); }
+}
 .kb-nb-diary-meta {
   font-family: "JetBrains Mono", ui-monospace, monospace;
   font-size: 10px; color: var(--kb-ink-mute);
   letter-spacing: 0.04em; margin-bottom: 3px;
 }
+.kb-nb-diary-unread-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 2px;
+  background: var(--kb-blue);
+  color: white;
+  font-size: 9px;
+}
 .kb-nb-diary-text {
   font-family: "Source Han Serif SC", "Noto Serif SC", serif;
   font-size: 13.5px; line-height: 1.6; color: var(--kb-ink);
+}
+.kb-nb-diary-full {
+  display: none;
+}
+.kb-nb-diary-full p {
+  margin: 0 0 6px;
+}
+.kb-nb-diary-full p:last-child {
+  margin-bottom: 0;
+}
+.kb-nb-diary-item.agent.expanded .kb-nb-diary-preview {
+  display: none;
+}
+.kb-nb-diary-item.agent.expanded .kb-nb-diary-full {
+  display: block;
+}
+.kb-nb-diary-actions {
+  margin-top: 6px;
 }
 .kb-nb-diary-quote {
   font-style: italic; color: var(--kb-ink-mute);
