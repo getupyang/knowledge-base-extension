@@ -178,7 +178,11 @@ mem-ai 支持两种方式：
 1. 本地后端：如果你已经安装并登录 Claude Code / Codex CLI，可以在安装脚本里固定选择一个后端，复用本地订阅额度。
 2. API 标准模式：如果没有本地后端，在 `setup.sh` 中填写 OpenAI-compatible API key。
 
-如果同一台机器同时有 Claude Code 和 Codex CLI，安装脚本会要求你手动选择一个固定后端。mem-ai 不会自动在二者之间切换；后续要切换时，修改 `~/.kb_config` 里的 `MEMAI_LLM_PROVIDER` 后重启。
+如果同一台机器同时有 Claude Code 和 Codex CLI，安装脚本会要求你手动选择一个固定后端。之后想切换时，运行：
+
+```bash
+sh choose_ai_service.sh
+```
 
 Claude Code 用户可先登录：
 
@@ -412,17 +416,13 @@ claude login
 
 **Q: 同时安装了 Claude Code 和 Codex，会自动选哪个？**
 
-不会自动选。安装时必须固定选择一个：
+不会自动选。安装时必须固定选择一个。之后要切换，直接运行：
 
 ```bash
-MEMAI_LLM_PROVIDER=claude_code
-# 或
-MEMAI_LLM_PROVIDER=codex_cli
-# 或
-MEMAI_LLM_PROVIDER=api
+sh choose_ai_service.sh
 ```
 
-切换后重新运行 `bash start.sh`。
+它会让你在 3 个选项里选：Codex 直连、Claude Code 直连、自己的 API，并在保存后询问是否立刻重启服务。
 
 **Q: 插件配置页保存后不生效**
 
