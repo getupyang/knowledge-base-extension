@@ -1116,10 +1116,10 @@ def _infer_project_label(signal: dict, text: str, fallback: str = "") -> str:
             return _normalize_project_label(value)
     haystack = f"{text} {fallback}".lower()
     patterns = [
-        (r"mem-ai|openmemory|mem0|memory|记忆|benchmark|评测|context loader|growth pipeline|批注|annotation|readwise|glasp|hypothesis|gdpval|cranfield|netflix recommender", "mem-ai / 记忆产品与评测"),
-        (r"李飞飞|street view|visual census|timnit|时空|lbs|卫星|房地产|港口|集装箱|社会影响", "AI 社会影响 / 时空数据研究"),
+        (r"openmemory|mem0|memory|记忆|context loader|growth pipeline|批注|annotation|readwise|glasp|hypothesis", "知识管理与个人记忆系统"),
+        (r"benchmark|评测|eval|gdpval|cranfield|netflix recommender|推荐系统|指标", "评测与产品方法论"),
+        (r"street view|visual census|时空|lbs|卫星|房地产|港口|集装箱|社会影响", "AI 社会影响与空间数据研究"),
         (r"mtp|mla|draft model|speculative decoding|推理加速", "AI 推理架构研究"),
-        (r"威尼斯|建筑双年展|how will we live together|菜市场美术馆", "建筑与艺术主题研究"),
     ]
     for pattern, label in patterns:
         if re.search(pattern, haystack):
@@ -1129,26 +1129,26 @@ def _infer_project_label(signal: dict, text: str, fallback: str = "") -> str:
 
 THOUGHT_TOPIC_DEFINITIONS = [
     {
-        "id": "memory-product-mainline",
-        "label": "mem-ai / 记忆产品主线",
+        "id": "knowledge-memory-systems",
+        "label": "知识管理与个人记忆系统",
         "role": "mainline",
         "keywords": [
-            "mem-ai", "记忆", "memory", "批注", "评论区", "context loader", "growth pipeline",
+            "记忆", "memory", "批注", "评论区", "context loader", "growth pipeline",
             "notebook", "问记忆", "当前项目", "active questions", "theme", "project",
             "Notion", "SQLite", "Mem0", "OpenMemory", "Readwise", "Glasp", "Hypothesis",
         ],
-        "read": "持续主线：围绕评论区交互、记忆生长、上下文装载和产品体验在推进。",
+        "read": "持续线索：围绕知识记录、记忆生长、上下文装载和使用体验在推进。",
     },
     {
         "id": "evaluation-methodology",
-        "label": "AI 记忆评测 / 产品评测方法论",
+        "label": "评测与产品方法论",
         "role": "merge",
         "keywords": [
             "benchmark", "评测", "eval", "gold", "golden", "case", "Needs Met",
             "GDPval", "Cranfield", "Netflix", "推荐系统", "replay", "rubric",
             "第一视角", "第三视角",
         ],
-        "read": "正在合流：评测不再是旁支研究，而是在变成 mem-ai 如何证明自己有用的核心问题。",
+        "read": "正在合流：评测不再是旁支资料，而是在变成判断产品价值和改进方向的方法问题。",
     },
     {
         "id": "adoption-distribution",
@@ -1163,19 +1163,19 @@ THOUGHT_TOPIC_DEFINITIONS = [
     },
     {
         "id": "agent-workflow",
-        "label": "Agent 工作流 / 工程化同事",
+        "label": "Agent 工作流与工程化协作",
         "role": "branch",
         "keywords": [
             "Claude Code", "Codex", "MCP", "worker", "context_pack",
             "Hermes", "Honcho", "编排", "回归", "自测", "工具路由", "模式选择",
             "AI 同事", "工程化同事", "agent 编排",
         ],
-        "read": "背景能力线：它仍会影响 mem-ai 的工程判断，但最近不像主线那样被持续推进。",
+        "read": "背景能力线：它影响工具使用和工程判断，但是否成为主线需要看后续证据。",
         "possible_misread": "如果后续又围绕 agent 编排、回归、自测连续提出任务，它应重新升温。",
     },
     {
         "id": "social-impact-spatiotemporal",
-        "label": "AI 社会影响 / 时空数据研究",
+        "label": "AI 社会影响与空间数据研究",
         "role": "sprout",
         "keywords": [
             "李飞飞", "Timnit", "Street View", "visual census", "时空", "LBS",
@@ -1212,7 +1212,7 @@ THOUGHT_TOPIC_DEFINITIONS = [
             "第一天", "第1天", "AHA", "会议", "Granola", "飞轮",
             "知识工作者", "非技术用户", "最小闭环",
         ],
-        "read": "降温背景线：早期价值和方向探索仍是底层问题，但近期被 mem-ai 的记忆机制和评测问题接管。",
+        "read": "降温背景线：早期价值和方向探索仍是底层问题，但近期被更具体的产品机制和评测问题接管。",
         "possible_misread": "降温不是不重要，只是最近没有像前期那样直接占据近场注意力。",
     },
 ]
