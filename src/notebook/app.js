@@ -863,6 +863,7 @@ function renderMemoryMap(data) {
 
 // ─── 4.2 思考地图：主线 / 旁支 / 新芽 / 降温 ───
 let _thoughtMapPromise = null;
+let _lastThoughtMapData = null;
 
 async function loadThoughtMap(force) {
   if (!_thoughtMapPromise || force) {
@@ -902,7 +903,7 @@ function laneLabel(lane) {
     merging: "合流",
     branch: "旁支",
     sprout: "新芽",
-    occasional: "偶发",
+    occasional: "待观察",
     cooling: "降温",
   }[lane] || lane;
 }
@@ -936,6 +937,83 @@ function thoughtScorePills(node) {
   `).join("");
 }
 
+function flattenThoughtNodes(lanes) {
+  const order = ["mainline", "merging", "branch", "sprout", "occasional", "cooling"];
+  return order.flatMap(k => Array.isArray(lanes?.[k]) ? lanes[k] : []);
+}
+
+function renderThoughtHeroSummary(lanes, observation) {
+  const main = (lanes.mainline || [])[0];
+  const rising = [...(lanes.sprout || []), ...(lanes.merging || [])].filter(n => n.trend === "rising" || n.lane === "sprout").slice(0, 3);
+  const cooling = lanes.cooling || [];
+  const rows = [
+    main ? { label: "主线仍是", value: main.label, note: "之后相关评论会优先带入这条上下文" } : null,
+    rising.length ? { label: "最近升温", value: rising.map(n => n.label).join("、"), note: "后续会重点观察是否继续出现" } : null,
+    cooling.length ? { label: "开始降温", value: cooling.map(n => n.label).join("、"), note: "降低解释优先级，但保留为背景" } : null,
+  ].filter(Boolean);
+  if (!rows.length) return `<h3>${escapeHtml(observation || "")}</h3>`;
+  return `
+    <div class="kb-nb-thought-summary">
+      ${rows.map(item => `
+        <div>
+          <span>${escapeHtml(item.label)}</span>
+          <b>${escapeHtml(item.value || "")}</b>
+          <em>${escapeHtml(item.note || "")}</em>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function thoughtUsageText(node) {
+  return {
+    mainline: "之后相关评论会优先带上这条主线，避免把问题当成孤立提问。",
+    merging: "会把它和主线放在一起理解，帮助判断你为什么问这件事。",
+    branch: "作为背景线索保留；相关问题出现时再进入上下文。",
+    sprout: "先重点观察后续是否继续出现，不马上写死成长期兴趣。",
+    occasional: "先不放大解释；除非你继续追问，否则只当作一次技术/信息补全。",
+    cooling: "降低优先级；必要时作为历史背景，不主动抢占解释方向。",
+  }[node?.lane] || "作为一条待验证线索，后续根据你的行为继续校准。";
+}
+
+function thoughtCertaintyText(node) {
+  const confidence = node?.confidence || "低";
+  const intent = node?.intent_strength || "低";
+  if (confidence === "高" && intent === "高") return "证据和行动信号都比较强。";
+  if (confidence === "高") return "证据不少，但近期行动信号需要继续观察。";
+  if (intent === "高") return "行动信号强，但证据还少。";
+  return "证据还少，先不做强判断。";
+}
+
+function renderThoughtMapRow(node, activeId) {
+  const active = node.id === activeId ? " active" : "";
+  return `
+    <button class="kb-nb-thought-row ${escapeHtml(node.lane || "")}${active}" data-thought-id="${escapeHtml(node.id)}" type="button">
+      <span class="kb-nb-thought-row-title">${escapeHtml(node.label || "")}</span>
+      <span class="kb-nb-thought-row-spark">${sparklineSvg(node.sparkline || [])}</span>
+      <span class="kb-nb-thought-row-state">${laneLabel(node.lane)} · ${trendText(node.trend)}</span>
+      <span class="kb-nb-thought-row-use">${escapeHtml(thoughtUsageText(node))}</span>
+      <span class="kb-nb-thought-row-count">${node.evidence_count || 0}</span>
+    </button>
+  `;
+}
+
+function renderThoughtTrendList(nodes, activeId) {
+  const items = nodes || [];
+  return `
+    <div class="kb-nb-thought-table">
+      <div class="kb-nb-thought-table-head">
+        <span>线索</span>
+        <span>趋势</span>
+        <span>状态</span>
+        <span>之后回复会怎么用</span>
+        <span>证据</span>
+      </div>
+      ${items.length ? items.map(n => renderThoughtMapRow(n, activeId)).join("") : `<div class="kb-nb-empty">暂时没有足够证据。</div>`}
+    </div>
+  `;
+}
+
 function renderThoughtNode(node) {
   const refs = refsHtml(node.evidence_comment_ids || []);
   const evidence = (node.evidence || []).slice(0, 3).map(e => {
@@ -961,11 +1039,19 @@ function renderThoughtNode(node) {
         <div class="kb-nb-thought-node-kicker">${laneLabel(node.lane)} · ${trendText(node.trend)}</div>
         <h3>${escapeHtml(node.label || "")}</h3>
         <p>${escapeHtml(node.read || "")}</p>
-        <div class="kb-nb-thought-pills">${thoughtScorePills(node)}</div>
-        <div class="kb-nb-thought-meta">
-          ${node.evidence_count || 0} 条证据 · ${node.distinct_day_count || 0} 天出现 · 最近 7 天 ${node.recent_count || 0} 条 · 明确行动 ${node.action_count || 0} 次 · 跨度 ${node.span_days || 0} 天 ${refs}
+        <div class="kb-nb-thought-use">
+          <b>之后回复会怎么用</b>
+          <span>${escapeHtml(thoughtUsageText(node))}</span>
         </div>
-        ${node.possible_misread ? `<div class="kb-nb-thought-caveat">${escapeHtml(node.possible_misread)}</div>` : ""}
+        <div class="kb-nb-thought-meta">
+          ${node.evidence_count || 0} 条证据 · ${node.distinct_day_count || 0} 天出现 · 最近 7 天 ${node.recent_count || 0} 条 ${refs}
+        </div>
+        <details class="kb-nb-thought-basis">
+          <summary>判断依据</summary>
+          <div class="kb-nb-thought-pills">${thoughtScorePills(node)}</div>
+          <p>${escapeHtml(thoughtCertaintyText(node))}</p>
+          ${node.possible_misread ? `<p>${escapeHtml(node.possible_misread)}</p>` : ""}
+        </details>
       </div>
       <div class="kb-nb-thought-side">
         ${sparklineSvg(node.sparkline || [])}
@@ -975,49 +1061,67 @@ function renderThoughtNode(node) {
   `;
 }
 
-function renderThoughtLane(title, subtitle, nodes) {
-  const items = nodes || [];
-  return `
-    <section class="kb-nb-thought-lane">
-      <div class="kb-nb-thought-lane-head">
-        <h3>${escapeHtml(title)}</h3>
-        <span>${items.length}</span>
+function renderThoughtFocus(node) {
+  const box = $("kb-nb-thought-focus");
+  if (!box) return;
+  if (!node) {
+    box.innerHTML = `<div class="kb-nb-empty">选择一条线索查看详情。</div>`;
+    return;
+  }
+  box.innerHTML = `
+    <div class="kb-nb-thought-focus-head">
+      <div>
+        <span class="kb-nb-page-mono">当前展开 · ${laneLabel(node.lane)} · ${trendText(node.trend)}</span>
+        <h3>${escapeHtml(node.label || "")}</h3>
       </div>
-      <p>${escapeHtml(subtitle)}</p>
-      ${items.length ? items.map(renderThoughtNode).join("") : `<div class="kb-nb-empty">暂时没有足够证据。</div>`}
-    </section>
+      <div class="kb-nb-thought-focus-spark">${sparklineSvg(node.sparkline || [])}</div>
+    </div>
+    ${renderThoughtNode(node)}
   `;
+  bindCrefAnchors(box);
+}
+
+function bindThoughtMapNodes(nodes) {
+  document.querySelectorAll(".kb-nb-thought-row").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.thoughtId;
+      const node = nodes.find(n => n.id === id);
+      document.querySelectorAll(".kb-nb-thought-row").forEach(el => {
+        el.classList.toggle("active", el.dataset.thoughtId === id);
+      });
+      renderThoughtFocus(node);
+    });
+  });
 }
 
 function renderThoughtMap(data) {
   const box = $("kb-nb-thought-map");
   const lanes = data.lanes || {};
+  const nodes = flattenThoughtNodes(lanes);
+  const active = (lanes.sprout || [])[0] || (lanes.mainline || [])[0] || nodes[0];
+  _lastThoughtMapData = data;
   $("kb-nb-count-thought-map").textContent = data.stats?.node_count || 0;
   box.innerHTML = `
     <div class="kb-nb-thought-hero">
       <div>
         <div class="kb-nb-page-mono">过去 ${data.window_days || 42} 天 · 本地批注证据</div>
-        <h3>${escapeHtml(data.observation || "")}</h3>
-        <p>${escapeHtml(data.note || "")}</p>
-      </div>
-      <div class="kb-nb-thought-stats">
-        <div><b>${data.stats?.mainline_count || 0}</b><span>主线</span></div>
-        <div><b>${data.stats?.branch_count || 0}</b><span>旁支</span></div>
-        <div><b>${data.stats?.sprout_count || 0}</b><span>新近</span></div>
-        <div><b>${data.stats?.occasional_count || 0}</b><span>偶发</span></div>
-        <div><b>${data.stats?.cooling_count || 0}</b><span>降温</span></div>
+        ${renderThoughtHeroSummary(lanes, data.observation)}
+        <p>Agent 会用这些变化判断：哪些问题该带入长期主线，哪些只是先观察，哪些不该过度解释。</p>
       </div>
     </div>
-    <div class="kb-nb-thought-lanes">
-      ${renderThoughtLane("主线", "持续跨周出现，并且仍在影响你当前判断的线索。", lanes.mainline)}
-      ${renderThoughtLane("正在合流", "原本像旁支，最近开始解释或强化主线的问题。", lanes.merging)}
-      ${renderThoughtLane("旁支", "独立存在、有证据，但还没有变成主线工作容器。", lanes.branch)}
-      ${renderThoughtLane("新近捕捉", "最近被本系统捕捉到；可能是新兴趣，也可能是长期兴趣第一次留下证据。", lanes.sprout)}
-      ${renderThoughtLane("偶发好奇", "有证据，但目前更像顺手理解或单次追问，不应该过早定性。", lanes.occasional)}
-      ${renderThoughtLane("降温", "曾经出现过，现在暂时退出近场注意力。", lanes.cooling)}
+    <div class="kb-nb-thought-ai-note">
+      <b>对后续回复的影响</b>
+      <span>主线更容易进入上下文；新近线索会被继续观察；待观察线索不会被过度解释。</span>
     </div>
+    <div class="kb-nb-thought-section-head">
+      <span class="kb-nb-page-mono">主题热度</span>
+      <p>先看哪些升温、降温、待观察，再点一条线索看证据。</p>
+    </div>
+    ${renderThoughtTrendList(nodes, active?.id)}
+    <div id="kb-nb-thought-focus" class="kb-nb-thought-focus"></div>
   `;
-  bindCrefAnchors(box);
+  bindThoughtMapNodes(nodes);
+  renderThoughtFocus(active);
 }
 
 async function requestThinking(reason) {
