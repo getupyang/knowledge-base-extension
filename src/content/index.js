@@ -1,4 +1,4 @@
-const KB_CONTENT_VERSION = "0.3.1-ai-unread-notice";
+const KB_CONTENT_VERSION = "0.3.2-regenerate-ai-action";
 console.info(`[KB] content script loaded: ${KB_CONTENT_VERSION}`);
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -964,6 +964,16 @@ const commentSystem = (() => {
         cursor: pointer; padding: 0; font-family: inherit;
       }
       .kb-reply-btn:hover { color: var(--kb-terra); }
+      .kb-regenerate-btn {
+        border: 1px solid var(--kb-line);
+        border-radius: 3px;
+        padding: 5px 10px;
+        background: var(--kb-paper);
+      }
+      .kb-regenerate-btn:hover {
+        border-color: var(--kb-terra);
+        background: var(--kb-paper-2);
+      }
       .kb-ai-btn {
         background: var(--kb-ink); color: var(--kb-paper);
         border: none; border-radius: 3px;
@@ -1499,9 +1509,39 @@ const commentSystem = (() => {
         ${debugHtml}
       </div>`;
     }).join("");
-    const isFailedAIReply = (r) => r.isAI && /^AI 回复失败/.test(r.text || "");
-    const hasSuccessfulAI = c.replies.some(r => r.isAI && !isFailedAIReply(r));
-    const hasFailedAIReply = c.replies.some(isFailedAIReply);
+    const parseDebugMeta = (r) => {
+      if (!r || !r.debugMeta) return {};
+      if (typeof r.debugMeta !== "string") return r.debugMeta || {};
+      try { return JSON.parse(r.debugMeta) || {}; } catch { return {}; }
+    };
+    const isFailedAIReply = (r) => {
+      if (!r?.isAI) return false;
+      const dm = parseDebugMeta(r);
+      if (dm.status === "error" || dm.status === "failed" || dm.error) return true;
+      return /^(AI 回复失败|Agent 执行出错)/.test(r.text || "");
+    };
+    const aiReplies = c.replies.filter(r => r.isAI);
+    const latestAIReply = aiReplies[aiReplies.length - 1];
+    const hasAnyAI = Boolean(c.agentCommentId) || aiReplies.length > 0;
+    const latestAIReplyFailed = latestAIReply ? isFailedAIReply(latestAIReply) : false;
+    let actionHtml = "";
+    if (_askAIRunning.has(c.id)) {
+      actionHtml = `<span style="color:var(--kb-blue);font-size:11px;font-family:'JetBrains Mono',monospace;letter-spacing:0.04em;">AI 思考中…</span>`;
+    } else if (_aiUnreadCommentIds.has(c.id)) {
+      actionHtml = `
+        <button class="kb-ai-ready-btn" data-jump-ai="${c.id}">AI 已回复 · 查看</button>
+        ${hasAnyAI ? `<button class="kb-reply-btn kb-regenerate-btn" data-ask-ai="${c.id}">重新生成</button>` : ""}
+      `;
+    } else if (!hasAnyAI) {
+      actionHtml = `<button class="kb-ai-btn" data-ask-ai="${c.id}">请 AI 回复</button>`;
+    } else if (latestAIReplyFailed) {
+      actionHtml = `<button class="kb-ai-btn" data-ask-ai="${c.id}">重新生成</button>`;
+    } else {
+      actionHtml = `
+        <button class="kb-reply-btn" data-open-reply="${c.id}">继续追问</button>
+        <button class="kb-reply-btn kb-regenerate-btn" data-ask-ai="${c.id}">重新生成</button>
+      `;
+    }
     return `
       <div class="kb-cmt-card ${_aiUnreadCommentIds.has(c.id) ? "kb-ai-unread" : ""}" id="kb-cmt-${c.id}">
         ${c.excerpt ? `<div class="kb-cmt-quote">"${escapeHtml(c.excerpt.slice(0,100))}${c.excerpt.length>100?"…":""}"</div>` : ""}
@@ -1512,14 +1552,7 @@ const commentSystem = (() => {
         </div>
         <button class="kb-cmt-expand kb-expand-hidden" id="kb-cmt-expand-${c.id}" data-expand="${c.id}">展开全部 ↓</button>
         <div style="display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap;">
-          ${_askAIRunning.has(c.id)
-            ? `<span style="color:var(--kb-blue);font-size:11px;font-family:'JetBrains Mono',monospace;letter-spacing:0.04em;">AI 思考中…</span>`
-            : _aiUnreadCommentIds.has(c.id)
-              ? `<button class="kb-ai-ready-btn" data-jump-ai="${c.id}">AI 已回复 · 查看</button>`
-            : !hasSuccessfulAI
-              ? `<button class="kb-ai-btn" data-ask-ai="${c.id}">${hasFailedAIReply ? "重新召唤 AI" : "请 AI 回复"}</button>`
-              : `<button class="kb-reply-btn" data-open-reply="${c.id}">继续追问</button>`
-          }
+          ${actionHtml}
         </div>
         <div class="kb-inline-reply kb-expand-hidden" id="kb-inline-reply-${c.id}">
           <textarea placeholder="继续追问…（Cmd+Enter 发送）" id="kb-reply-ta-${c.id}"></textarea>
