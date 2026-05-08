@@ -183,6 +183,7 @@ function switchTab(tab) {
   if (location.hash !== "#" + tab) location.hash = tab;
   // 懒加载具体页
   if (tab === "chat") loadChat();
+  if (tab === "thought-map") loadThoughtMap();
   if (tab === "thinking") loadThinking();
   if (tab === "diary") loadDiary();
 }
@@ -278,6 +279,7 @@ async function loadProfile() {
   }
   // 然后看有没有 curated 缓存
   loadProfileCurated();
+  loadMemoryMap();
 }
 
 // Curated 缓存：localStorage，24h
@@ -718,6 +720,25 @@ async function showCrefHoverFor(anchor) {
   `;
 }
 
+function bindCrefAnchors(root) {
+  if (!root) return;
+  root.querySelectorAll(".kb-nb-cref").forEach(a => {
+    a.addEventListener("mouseenter", () => showCrefHoverFor(a));
+    a.addEventListener("mouseleave", () => hideCrefHover());
+    a.addEventListener("click", async (e) => {
+      e.preventDefault();
+      const isPageRef = !!a.dataset.pid;
+      const id = parseInt(isPageRef ? a.dataset.pid : a.dataset.cid, 10);
+      const item = isPageRef ? await fetchPageCache(id) : await fetchComment(id);
+      if (item && item.page_url) {
+        window.open(item.page_url, "_blank", "noopener");
+      } else {
+        toast((isPageRef ? "p#" : "c#") + id + " 没找到 / 没有来源页");
+      }
+    });
+  });
+}
+
 function renderThinking(data) {
   const box = $("kb-nb-thinking-active");
   // 优先展示 running 状态
@@ -751,22 +772,252 @@ function renderThinking(data) {
   // 把正文里的 [c#NNN] 也变成可点击锚点
   const mdBox = document.getElementById("kb-nb-thinking-md");
   if (mdBox) activateCommentRefs(mdBox);
-  // 绑定 hover/click
-  box.querySelectorAll(".kb-nb-cref").forEach(a => {
-    a.addEventListener("mouseenter", () => showCrefHoverFor(a));
-    a.addEventListener("mouseleave", () => hideCrefHover());
-    a.addEventListener("click", async (e) => {
-      e.preventDefault();
-      const isPageRef = !!a.dataset.pid;
-      const id = parseInt(isPageRef ? a.dataset.pid : a.dataset.cid, 10);
-      const item = isPageRef ? await fetchPageCache(id) : await fetchComment(id);
-      if (item && item.page_url) {
-        window.open(item.page_url, "_blank", "noopener");
-      } else {
-        toast((isPageRef ? "p#" : "c#") + id + " 没找到 / 没有来源页");
-      }
+  bindCrefAnchors(box);
+}
+
+// ─── 4.1 Project / Question / Theme Map V0 ───
+let _memoryMapPromise = null;
+
+async function loadMemoryMap(force) {
+  if (!_memoryMapPromise || force) {
+    _memoryMapPromise = api("/notebook/memory-map");
+  }
+  try {
+    const data = await _memoryMapPromise;
+    renderMemoryMap(data);
+  } catch (e) {
+    ["kb-nb-project-map", "kb-nb-question-map", "kb-nb-theme-map"].forEach(id => {
+      const el = $(id);
+      if (el) el.innerHTML = `<div class="kb-nb-empty">读取失败</div>`;
     });
-  });
+  }
+}
+
+function refsHtml(ids) {
+  const arr = Array.isArray(ids) ? ids : [];
+  if (!arr.length) return "";
+  return `<span class="kb-nb-map-refs">${arr.slice(0, 5).map(id =>
+    `<a href="#c${id}" class="kb-nb-cref" data-cid="${id}">c#${id}</a>`
+  ).join("")}</span>`;
+}
+
+function renderMemoryMap(data) {
+  const projects = data.projects || [];
+  const questions = data.active_questions || [];
+  const themes = data.themes || [];
+  const profileCount = $("kb-nb-count-profile");
+  if (profileCount) profileCount.textContent = projects.length || 0;
+
+  const projectBox = $("kb-nb-project-map");
+  if (projectBox) {
+    if (!projects.length) {
+      projectBox.innerHTML = `<div class="kb-nb-empty">还没有足够证据自动长出当前项目。</div>`;
+    } else {
+      projectBox.innerHTML = projects.slice(0, 5).map(p => {
+        const q = (p.questions || []).slice(0, 3);
+        const summaries = (p.summaries || []).slice(0, 2);
+        return `
+          <article class="kb-nb-project-card">
+            <div class="kb-nb-project-card-head">
+              <h3>${escapeHtml(p.name || "未命名项目候选")}</h3>
+              <span>${escapeHtml(p.status || "active")} · ${Math.round((p.confidence || 0) * 100)}%</span>
+            </div>
+            <div class="kb-nb-project-meta">
+              ${fmtTimeAgo(p.last_seen_at)} · 证据 ${p.evidence_count || 0} 条 ${refsHtml(p.evidence_comment_ids || [])}
+            </div>
+            ${summaries.length ? `<div class="kb-nb-project-summary">${summaries.map(s => `<p>${escapeHtml(s)}</p>`).join("")}</div>` : ""}
+            ${q.length ? `<div class="kb-nb-project-questions">
+              ${q.map(item => `<div>· ${escapeHtml(item.question || "")}</div>`).join("")}
+            </div>` : ""}
+            ${(p.themes || []).length ? `<div class="kb-nb-map-tags">${p.themes.slice(0, 5).map(t => `<span>${escapeHtml(t)}</span>`).join("")}</div>` : ""}
+            <div class="kb-nb-project-note">${escapeHtml(p.note || "")}</div>
+          </article>
+        `;
+      }).join("");
+      bindCrefAnchors(projectBox);
+    }
+  }
+
+  const questionBox = $("kb-nb-question-map");
+  if (questionBox) {
+    questionBox.innerHTML = questions.length ? questions.slice(0, 8).map(q => `
+      <div class="kb-nb-map-item">
+        <div class="kb-nb-map-item-title">${escapeHtml(q.question || "")}</div>
+        <div class="kb-nb-map-item-meta">${escapeHtml(q.scope || "unknown")} · ${Math.round((q.signal_strength || 0) * 100)}% · ${fmtTimeAgo(q.created_at)} ${refsHtml(q.evidence_comment_ids || [])}</div>
+      </div>
+    `).join("") : `<div class="kb-nb-empty">暂时没有活跃问题。</div>`;
+    bindCrefAnchors(questionBox);
+  }
+
+  const themeBox = $("kb-nb-theme-map");
+  if (themeBox) {
+    themeBox.innerHTML = themes.length ? themes.slice(0, 8).map(t => `
+      <div class="kb-nb-map-item">
+        <div class="kb-nb-map-item-title">${escapeHtml(t.theme || "")}</div>
+        <div class="kb-nb-map-item-meta">${escapeHtml(t.trend || "active")} · intensity ${t.intensity || 0} · 证据 ${t.evidence_count || 0} · ${fmtTimeAgo(t.last_seen_at)} ${refsHtml(t.representative_comment_ids || [])}</div>
+      </div>
+    `).join("") : `<div class="kb-nb-empty">暂时没有主题热度。</div>`;
+    bindCrefAnchors(themeBox);
+  }
+}
+
+// ─── 4.2 思考地图：主线 / 旁支 / 新芽 / 降温 ───
+let _thoughtMapPromise = null;
+
+async function loadThoughtMap(force) {
+  if (!_thoughtMapPromise || force) {
+    _thoughtMapPromise = api("/notebook/thought-map?days=42");
+  }
+  const box = $("kb-nb-thought-map");
+  if (!box) return;
+  try {
+    const data = await _thoughtMapPromise;
+    renderThoughtMap(data);
+  } catch (e) {
+    box.innerHTML = `<div class="kb-nb-empty">读取失败</div>`;
+  }
+}
+
+function sparklineSvg(values) {
+  const nums = Array.isArray(values) && values.length ? values.map(v => Number(v) || 0) : [0,0,0,0,0,0];
+  const max = Math.max(1, ...nums);
+  const pts = nums.map((v, i) => {
+    const x = 8 + i * (92 / Math.max(1, nums.length - 1));
+    const y = 34 - (v / max) * 26;
+    return `${x},${y}`;
+  }).join(" ");
+  const dots = nums.map((v, i) => {
+    const x = 8 + i * (92 / Math.max(1, nums.length - 1));
+    const y = 34 - (v / max) * 26;
+    return `<circle cx="${x}" cy="${y}" r="1.8"></circle>`;
+  }).join("");
+  return `<svg class="kb-nb-thought-spark" viewBox="0 0 108 40" aria-hidden="true">
+    <polyline points="${pts}"></polyline>${dots}
+  </svg>`;
+}
+
+function laneLabel(lane) {
+  return {
+    mainline: "主线",
+    merging: "合流",
+    branch: "旁支",
+    sprout: "新芽",
+    occasional: "偶发",
+    cooling: "降温",
+  }[lane] || lane;
+}
+
+function trendText(trend) {
+  return {
+    rising: "升温",
+    new: "新出现",
+    cooling: "降温",
+    steady: "稳定",
+  }[trend] || trend;
+}
+
+function levelClass(level) {
+  if (level === "高") return "high";
+  if (level === "中") return "mid";
+  return "low";
+}
+
+function thoughtScorePills(node) {
+  const items = [
+    ["意图", node.intent_strength || "低"],
+    ["置信", node.confidence || "低"],
+    ["持续", node.persistence || "低"],
+    ["中心", node.centrality || "低"],
+  ];
+  return items.map(([label, value]) => `
+    <span class="kb-nb-thought-pill ${levelClass(value)}">
+      <b>${escapeHtml(label)}</b>${escapeHtml(value)}
+    </span>
+  `).join("");
+}
+
+function renderThoughtNode(node) {
+  const refs = refsHtml(node.evidence_comment_ids || []);
+  const evidence = (node.evidence || []).slice(0, 3).map(e => {
+    const raw = (e.raw_comment || e.comment || "").replace(/\s+/g, " ").trim();
+    const terms = (e.matched_terms || []).slice(0, 3);
+    const signals = (e.behavior?.labels || []).slice(0, 3);
+    return `
+    <div class="kb-nb-thought-evidence">
+      <span>${escapeHtml(fmtDateShort(e.created_at))}</span>
+      <b>${escapeHtml((e.page_title || "未命名").slice(0, 44))}</b>
+      <p>${escapeHtml(e.interpretation || "")}</p>
+      <div class="kb-nb-thought-evidence-tags">
+        ${terms.map(t => `<em>${escapeHtml(t)}</em>`).join("")}
+        ${signals.map(t => `<em>${escapeHtml(t)}</em>`).join("")}
+      </div>
+      ${raw ? `<details><summary>原始行为</summary><div>${escapeHtml(raw.slice(0, 260))}${raw.length > 260 ? "…" : ""}</div></details>` : ""}
+    </div>
+  `;
+  }).join("");
+  return `
+    <article class="kb-nb-thought-node ${escapeHtml(node.lane || "")}">
+      <div class="kb-nb-thought-node-main">
+        <div class="kb-nb-thought-node-kicker">${laneLabel(node.lane)} · ${trendText(node.trend)}</div>
+        <h3>${escapeHtml(node.label || "")}</h3>
+        <p>${escapeHtml(node.read || "")}</p>
+        <div class="kb-nb-thought-pills">${thoughtScorePills(node)}</div>
+        <div class="kb-nb-thought-meta">
+          ${node.evidence_count || 0} 条证据 · ${node.distinct_day_count || 0} 天出现 · 最近 7 天 ${node.recent_count || 0} 条 · 明确行动 ${node.action_count || 0} 次 · 跨度 ${node.span_days || 0} 天 ${refs}
+        </div>
+        ${node.possible_misread ? `<div class="kb-nb-thought-caveat">${escapeHtml(node.possible_misread)}</div>` : ""}
+      </div>
+      <div class="kb-nb-thought-side">
+        ${sparklineSvg(node.sparkline || [])}
+      </div>
+      ${evidence ? `<div class="kb-nb-thought-evidence-list">${evidence}</div>` : ""}
+    </article>
+  `;
+}
+
+function renderThoughtLane(title, subtitle, nodes) {
+  const items = nodes || [];
+  return `
+    <section class="kb-nb-thought-lane">
+      <div class="kb-nb-thought-lane-head">
+        <h3>${escapeHtml(title)}</h3>
+        <span>${items.length}</span>
+      </div>
+      <p>${escapeHtml(subtitle)}</p>
+      ${items.length ? items.map(renderThoughtNode).join("") : `<div class="kb-nb-empty">暂时没有足够证据。</div>`}
+    </section>
+  `;
+}
+
+function renderThoughtMap(data) {
+  const box = $("kb-nb-thought-map");
+  const lanes = data.lanes || {};
+  $("kb-nb-count-thought-map").textContent = data.stats?.node_count || 0;
+  box.innerHTML = `
+    <div class="kb-nb-thought-hero">
+      <div>
+        <div class="kb-nb-page-mono">过去 ${data.window_days || 42} 天 · 本地批注证据</div>
+        <h3>${escapeHtml(data.observation || "")}</h3>
+        <p>${escapeHtml(data.note || "")}</p>
+      </div>
+      <div class="kb-nb-thought-stats">
+        <div><b>${data.stats?.mainline_count || 0}</b><span>主线</span></div>
+        <div><b>${data.stats?.branch_count || 0}</b><span>旁支</span></div>
+        <div><b>${data.stats?.sprout_count || 0}</b><span>新近</span></div>
+        <div><b>${data.stats?.occasional_count || 0}</b><span>偶发</span></div>
+        <div><b>${data.stats?.cooling_count || 0}</b><span>降温</span></div>
+      </div>
+    </div>
+    <div class="kb-nb-thought-lanes">
+      ${renderThoughtLane("主线", "持续跨周出现，并且仍在影响你当前判断的线索。", lanes.mainline)}
+      ${renderThoughtLane("正在合流", "原本像旁支，最近开始解释或强化主线的问题。", lanes.merging)}
+      ${renderThoughtLane("旁支", "独立存在、有证据，但还没有变成主线工作容器。", lanes.branch)}
+      ${renderThoughtLane("新近捕捉", "最近被本系统捕捉到；可能是新兴趣，也可能是长期兴趣第一次留下证据。", lanes.sprout)}
+      ${renderThoughtLane("偶发好奇", "有证据，但目前更像顺手理解或单次追问，不应该过早定性。", lanes.occasional)}
+      ${renderThoughtLane("降温", "曾经出现过，现在暂时退出近场注意力。", lanes.cooling)}
+    </div>
+  `;
+  bindCrefAnchors(box);
 }
 
 async function requestThinking(reason) {
@@ -1031,7 +1282,7 @@ document.querySelectorAll(".kb-nb-page-export, #kb-nb-export-btn").forEach(btn =
 function init() {
   // 默认 tab
   const initial = (location.hash || "#profile-project").replace("#", "");
-  const validTabs = ["chat", "profile-project", "rules", "thinking", "diary"];
+  const validTabs = ["chat", "profile-project", "thought-map", "rules", "thinking", "diary"];
   switchTab(validTabs.includes(initial) ? initial : "profile-project");
 
   loadOverview();
@@ -1043,6 +1294,9 @@ function init() {
   }).catch(() => {});
   api("/notebook/chat?limit=1").then(d => {
     $("kb-nb-count-chat").textContent = d.items.length ? "…" : 0;
+  }).catch(() => {});
+  api("/notebook/thought-map?days=42").then(d => {
+    $("kb-nb-count-thought-map").textContent = d.stats?.node_count || 0;
   }).catch(() => {});
   loadDiary();
 }

@@ -14,7 +14,7 @@ import shutil
 import threading
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urlparse
 from typing import Optional
 from fastapi import FastAPI, HTTPException
@@ -725,6 +725,29 @@ def _json(obj) -> str:
     return json.dumps(obj, ensure_ascii=False)
 
 
+def _json_obj(raw) -> dict:
+    try:
+        obj = json.loads(raw or "{}") if isinstance(raw, str) else (raw or {})
+        return obj if isinstance(obj, dict) else {}
+    except Exception:
+        return {}
+
+
+def _json_list(raw) -> list:
+    try:
+        obj = json.loads(raw or "[]") if isinstance(raw, str) else (raw or [])
+        return obj if isinstance(obj, list) else []
+    except Exception:
+        return []
+
+
+def _float_or(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
 def _record_intake_local_saved(comment_id: int):
     """Create/refresh the per-comment intake ledger row."""
     now = _now_iso()
@@ -976,6 +999,13 @@ def _host(url: str) -> str:
 _CJK_STOP_TOKENS = {
     "我", "我们", "这个", "那个", "之前", "以前", "现在", "什么", "怎么", "如何",
     "是不是", "有没有", "一个", "一下", "可以", "觉得", "帮我", "记忆", "批注",
+    "ai", "产品", "项目", "用户", "系统", "研究", "影响", "调研", "问题", "方法",
+    "后续", "实际", "真实", "当前", "应用", "评测", "哪些", "最近", "正在",
+    "升温", "主题",
+}
+_CJK_STOP_SUBSTRINGS = {
+    "哪些", "最近", "在做", "项目", "问题", "升温", "主题", "当前", "什么",
+    "怎么", "如何", "是不是", "有没有",
 }
 
 
@@ -988,13 +1018,15 @@ def _keyword_tokens(text: str, max_tokens: int = 18) -> list:
     for run in re.findall(r"[\u4e00-\u9fff]{2,}", text):
         if run in _CJK_STOP_TOKENS:
             continue
+        if "哪些" in run:
+            continue
         if 2 <= len(run) <= 5:
             tokens.append(run)
         else:
             for size in (2, 3):
                 for i in range(0, max(0, len(run) - size + 1)):
                     part = run[i:i + size]
-                    if part not in _CJK_STOP_TOKENS:
+                    if part not in _CJK_STOP_TOKENS and not any(s in part for s in _CJK_STOP_SUBSTRINGS):
                         tokens.append(part)
     out = []
     seen = set()
@@ -1067,6 +1099,748 @@ def _page_ref_line(row: dict) -> str:
         line += f"\n  来源：{source[:160]}"
     line += "\n  证据等级：exposure/seen，只代表系统有证据用户接触过该页面，不代表用户认同或记住。"
     return line
+
+
+def _normalize_project_label(text: str) -> str:
+    text = (text or "").strip()
+    if not text:
+        return "未命名项目候选"
+    text = re.sub(r"\s+", " ", text)
+    return text[:36]
+
+
+def _infer_project_label(signal: dict, text: str, fallback: str = "") -> str:
+    for key in ("project", "project_name", "name", "area", "workstream"):
+        value = (signal.get(key) or "").strip()
+        if value:
+            return _normalize_project_label(value)
+    haystack = f"{text} {fallback}".lower()
+    patterns = [
+        (r"mem-ai|openmemory|mem0|memory|记忆|benchmark|评测|context loader|growth pipeline|批注|annotation|readwise|glasp|hypothesis|gdpval|cranfield|netflix recommender", "mem-ai / 记忆产品与评测"),
+        (r"李飞飞|street view|visual census|timnit|时空|lbs|卫星|房地产|港口|集装箱|社会影响", "AI 社会影响 / 时空数据研究"),
+        (r"mtp|mla|draft model|speculative decoding|推理加速", "AI 推理架构研究"),
+        (r"威尼斯|建筑双年展|how will we live together|菜市场美术馆", "建筑与艺术主题研究"),
+    ]
+    for pattern, label in patterns:
+        if re.search(pattern, haystack):
+            return label
+    return _normalize_project_label(fallback or text)
+
+
+THOUGHT_TOPIC_DEFINITIONS = [
+    {
+        "id": "memory-product-mainline",
+        "label": "mem-ai / 记忆产品主线",
+        "role": "mainline",
+        "keywords": [
+            "mem-ai", "记忆", "memory", "批注", "评论区", "context loader", "growth pipeline",
+            "notebook", "问记忆", "当前项目", "active questions", "theme", "project",
+            "Notion", "SQLite", "Mem0", "OpenMemory", "Readwise", "Glasp", "Hypothesis",
+        ],
+        "read": "持续主线：围绕评论区交互、记忆生长、上下文装载和产品体验在推进。",
+    },
+    {
+        "id": "evaluation-methodology",
+        "label": "AI 记忆评测 / 产品评测方法论",
+        "role": "merge",
+        "keywords": [
+            "benchmark", "评测", "eval", "gold", "golden", "case", "Needs Met",
+            "GDPval", "Cranfield", "Netflix", "推荐系统", "replay", "rubric",
+            "第一视角", "第三视角",
+        ],
+        "read": "正在合流：评测不再是旁支研究，而是在变成 mem-ai 如何证明自己有用的核心问题。",
+    },
+    {
+        "id": "adoption-distribution",
+        "label": "真实用户从哪里来，为什么会持续用",
+        "role": "branch",
+        "keywords": [
+            "用户采用", "用户反馈", "用户行为", "采用", "门槛", "摩擦", "频次",
+            "producthunt", "hackernews", "发帖", "社交媒体", "分发", "GTM", "aha",
+        ],
+        "read": "产品问题：你在反复确认谁会真的用、有多高门槛、用户从哪里来，而不是只做技术正确的系统。",
+        "possible_misread": "它既可能是一条主题线，也可能是一组活跃问题；需要继续看它是否反复驱动下一步行动。",
+    },
+    {
+        "id": "agent-workflow",
+        "label": "Agent 工作流 / 工程化同事",
+        "role": "branch",
+        "keywords": [
+            "Claude Code", "Codex", "MCP", "worker", "context_pack",
+            "Hermes", "Honcho", "编排", "回归", "自测", "工具路由", "模式选择",
+            "AI 同事", "工程化同事", "agent 编排",
+        ],
+        "read": "背景能力线：它仍会影响 mem-ai 的工程判断，但最近不像主线那样被持续推进。",
+        "possible_misread": "如果后续又围绕 agent 编排、回归、自测连续提出任务，它应重新升温。",
+    },
+    {
+        "id": "social-impact-spatiotemporal",
+        "label": "AI 社会影响 / 时空数据研究",
+        "role": "sprout",
+        "keywords": [
+            "李飞飞", "Timnit", "Street View", "visual census", "时空", "LBS",
+            "卫星", "港口", "集装箱", "房地产", "失业率", "社会影响",
+        ],
+        "read": "新近捕捉：本系统最近第一次看到这条线索，不能判断它是新兴趣还是长期兴趣首次留下证据。",
+        "possible_misread": "产品内只能说“最近捕捉到”，不能凭场外信息说这是长期兴趣。",
+    },
+    {
+        "id": "ai-video-gtm",
+        "label": "AI 视频 / 产品发布表达",
+        "role": "sprout",
+        "keywords": [
+            "Velo", "Hera", "演示视频", "发布视频", "产品发布", "动态品牌", "GTM 视频",
+            "录屏讲解", "AI demo video",
+        ],
+        "read": "新芽：和产品传播、发布表达相关，暂时更像机会观察而不是主线项目。",
+    },
+    {
+        "id": "reasoning-architecture",
+        "label": "AI 推理架构 / 加速机制",
+        "role": "branch",
+        "keywords": [
+            "MTP", "MLA", "draft model", "speculative decoding", "推理加速",
+        ],
+        "read": "偶发技术理解：目前更像顺着材料补概念，不足以说明它已经成为稳定研究线。",
+        "possible_misread": "如果用户继续跨天追问 MTP/MLA、工程影响、论文或实现细节，这条线应升级。",
+    },
+    {
+        "id": "early-value-narrative",
+        "label": "第一天价值 / 创业方向探索",
+        "role": "archive",
+        "keywords": [
+            "第一天", "第1天", "AHA", "会议", "Granola", "飞轮",
+            "知识工作者", "非技术用户", "最小闭环",
+        ],
+        "read": "降温背景线：早期价值和方向探索仍是底层问题，但近期被 mem-ai 的记忆机制和评测问题接管。",
+        "possible_misread": "降温不是不重要，只是最近没有像前期那样直接占据近场注意力。",
+    },
+]
+
+
+def _parse_dt(value: str) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
+    except Exception:
+        return None
+
+
+def _matches_topic(text: str, keywords: list) -> bool:
+    lowered = (text or "").lower()
+    for keyword in keywords or []:
+        k = str(keyword).strip().lower()
+        if k and k in lowered:
+            return True
+    return False
+
+
+def _matched_topic_terms(text: str, keywords: list, limit: int = 5) -> list:
+    lowered = (text or "").lower()
+    out = []
+    for keyword in keywords or []:
+        k = str(keyword).strip()
+        if k and k.lower() in lowered and k not in out:
+            out.append(k)
+        if len(out) >= limit:
+            break
+    return out
+
+
+_THOUGHT_ACTION_MARKERS = [
+    ("我要试试", "明确试用意图", 1.0),
+    ("我正需要", "明确需求", 1.0),
+    ("正需要", "明确需求", 0.9),
+    ("开始执行", "推动执行", 0.9),
+    ("开始研究", "推动研究", 0.8),
+    ("详细调研", "要求深入调研", 0.8),
+    ("调研文档", "要求沉淀文档", 0.7),
+    ("以后", "形成工作方式", 0.65),
+    ("固定", "形成工作方式", 0.65),
+    ("请给我", "明确请求产出", 0.55),
+    ("展开", "要求展开", 0.5),
+    ("请对比", "要求比较", 0.45),
+    ("详细对比", "要求比较", 0.45),
+    ("路线", "要求路线判断", 0.45),
+]
+
+_THOUGHT_CURIOSITY_MARKERS = [
+    ("这是啥", "解释型提问"),
+    ("是什么", "解释型提问"),
+    ("没听懂", "解释型提问"),
+    ("有点没看懂", "解释型提问"),
+    ("好像", "不确定探索"),
+    ("顺带", "顺手提问"),
+]
+
+_THOUGHT_CORRECTION_MARKERS = [
+    ("不对", "纠正 AI"),
+    ("不是", "纠正 AI"),
+    ("没用", "纠正 AI"),
+    ("质量", "质量反馈"),
+    ("我的预期", "明确预期"),
+    ("应该", "修正方向"),
+]
+
+
+def _thought_behavior_signal(row: dict) -> dict:
+    comment = row.get("comment") or ""
+    score = 0.12
+    labels = []
+    action_hit = False
+    for marker, label, weight in _THOUGHT_ACTION_MARKERS:
+        if marker.lower() in comment.lower():
+            score += weight
+            labels.append(label)
+            action_hit = True
+    for marker, label in _THOUGHT_CORRECTION_MARKERS:
+        if marker in comment:
+            score += 0.22
+            labels.append(label)
+    curiosity_hit = False
+    for marker, label in _THOUGHT_CURIOSITY_MARKERS:
+        if marker.lower() in comment.lower():
+            score += 0.16
+            labels.append(label)
+            curiosity_hit = True
+    followups = comment.count("---追问---")
+    if followups:
+        score += min(0.75, followups * 0.28)
+        labels.append(f"{followups} 次追问")
+    question_marks = comment.count("？") + comment.count("?")
+    if question_marks and not action_hit:
+        score += min(0.22, question_marks * 0.08)
+        labels.append("提问")
+    if curiosity_hit and not action_hit and followups == 0:
+        score = min(score, 0.48)
+    labels = list(dict.fromkeys(labels))
+    return {
+        "score": round(min(1.0, score), 3),
+        "labels": labels[:4],
+        "action_hit": action_hit,
+        "curiosity_hit": curiosity_hit,
+        "followups": followups,
+    }
+
+
+def _score_level(score: float) -> str:
+    if score >= 0.67:
+        return "高"
+    if score >= 0.34:
+        return "中"
+    return "低"
+
+
+def _thought_card_interpretation(spec: dict, row: dict, terms: list, behavior: dict) -> str:
+    sid = spec.get("id")
+    title = row.get("page_title") or "这个页面"
+    selected = (row.get("selected_text") or "").replace("\n", " ")
+    comment = (row.get("comment") or "").replace("\n", " ")
+    term_text = "、".join(terms[:3]) if terms else "相关线索"
+    if sid == "ai-video-gtm":
+        if "我要试试" in comment or "正需要" in comment:
+            return f"这条不是普通阅读兴趣：你在看到 {term_text} 这类产品后写下明确试用/需求表达，说明它正在变成可行动的产品机会观察。"
+        if "前几天" in comment or "类似" in comment:
+            return f"这条显示你在做跨日报对比：你不是只问单个产品，而是在识别 {term_text} 这类 AI 视频/发布表达工具是否形成一组机会。"
+    if sid == "reasoning-architecture":
+        if behavior.get("curiosity_hit") and not behavior.get("action_hit") and behavior.get("followups", 0) == 0:
+            return f"这更像一次技术概念补全：你顺着材料问 {term_text} 是什么，目前还不足以证明它成为稳定研究线。"
+    if sid == "social-impact-spatiotemporal":
+        return "这条说明本系统最近捕捉到你对 AI、街景/时空数据与社会影响之间关系的兴趣；但仅凭产品内证据，不能判断它是新兴趣还是长期兴趣首次出现。"
+    if sid == "adoption-distribution":
+        return "这条的有效信号是你在追问真实用户反馈、使用门槛或分发质量，而不是只关心产品功能本身。"
+    if sid == "agent-workflow":
+        if "叽里呱啦" in comment or "只有标题" in comment:
+            return "这条的有效信号不是情绪表达，而是你要求 agent 从标题进入真实内容，不接受浅层摘要。"
+        return "这条显示你在校准 agent 的工作方式：希望它可执行、可回归、能用真实证据推进任务。"
+    if sid == "evaluation-methodology":
+        return "这条说明评测问题正在从资料阅读变成产品方法论：你关心指标如何定义、如何服务产品目标、后续是否真的被使用。"
+    if sid == "early-value-narrative":
+        return "这条属于早期方向探索的证据：你在追问第一天价值、aha moment 或创业方向是否成立。"
+    if behavior.get("labels"):
+        return f"这条被纳入是因为它同时命中了 {term_text}，并带有「{'、'.join(behavior['labels'])}」这类行为信号。"
+    return f"这条被纳入是因为页面/划线内容命中了 {term_text}，但行为强度需要更多后续证据确认。"
+
+
+def _thought_possible_misread(spec: dict, evidence_count: int, behavior_scores: list) -> str:
+    if spec.get("possible_misread"):
+        return spec["possible_misread"]
+    avg = sum(behavior_scores) / max(1, len(behavior_scores))
+    if evidence_count <= 2 and avg < 0.45:
+        return "证据还少，可能只是顺手提问，不能过早定性为稳定兴趣。"
+    return "这是系统基于本地批注的当前推断；如果用户确认、改名或合并，可信度会更高。"
+
+
+def _build_thought_map(conn: sqlite3.Connection, days: int = 42) -> dict:
+    """Build a user-facing thought map over multiple time scales.
+
+    This is a product sketch: deterministic, evidence-backed, and explicitly
+    not a complete user-interest profile.
+    """
+    conn.row_factory = sqlite3.Row
+    now = datetime.now()
+    window_start = now - timedelta(days=days)
+    rows = [dict(r) for r in conn.execute(
+        """SELECT id, created_at, page_url, page_title, selected_text, surrounding_text, comment
+           FROM comments
+           ORDER BY created_at DESC
+           LIMIT 800"""
+    ).fetchall()]
+    rows = [r for r in rows if (_parse_dt(r.get("created_at")) or now) >= window_start]
+    bucket_count = 6
+    bucket_days = max(1, days // bucket_count)
+    nodes = []
+    for spec in THOUGHT_TOPIC_DEFINITIONS:
+        evidence = []
+        buckets = [0] * bucket_count
+        behavior_scores = []
+        distinct_days = set()
+        for row in rows:
+            text = " ".join([
+                row.get("page_title") or "",
+                row.get("selected_text") or "",
+                row.get("surrounding_text") or "",
+                row.get("comment") or "",
+            ])
+            if not _matches_topic(text, spec["keywords"]):
+                continue
+            dt = _parse_dt(row.get("created_at")) or now
+            distinct_days.add(dt.date().isoformat())
+            age_days = max(0, (now - dt).days)
+            bucket_idx = bucket_count - 1 - min(bucket_count - 1, age_days // bucket_days)
+            buckets[bucket_idx] += 1
+            direct_text = " ".join([
+                row.get("page_title") or "",
+                row.get("selected_text") or "",
+                row.get("comment") or "",
+            ])
+            terms = _matched_topic_terms(direct_text, spec["keywords"])
+            behavior = _thought_behavior_signal(row)
+            behavior_scores.append(behavior["score"])
+            evidence.append({
+                "id": row.get("id"),
+                "created_at": row.get("created_at"),
+                "page_title": row.get("page_title") or "",
+                "page_url": row.get("page_url") or "",
+                "selected_text": (row.get("selected_text") or "")[:220],
+                "comment": (row.get("comment") or "")[:360],
+                "raw_comment": row.get("comment") or "",
+                "matched_terms": terms,
+                "behavior": behavior,
+                "interpretation": _thought_card_interpretation(spec, row, terms, behavior),
+            })
+        if not evidence:
+            continue
+        evidence.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+        recent = buckets[-1]
+        previous = buckets[-2] if len(buckets) >= 2 else 0
+        older = sum(buckets[:-2])
+        first_seen = min(e.get("created_at") or "" for e in evidence)
+        last_seen = max(e.get("created_at") or "" for e in evidence)
+        span_days = max(0, ((_parse_dt(last_seen) or now) - (_parse_dt(first_seen) or now)).days)
+        distinct_day_count = len(distinct_days)
+        recent_behavior = [e["behavior"]["score"] for e in evidence if (_parse_dt(e.get("created_at")) or now) >= now - timedelta(days=7)]
+        action_count = sum(1 for e in evidence if e["behavior"].get("action_hit"))
+        followup_count = sum(int(e["behavior"].get("followups") or 0) for e in evidence)
+        avg_behavior = sum(behavior_scores) / max(1, len(behavior_scores))
+        recent_behavior_sum = sum(recent_behavior)
+        confidence_score = min(1.0, len(evidence) / 10 * 0.42 + distinct_day_count / 5 * 0.34 + (0.24 if span_days >= 14 else 0))
+        max_behavior = max(behavior_scores or [0])
+        intensity_score = min(1.0, max_behavior * 0.44 + recent_behavior_sum / 4 * 0.25 + action_count / 3 * 0.23 + followup_count / 4 * 0.08)
+        if action_count and recent > 0:
+            intensity_score = max(intensity_score, 0.72)
+        persistence_score = min(1.0, span_days / 28 * 0.42 + distinct_day_count / 6 * 0.38 + len(evidence) / 12 * 0.2)
+        role_centrality = {
+            "mainline": 0.95,
+            "merge": 0.84,
+            "branch": 0.42,
+            "sprout": 0.36,
+            "archive": 0.32,
+        }.get(spec.get("role"), 0.35)
+        if spec["id"] == "adoption-distribution":
+            role_centrality = 0.72
+        elif spec["id"] == "agent-workflow":
+            role_centrality = 0.54
+        centrality_score = min(1.0, role_centrality + (0.12 if recent >= 3 else 0) + (0.08 if action_count else 0))
+        confidence = _score_level(confidence_score)
+        intent_strength = _score_level(intensity_score)
+        persistence = _score_level(persistence_score)
+        centrality = _score_level(centrality_score)
+
+        if spec["role"] == "mainline" and (recent > 0 or len(evidence) >= 8):
+            lane = "mainline"
+        elif spec["role"] == "archive":
+            lane = "cooling"
+        elif spec["role"] == "sprout" and recent > 0:
+            lane = "sprout"
+        elif confidence == "低" and intent_strength != "高" and len(evidence) <= 2:
+            lane = "occasional"
+        elif spec["id"] == "reasoning-architecture" and recent <= 1 and action_count == 0:
+            lane = "occasional"
+        elif recent > 0 and older == 0 and len(evidence) <= 3:
+            lane = "sprout"
+        elif spec["role"] == "merge" and recent > 0:
+            lane = "merging"
+        elif recent == 0 and previous == 0 and older > 0:
+            lane = "cooling"
+        else:
+            lane = "branch"
+        if recent > previous:
+            trend = "rising"
+        elif recent == 0 and (previous > 0 or older > 0):
+            trend = "cooling"
+        elif recent > 0 and previous == 0 and older == 0:
+            trend = "new"
+        else:
+            trend = "steady"
+        evidence_for_display = sorted(
+            evidence,
+            key=lambda e: (e["behavior"]["score"], e.get("created_at") or ""),
+            reverse=True,
+        )
+        nodes.append({
+            "id": spec["id"],
+            "label": spec["label"],
+            "lane": lane,
+            "trend": trend,
+            "read": spec["read"],
+            "why_it_matters": spec["read"],
+            "possible_misread": _thought_possible_misread(spec, len(evidence), behavior_scores),
+            "intent_strength": intent_strength,
+            "confidence": confidence,
+            "persistence": persistence,
+            "centrality": centrality,
+            "score_values": {
+                "intent": round(intensity_score, 3),
+                "confidence": round(confidence_score, 3),
+                "persistence": round(persistence_score, 3),
+                "centrality": round(centrality_score, 3),
+                "avg_behavior": round(avg_behavior, 3),
+            },
+            "evidence_count": len(evidence),
+            "recent_count": recent,
+            "action_count": action_count,
+            "distinct_day_count": distinct_day_count,
+            "span_days": span_days,
+            "first_seen_at": first_seen,
+            "last_seen_at": last_seen,
+            "sparkline": buckets,
+            "evidence_comment_ids": [e["id"] for e in evidence_for_display[:8] if e.get("id")],
+            "evidence": evidence_for_display[:5],
+        })
+
+    lane_order = {"mainline": 0, "merging": 1, "branch": 2, "sprout": 3, "occasional": 4, "cooling": 5}
+    nodes.sort(key=lambda n: (
+        lane_order.get(n["lane"], 9),
+        -_float_or((n.get("score_values") or {}).get("intent")),
+        -int(n.get("recent_count") or 0),
+        -int(n.get("evidence_count") or 0),
+        n.get("last_seen_at") or "",
+    ))
+    lanes = {
+        "mainline": [n for n in nodes if n["lane"] == "mainline"],
+        "merging": [n for n in nodes if n["lane"] == "merging"],
+        "branch": [n for n in nodes if n["lane"] == "branch"],
+        "sprout": [n for n in nodes if n["lane"] == "sprout"],
+        "occasional": [n for n in nodes if n["lane"] == "occasional"],
+        "cooling": [n for n in nodes if n["lane"] == "cooling"],
+    }
+    main = (lanes["mainline"] or nodes[:1] or [{}])[0]
+    emerging = (lanes["sprout"] or lanes["merging"] or lanes["branch"] or [])[:2]
+    cooling = lanes["cooling"][:2]
+    observation = "我看到你这段时间不是散乱地看内容，而是在把若干线索拉回一条主线。"
+    if main:
+        observation = f"我看到「{main.get('label')}」仍是主线。"
+        if emerging:
+            observation += " 最近升温的是 " + "、".join(f"「{n['label']}」" for n in emerging) + "。"
+        if cooling:
+            observation += " 有些旧线索开始降温：" + "、".join(f"「{n['label']}」" for n in cooling) + "。"
+    return {
+        "generated_at": _now_iso(),
+        "window_days": days,
+        "bucket_days": bucket_days,
+        "observation": observation,
+        "stats": {
+            "node_count": len(nodes),
+            "mainline_count": len(lanes["mainline"]),
+            "branch_count": len(lanes["branch"]),
+            "sprout_count": len(lanes["sprout"]),
+            "occasional_count": len(lanes["occasional"]),
+            "cooling_count": len(lanes["cooling"]),
+        },
+        "lanes": lanes,
+        "nodes": nodes,
+        "note": "这是基于本地批注证据的思考地图，不是广告式兴趣画像，也不是用户确认的长期档案。",
+    }
+
+
+def _merge_comment_ids(*values) -> list:
+    ids = []
+    for value in values:
+        if isinstance(value, list):
+            source = value
+        elif isinstance(value, str):
+            source = _json_list(value)
+        elif value:
+            source = [value]
+        else:
+            source = []
+        for item in source:
+            try:
+                cid = int(item)
+            except Exception:
+                continue
+            if cid and cid not in ids:
+                ids.append(cid)
+    return ids
+
+
+def _item_text_for_score(item: dict) -> str:
+    parts = [
+        item.get("name"),
+        item.get("summary"),
+        item.get("question"),
+        item.get("theme"),
+        " ".join(item.get("summaries") or []),
+        " ".join(item.get("themes") or []),
+    ]
+    return " ".join(p for p in parts if p)
+
+
+def _keyword_score(text: str, tokens: list) -> int:
+    lowered = (text or "").lower()
+    score = 0
+    for token in tokens or []:
+        token = str(token).lower()
+        if token and token in lowered:
+            score += 1
+    return score
+
+
+def _build_memory_map(conn: sqlite3.Connection, limit: int = 60) -> dict:
+    """Build a read-only Project / Question / Theme map from existing signals.
+
+    V0 deliberately avoids creating canonical project rows. These are product
+    hypotheses with evidence, not user-confirmed truth.
+    """
+    conn.row_factory = sqlite3.Row
+    project_rows = [dict(r) for r in conn.execute(
+        """SELECT ps.*, c.page_title, c.page_url, c.selected_text, c.comment,
+                  c.created_at AS comment_created_at
+           FROM project_signals ps
+           LEFT JOIN comments c ON c.id = ps.comment_id
+           ORDER BY ps.created_at DESC
+           LIMIT ?""",
+        (limit,),
+    ).fetchall()]
+    question_rows = [dict(r) for r in conn.execute(
+        """SELECT aq.*, c.page_title, c.page_url, c.selected_text, c.comment,
+                  c.created_at AS comment_created_at
+           FROM active_question_signals aq
+           LEFT JOIN comments c ON c.id = aq.comment_id
+           WHERE aq.status='active'
+           ORDER BY aq.created_at DESC
+           LIMIT ?""",
+        (limit,),
+    ).fetchall()]
+    theme_rows = [dict(r) for r in conn.execute(
+        """SELECT ts.*, c.page_title, c.page_url, c.selected_text, c.comment,
+                  c.created_at AS comment_created_at
+           FROM theme_signals ts
+           LEFT JOIN comments c ON c.id = ts.comment_id
+           ORDER BY ts.created_at DESC
+           LIMIT ?""",
+        (limit,),
+    ).fetchall()]
+
+    projects_by_label = {}
+    for row in project_rows:
+        signal = _json_obj(row.get("signal_json"))
+        summary = (signal.get("summary") or "").strip()
+        text = " ".join([
+            summary,
+            row.get("page_title") or "",
+            row.get("selected_text") or "",
+            row.get("comment") or "",
+        ])
+        label = _infer_project_label(signal, text, row.get("page_title") or "")
+        key = label.lower()
+        item = projects_by_label.setdefault(key, {
+            "id": key,
+            "name": label,
+            "status": "active",
+            "confidence": 0.0,
+            "last_seen_at": row.get("created_at") or row.get("comment_created_at") or "",
+            "evidence_count": 0,
+            "evidence_comment_ids": [],
+            "signal_ids": [],
+            "summaries": [],
+            "questions": [],
+            "themes": [],
+            "source": "project_signals",
+            "note": "自动推断的项目候选，不等于用户确认的项目档案。",
+        })
+        item["confidence"] = max(item["confidence"], _float_or(row.get("confidence"), _float_or(signal.get("confidence"))))
+        item["last_seen_at"] = max(item["last_seen_at"] or "", row.get("created_at") or "")
+        item["evidence_count"] += 1
+        item["signal_ids"].append(row.get("id"))
+        for cid in _merge_comment_ids(row.get("comment_id")):
+            if cid not in item["evidence_comment_ids"]:
+                item["evidence_comment_ids"].append(cid)
+        if summary and summary not in item["summaries"]:
+            item["summaries"].append(summary)
+
+    questions = []
+    for row in question_rows:
+        question = (row.get("question") or "").strip()
+        if not question:
+            continue
+        questions.append({
+            "id": row.get("id"),
+            "comment_id": row.get("comment_id"),
+            "event_id": row.get("event_id"),
+            "question": question,
+            "signal_strength": _float_or(row.get("signal_strength")),
+            "scope": row.get("scope") or "unknown",
+            "status": row.get("status") or "active",
+            "created_at": row.get("created_at") or "",
+            "page_title": row.get("page_title") or "",
+            "page_url": row.get("page_url") or "",
+            "evidence_comment_ids": _merge_comment_ids(row.get("comment_id")),
+        })
+
+    themes_by_name = {}
+    for row in theme_rows:
+        theme = (row.get("theme") or "").strip()
+        if not theme:
+            continue
+        key = re.sub(r"\s+", " ", theme).lower()
+        item = themes_by_name.setdefault(key, {
+            "id": key,
+            "theme": theme,
+            "intensity": 0.0,
+            "evidence_count": 0,
+            "representative_comment_ids": [],
+            "signal_ids": [],
+            "first_seen_at": row.get("created_at") or "",
+            "last_seen_at": row.get("created_at") or "",
+            "trend": "active",
+        })
+        item["intensity"] += _float_or(row.get("intensity"))
+        item["evidence_count"] += int(row.get("evidence_count") or 1)
+        item["signal_ids"].append(row.get("id"))
+        item["last_seen_at"] = max(item["last_seen_at"] or "", row.get("created_at") or "")
+        if not item["first_seen_at"] or row.get("created_at") < item["first_seen_at"]:
+            item["first_seen_at"] = row.get("created_at") or item["first_seen_at"]
+        for cid in _merge_comment_ids(row.get("representative_comment_ids"), row.get("comment_id")):
+            if cid not in item["representative_comment_ids"]:
+                item["representative_comment_ids"].append(cid)
+
+    themes = list(themes_by_name.values())
+    for item in themes:
+        if item["evidence_count"] <= 1:
+            item["trend"] = "new"
+        elif item["last_seen_at"][:10] == datetime.now().date().isoformat():
+            item["trend"] = "rising"
+        else:
+            item["trend"] = "active"
+        item["intensity"] = round(item["intensity"], 3)
+
+    projects = list(projects_by_label.values())
+    for project in projects:
+        project_text = _item_text_for_score(project)
+        p_tokens = set(_keyword_tokens(project_text, max_tokens=36))
+        for q in questions:
+            q_tokens = set(_keyword_tokens(q["question"], max_tokens=24))
+            linked = bool(set(q.get("evidence_comment_ids") or []) & set(project.get("evidence_comment_ids") or []))
+            if linked or len(p_tokens & q_tokens) >= 2:
+                project["questions"].append(q)
+        for t in themes:
+            t_tokens = set(_keyword_tokens(t["theme"], max_tokens=24))
+            linked = bool(set(t.get("representative_comment_ids") or []) & set(project.get("evidence_comment_ids") or []))
+            if linked or len(p_tokens & t_tokens) >= 3:
+                project["themes"].append(t["theme"])
+        project["questions"] = sorted(
+            project["questions"],
+            key=lambda q: (_float_or(q.get("signal_strength")), q.get("created_at") or ""),
+            reverse=True,
+        )[:5]
+        project["themes"] = project["themes"][:6]
+        project["summaries"] = project["summaries"][:4]
+
+    projects.sort(key=lambda p: (p.get("last_seen_at") or "", p.get("confidence") or 0), reverse=True)
+    questions.sort(key=lambda q: (q.get("created_at") or "", q.get("signal_strength") or 0), reverse=True)
+    themes.sort(key=lambda t: (t.get("last_seen_at") or "", t.get("intensity") or 0), reverse=True)
+    return {
+        "generated_at": _now_iso(),
+        "definitions": {
+            "project": "有上下文边界、目标、状态、决策和下一步的工作容器。",
+            "question": "当前未解的具体张力或决策，比主题更可推进。",
+            "theme": "反复出现的关注面，可跨项目，也可在项目内部升温或合流。",
+        },
+        "stats": {
+            "project_count": len(projects),
+            "active_question_count": len(questions),
+            "theme_count": len(themes),
+            "source": "project_signals + active_question_signals + theme_signals",
+        },
+        "projects": projects[:12],
+        "active_questions": questions[:20],
+        "themes": themes[:20],
+    }
+
+
+def _select_memory_map_items(memory_map: dict, query_text: str) -> dict:
+    tokens = _keyword_tokens(query_text, max_tokens=32)
+
+    def ranked(items, text_key=None, limit=4):
+        scored = []
+        for idx, item in enumerate(items or []):
+            text = item.get(text_key) if text_key else _item_text_for_score(item)
+            score = _keyword_score(text or _item_text_for_score(item), tokens)
+            scored.append((score, item.get("last_seen_at") or item.get("created_at") or "", -idx, item))
+        scored.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
+        if not scored:
+            return []
+        if scored[0][0] == 0:
+            return [x[3] for x in scored[:limit]]
+        return [x[3] for x in scored if x[0] > 0][:limit]
+
+    return {
+        "projects": ranked(memory_map.get("projects"), limit=2),
+        "active_questions": ranked(memory_map.get("active_questions"), text_key="question", limit=4),
+        "themes": ranked(memory_map.get("themes"), text_key="theme", limit=5),
+    }
+
+
+def _memory_map_context_section(selection: dict) -> str:
+    projects = selection.get("projects") or []
+    questions = selection.get("active_questions") or []
+    themes = selection.get("themes") or []
+    if not (projects or questions or themes):
+        return "### P · 当前项目 / 活跃问题 / 升温主题\n没有命中可追溯的项目、问题或主题信号。"
+
+    lines = ["### P · 当前项目 / 活跃问题 / 升温主题"]
+    if projects:
+        lines.append("项目候选（自动推断，不等于用户确认档案）：")
+        for p in projects:
+            refs = " ".join(f"[c#{cid}]" for cid in (p.get("evidence_comment_ids") or [])[:4])
+            summary = (p.get("summaries") or [""])[0]
+            lines.append(f"- {p.get('name')} · 证据 {p.get('evidence_count')} 条 · {refs}")
+            if summary:
+                lines.append(f"  当前判断：{summary}")
+    if questions:
+        lines.append("活跃问题：")
+        for q in questions:
+            refs = " ".join(f"[c#{cid}]" for cid in (q.get("evidence_comment_ids") or [])[:3])
+            lines.append(f"- [q#{q.get('id')}] {q.get('question')} · scope={q.get('scope')} · {refs}")
+    if themes:
+        lines.append("升温主题：")
+        for t in themes:
+            refs = " ".join(f"[c#{cid}]" for cid in (t.get("representative_comment_ids") or [])[:3])
+            lines.append(f"- {t.get('theme')} · {t.get('trend')} · intensity={t.get('intensity')} · {refs}")
+    return "\n".join(lines)
 
 
 def _select_exposure_memory(conn: sqlite3.Connection, query_text: str, page_url: str = "",
@@ -1226,6 +2000,8 @@ def _build_context_pack_for_comment(comment_id: int, role: str = "") -> dict:
             "WHERE status='active' ORDER BY created_at DESC LIMIT 1"
         ).fetchone()
         latest_thinking = dict(latest_thinking) if latest_thinking else None
+        memory_map = _build_memory_map(conn)
+        memory_map_selection = _select_memory_map_items(memory_map, query_text)
 
         sections = ["## 本次回复装载的记忆上下文"]
         if profile:
@@ -1244,6 +2020,7 @@ def _build_context_pack_for_comment(comment_id: int, role: str = "") -> dict:
                 "### 最近你在想的事\n"
                 f"{latest_thinking.get('title') or ''}：{latest_thinking.get('synthesis_md') or ''}"
             )
+        sections.append(_memory_map_context_section(memory_map_selection))
         if same_page:
             sections.append("### D · 当前页面历史批注\n" + "\n".join(_comment_ref_line(r) for r in same_page))
         else:
@@ -1297,6 +2074,11 @@ def _build_context_pack_for_comment(comment_id: int, role: str = "") -> dict:
                 "same_page": "same_url_latest_3",
                 "exposure": exposure_reason,
                 "thinking": "active_thinking_summary" if latest_thinking else "missing",
+                "memory_map": {
+                    "project_ids": [p.get("id") for p in memory_map_selection.get("projects", [])],
+                    "active_question_ids": [q.get("id") for q in memory_map_selection.get("active_questions", [])],
+                    "theme_ids": [t.get("id") for t in memory_map_selection.get("themes", [])],
+                },
             },
             "token_budget_used": max(1, len(context_md) // 4),
             "context_md": context_md,
@@ -1325,6 +2107,8 @@ def _build_context_pack_for_query(query: str) -> dict:
             "WHERE status='active' ORDER BY created_at DESC LIMIT 1"
         ).fetchone()
         latest_thinking = dict(latest_thinking) if latest_thinking else None
+        memory_map = _build_memory_map(conn)
+        memory_map_selection = _select_memory_map_items(memory_map, query)
         sections = ["## 记忆问答装载的上下文"]
         if profile:
             sections.append(
@@ -1336,6 +2120,7 @@ def _build_context_pack_for_query(query: str) -> dict:
             )
         if latest_thinking:
             sections.append(f"### 最近你在想的事\n{latest_thinking.get('title')}: {latest_thinking.get('synthesis_md')}")
+        sections.append(_memory_map_context_section(memory_map_selection))
         if skills:
             sections.append("### 工作方式\n" + "\n".join(
                 f"- [skill#{s['id']}] {s.get('name')}: {s.get('description')}" for s in skills
@@ -1381,6 +2166,11 @@ def _build_context_pack_for_query(query: str) -> dict:
                 "skills": skill_reason,
                 "episodic": episodic_reason,
                 "exposure": exposure_reason,
+                "memory_map": {
+                    "project_ids": [p.get("id") for p in memory_map_selection.get("projects", [])],
+                    "active_question_ids": [q.get("id") for q in memory_map_selection.get("active_questions", [])],
+                    "theme_ids": [t.get("id") for t in memory_map_selection.get("themes", [])],
+                },
                 "mode": "memory_chat_v0",
             },
             "token_budget_used": max(1, len(context_md) // 4),
@@ -3476,6 +4266,33 @@ def notebook_profile():
         "user_profile_md": load_user_profile(),
         "project_context_md": load_project_context(),
     }
+
+
+@app.get("/notebook/memory-map")
+def notebook_memory_map():
+    """Project / Question / Theme Map V0.
+
+    This is a read-only inferred map from growth signals. It intentionally
+    stays separate from project_context.md until the product semantics converge.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        return _build_memory_map(conn)
+    finally:
+        conn.close()
+
+
+@app.get("/notebook/thought-map")
+def notebook_thought_map(days: int = 42):
+    """User-facing thought map across recent, ongoing, and cooling lines."""
+    days = max(14, min(int(days or 42), 90))
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        return _build_thought_map(conn, days=days)
+    finally:
+        conn.close()
 
 
 @app.get("/notebook/rules")

@@ -34,6 +34,9 @@
           <a class="kb-nb-nav-item active" data-tab="profile-project" href="#profile-project">
             <span>你 &amp; 项目</span><span class="kb-nb-nav-count" id="kb-nb-count-profile">—</span>
           </a>
+          <a class="kb-nb-nav-item" data-tab="thought-map" href="#thought-map">
+            <span>思考地图</span><span class="kb-nb-nav-count" id="kb-nb-count-thought-map">—</span>
+          </a>
         </div>
         <div class="kb-nb-nav-group">
           <div class="kb-nb-nav-group-title">程序记忆 · Agent 在学什么</div>
@@ -106,11 +109,24 @@
             <span class="kb-nb-page-mono">● 知识记忆 · 项目</span>
           </div>
           <h2 class="kb-nb-page-title">当前项目</h2>
-          <p class="kb-nb-page-subtitle">手上的项目 — 状态、决议、悬而未决。完整 markdown 在下方折叠。</p>
+          <p class="kb-nb-page-subtitle">系统从你的真实批注里自动长出的项目候选 — 先展示证据和问题，不急着写死成档案。</p>
+          <div id="kb-nb-project-map" class="kb-nb-project-map">读取中…</div>
+          <div class="kb-nb-divider-soft"></div>
           <details class="kb-nb-md-details">
             <summary class="kb-nb-md-details-summary">展开完整 project_context.md ↓</summary>
             <div class="kb-nb-md" id="kb-nb-project-md">读取中…</div>
           </details>
+        </section>
+
+        <!-- 思考地图 -->
+        <section class="kb-nb-page kb-nb-hidden" id="kb-tab-thought-map">
+          <div class="kb-nb-page-header">
+            <span class="kb-nb-page-mono">● 知识记忆 · 思考秩序</span>
+            <button class="kb-nb-page-export" data-export="thought-map">导出 ↗</button>
+          </div>
+          <h2 class="kb-nb-page-title">这段时间你在围着什么转</h2>
+          <p class="kb-nb-page-subtitle">不是兴趣画像，也不是词云。它把你的批注按时间和证据整理成主线、旁支、新芽和降温线索。</p>
+          <div id="kb-nb-thought-map">读取中…</div>
         </section>
 
         <!-- 养成的习惯 -->
@@ -159,7 +175,16 @@
           <div class="kb-nb-divider-soft"></div>
           <div class="kb-nb-thinking-bottom">
             <div class="kb-nb-page-mono kb-nb-mono-soft">主题热度</div>
-            <div class="kb-nb-empty">主题热度需要 worker 跑出 theme_signals — M3 后启用。</div>
+            <div class="kb-nb-map-grid">
+              <div>
+                <h3 class="kb-nb-map-heading">活跃问题</h3>
+                <div id="kb-nb-question-map" class="kb-nb-map-list">读取中…</div>
+              </div>
+              <div>
+                <h3 class="kb-nb-map-heading">升温主题</h3>
+                <div id="kb-nb-theme-map" class="kb-nb-map-list">读取中…</div>
+              </div>
+            </div>
           </div>
         </section>
 
