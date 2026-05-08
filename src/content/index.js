@@ -328,6 +328,16 @@ const commentSystem = (() => {
     save(comments);
     return c;
   }
+  function replaceReply(commentId, replyId, replyText, isAI, debugMeta = null) {
+    const comments = load();
+    const c = comments.find(x => x.id === commentId);
+    if (!c) return null;
+    const idx = c.replies.findIndex(r => String(r.id) === String(replyId));
+    if (idx === -1) return addReply(commentId, replyText, isAI, debugMeta);
+    c.replies[idx] = { id: Date.now(), text: replyText, isAI, debugMeta, createdAt: new Date().toISOString() };
+    save(comments);
+    return c;
+  }
 
   // ── highlights 持久化存储（独立于 comments）──
   const HL_KEY = () => "kb_highlights_" + location.href.split("?")[0];
@@ -939,6 +949,7 @@ const commentSystem = (() => {
       .kb-reply.ai .kb-reply-body blockquote { border-left: 2px solid var(--kb-line); padding-left: 8px; margin: 4px 0; color: var(--kb-ink-mute); }
       .kb-reply.ai .kb-reply-body a { color: var(--kb-blue); text-decoration: none; border-bottom: 1px solid oklch(0.55 0.12 240 / 0.4); }
       .kb-reply.ai .kb-reply-body a:hover { border-bottom-color: var(--kb-blue); }
+      .kb-reply-actions { margin-top: 8px; }
       .kb-reply + .kb-reply { margin-top: 5px; }
       .kb-inline-reply { margin-top: 8px; }
       .kb-inline-reply textarea {
@@ -1149,6 +1160,11 @@ const commentSystem = (() => {
       const readyBtn = e.target.closest("[data-jump-ai]");
       if (readyBtn) {
         jumpToAiReply(parseInt(readyBtn.dataset.jumpAi, 10));
+        return;
+      }
+      const retryBtn = e.target.closest("[data-regenerate-ai]");
+      if (retryBtn) {
+        askAI(parseInt(retryBtn.dataset.regenerateAi, 10), { replaceReplyId: retryBtn.dataset.replyId });
         return;
       }
       const btn = e.target.closest("[data-ask-ai]");
@@ -1442,6 +1458,17 @@ const commentSystem = (() => {
   function _renderCommentCard(c) {
     const t = new Date(c.createdAt);
     const timeStr = `${t.getMonth()+1}/${t.getDate()} ${String(t.getHours()).padStart(2,"0")}:${String(t.getMinutes()).padStart(2,"0")}`;
+    const parseDebugMeta = (r) => {
+      if (!r || !r.debugMeta) return {};
+      if (typeof r.debugMeta !== "string") return r.debugMeta || {};
+      try { return JSON.parse(r.debugMeta) || {}; } catch { return {}; }
+    };
+    const isFailedAIReply = (r) => {
+      if (!r?.isAI) return false;
+      const dm = parseDebugMeta(r);
+      if (dm.status === "error" || dm.status === "failed" || dm.error) return true;
+      return /^(AI 回复失败|Agent 执行出错)/.test(r.text || "");
+    };
     const repliesHtml = c.replies.map(r => {
       let debugHtml = "";
       if (DEBUG_MODE && r.isAI && r.debugMeta) {
@@ -1492,45 +1519,28 @@ const commentSystem = (() => {
       const labelHtml = r.isAI
         ? `<span class="kb-reply-tag">AI</span>响应 · ${ageStr}`
         : `你 · ${ageStr}`;
+      const retryHtml = isFailedAIReply(r) && !_askAIRunning.has(c.id)
+        ? `<div class="kb-reply-actions"><button class="kb-ai-btn" data-regenerate-ai="${c.id}" data-reply-id="${r.id}">重新生成</button></div>`
+        : "";
       return `
       <div class="kb-reply ${r.isAI ? "ai" : "user"}">
         <div class="kb-reply-label">${labelHtml}</div>
         <div class="kb-reply-body">${bodyHtml}</div>
         ${debugHtml}
+        ${retryHtml}
       </div>`;
     }).join("");
-    const parseDebugMeta = (r) => {
-      if (!r || !r.debugMeta) return {};
-      if (typeof r.debugMeta !== "string") return r.debugMeta || {};
-      try { return JSON.parse(r.debugMeta) || {}; } catch { return {}; }
-    };
-    const isFailedAIReply = (r) => {
-      if (!r?.isAI) return false;
-      const dm = parseDebugMeta(r);
-      if (dm.status === "error" || dm.status === "failed" || dm.error) return true;
-      return /^(AI 回复失败|Agent 执行出错)/.test(r.text || "");
-    };
     const aiReplies = c.replies.filter(r => r.isAI);
-    const latestAIReply = aiReplies[aiReplies.length - 1];
     const hasAnyAI = Boolean(c.agentCommentId) || aiReplies.length > 0;
-    const latestAIReplyFailed = latestAIReply ? isFailedAIReply(latestAIReply) : false;
     let actionHtml = "";
     if (_askAIRunning.has(c.id)) {
       actionHtml = `<span style="color:var(--kb-blue);font-size:11px;font-family:'JetBrains Mono',monospace;letter-spacing:0.04em;">AI 思考中…</span>`;
     } else if (_aiUnreadCommentIds.has(c.id)) {
-      actionHtml = `
-        <button class="kb-ai-ready-btn" data-jump-ai="${c.id}">AI 已回复 · 查看</button>
-        ${hasAnyAI ? `<button class="kb-reply-btn" data-ask-ai="${c.id}">重新生成</button>` : ""}
-      `;
+      actionHtml = `<button class="kb-ai-ready-btn" data-jump-ai="${c.id}">AI 已回复 · 查看</button>`;
     } else if (!hasAnyAI) {
       actionHtml = `<button class="kb-ai-btn" data-ask-ai="${c.id}">请 AI 回复</button>`;
-    } else if (latestAIReplyFailed) {
-      actionHtml = `<button class="kb-ai-btn" data-ask-ai="${c.id}">重新生成</button>`;
     } else {
-      actionHtml = `
-        <button class="kb-reply-btn" data-open-reply="${c.id}">继续追问</button>
-        <button class="kb-reply-btn" data-ask-ai="${c.id}">重新生成</button>
-      `;
+      actionHtml = `<button class="kb-reply-btn" data-open-reply="${c.id}">继续追问</button>`;
     }
     return `
       <div class="kb-cmt-card ${_aiUnreadCommentIds.has(c.id) ? "kb-ai-unread" : ""}" id="kb-cmt-${c.id}">
@@ -1843,7 +1853,7 @@ const commentSystem = (() => {
 
   // ── AI 回复（via agent_api localhost:8766）──
   const _askAIRunning = new Set(); // per-comment 锁，不同评论可以并行 // AI 回复中的 commentId，用于禁用追问输入
-  async function askAI(commentId) {
+  async function askAI(commentId, options = {}) {
     if (_askAIRunning.has(commentId)) return; // AI 还在回复，忽略
     _askAIRunning.add(commentId);
     updateCommentCard(commentId);
@@ -1974,22 +1984,37 @@ const commentSystem = (() => {
 
       if (reply) {
         const shouldNotify = !_isCommentCardVisible(commentId);
-        addReply(commentId, reply, true, replyDebugMeta);
+        if (options.replaceReplyId) {
+          replaceReply(commentId, options.replaceReplyId, reply, true, replyDebugMeta);
+        } else {
+          addReply(commentId, reply, true, replyDebugMeta);
+        }
         if (shouldNotify) _markAiReplyReady(commentId);
         // 每次 AI 回复后更新 Notion（upsert：有 page 则追加，无则新建）
         const freshC = load().find(x => x.id === commentId);
         if (freshC) updateNotionPage(freshC);
       } else {
-        addReply(commentId, "AI 仍在处理中，请稍候刷新页面查看结果。", true);
+        const pendingText = "AI 仍在处理中，请稍候刷新页面查看结果。";
+        if (options.replaceReplyId) {
+          replaceReply(commentId, options.replaceReplyId, pendingText, true);
+        } else {
+          addReply(commentId, pendingText, true);
+        }
       }
     } catch (err) {
       const msg = err.message || String(err);
+      let failureText = "";
       if (msg.includes("Extension context invalidated")) {
-        addReply(commentId, "AI 回复失败：插件已失效，请刷新页面后重试。", true);
+        failureText = "AI 回复失败：插件已失效，请刷新页面后重试。";
       } else if (msg.includes("Failed to fetch") || msg.includes("NetworkError")) {
-        addReply(commentId, "AI 回复失败：无法连接本地服务。请检查是否已运行 start.sh 启动后端（终端执行：bash start.sh）", true);
+        failureText = "AI 回复失败：无法连接本地服务。请检查是否已运行 start.sh 启动后端（终端执行：bash start.sh）";
       } else {
-        addReply(commentId, "AI 回复失败：" + msg, true);
+        failureText = "AI 回复失败：" + msg;
+      }
+      if (options.replaceReplyId) {
+        replaceReply(commentId, options.replaceReplyId, failureText, true);
+      } else {
+        addReply(commentId, failureText, true);
       }
     }
 
