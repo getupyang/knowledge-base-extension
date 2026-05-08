@@ -1,4 +1,4 @@
-const KB_CONTENT_VERSION = "0.3.2-regenerate-ai-action";
+const KB_CONTENT_VERSION = "0.3.4-page-comment-restore";
 console.info(`[KB] content script loaded: ${KB_CONTENT_VERSION}`);
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -293,7 +293,41 @@ const selectionBar = (() => {
 const DEBUG_MODE = true; // 发布时改为 false
 
 const commentSystem = (() => {
-  const STORAGE_KEY = () => "kb_comments_" + location.href.split("?")[0];
+  function _pageUrlWithoutHash(url = location.href) {
+    return String(url || "").split("#")[0];
+  }
+  function _pageUrlWithoutQuery(url = location.href) {
+    return _pageUrlWithoutHash(url).split("?")[0];
+  }
+  function _withoutTrailingSlash(url) {
+    return String(url || "").replace(/\/$/, "");
+  }
+  function _withTrailingSlash(url) {
+    const s = String(url || "");
+    return s.endsWith("/") ? s : `${s}/`;
+  }
+  function _unique(values) {
+    return Array.from(new Set(values.filter(Boolean)));
+  }
+  function _pageUrlCandidates() {
+    const full = _pageUrlWithoutHash(location.href);
+    const base = _pageUrlWithoutQuery(location.href);
+    return _unique([
+      full,
+      base,
+      _withoutTrailingSlash(full),
+      _withTrailingSlash(full),
+      _withoutTrailingSlash(base),
+      _withTrailingSlash(base),
+    ]);
+  }
+  function _storageUrl() {
+    return _withoutTrailingSlash(_pageUrlWithoutQuery(location.href));
+  }
+  function _storageKeys(prefix) {
+    return _unique(_pageUrlCandidates().map(url => prefix + url).concat(prefix + _storageUrl()));
+  }
+  const STORAGE_KEY = () => "kb_comments_" + _storageUrl();
   let panelEl = null;
   let currentExcerpt = "";
   const _aiUnreadCommentIds = new Set();
@@ -306,8 +340,25 @@ const commentSystem = (() => {
   });
 
   // ── 持久化 ──
+  function _commentMergeKey(c) {
+    if (c?.agentCommentId) return `backend:${c.agentCommentId}`;
+    return `local:${c?.id || ""}:${c?.excerpt || ""}:${c?.text || ""}`;
+  }
   function load() {
-    try { return JSON.parse(localStorage.getItem(STORAGE_KEY()) || "[]"); } catch { return []; }
+    const seen = new Set();
+    const merged = [];
+    for (const key of _storageKeys("kb_comments_")) {
+      let items = [];
+      try { items = JSON.parse(localStorage.getItem(key) || "[]"); } catch { items = []; }
+      if (!Array.isArray(items)) continue;
+      for (const item of items) {
+        const mergeKey = _commentMergeKey(item);
+        if (seen.has(mergeKey)) continue;
+        seen.add(mergeKey);
+        merged.push(item);
+      }
+    }
+    return merged;
   }
   function save(comments) {
     localStorage.setItem(STORAGE_KEY(), JSON.stringify(comments));
@@ -363,10 +414,99 @@ const commentSystem = (() => {
     return c;
   }
 
+  function _backendReplyToLocal(reply) {
+    const author = String(reply.author || "").toLowerCase();
+    const isAI = author !== "user" && author !== "me" && author !== "human" && author !== "你";
+    return {
+      id: reply.id || Date.now(),
+      text: reply.content || "",
+      isAI,
+      debugMeta: reply.debug_meta || null,
+      createdAt: reply.created_at || new Date().toISOString(),
+    };
+  }
+
+  function _backendCommentToLocal(row) {
+    return {
+      id: Number(row.id) || Date.now(),
+      agentCommentId: Number(row.id) || null,
+      notionPageId: row.notion_page_id || null,
+      excerpt: row.selected_text || "",
+      text: row.comment || "",
+      createdAt: row.created_at || new Date().toISOString(),
+      replies: Array.isArray(row.replies) ? row.replies.map(_backendReplyToLocal) : [],
+    };
+  }
+
+  function _mergeBackendComments(rows) {
+    if (!Array.isArray(rows) || !rows.length) return false;
+    const comments = load();
+    let changed = false;
+    for (const row of rows) {
+      const backendId = Number(row.id);
+      if (!backendId) continue;
+      const existing = comments.find(c => Number(c.agentCommentId) === backendId || Number(c.id) === backendId);
+      const next = _backendCommentToLocal(row);
+      if (existing) {
+        Object.assign(existing, {
+          agentCommentId: next.agentCommentId,
+          notionPageId: next.notionPageId || existing.notionPageId || null,
+          excerpt: next.excerpt || existing.excerpt || "",
+          text: next.text || existing.text || "",
+          createdAt: existing.createdAt || next.createdAt,
+          replies: next.replies.length ? next.replies : (existing.replies || []),
+        });
+      } else {
+        comments.unshift(next);
+      }
+      changed = true;
+    }
+    if (changed) save(comments);
+    return changed;
+  }
+
+  let _backendPageCommentsHydrated = false;
+  async function hydratePageCommentsFromBackend() {
+    if (_backendPageCommentsHydrated) return;
+    _backendPageCommentsHydrated = true;
+    let changed = false;
+    for (const url of _pageUrlCandidates()) {
+      try {
+        const resp = await fetch(`http://localhost:8766/comments?page_url=${encodeURIComponent(url)}`);
+        if (!resp.ok) continue;
+        const rows = await resp.json();
+        if (_mergeBackendComments(rows)) changed = true;
+      } catch {
+        // 后端离线时不影响本页评注入口；本地 localStorage 仍可用。
+      }
+    }
+    if (!changed) return;
+    restoreCommentHighlights();
+    if (!panelEl) buildPanel({ hidden: !panelOpen });
+    render();
+    updateBadge();
+  }
+
   // ── highlights 持久化存储（独立于 comments）──
-  const HL_KEY = () => "kb_highlights_" + location.href.split("?")[0];
+  const HL_KEY = () => "kb_highlights_" + _storageUrl();
+  function _highlightMergeKey(h) {
+    return `${h?.excerpt || ""}:${JSON.stringify(h?.position || {})}`;
+  }
   function loadHighlights() {
-    try { return JSON.parse(localStorage.getItem(HL_KEY()) || "[]"); } catch { return []; }
+    const seen = new Set();
+    const merged = [];
+    for (const key of _storageKeys("kb_highlights_")) {
+      let items = [];
+      try { items = JSON.parse(localStorage.getItem(key) || "[]"); } catch { items = []; }
+      if (!Array.isArray(items)) continue;
+      for (const item of items) {
+        const mergeKey = _highlightMergeKey(item);
+        if (seen.has(mergeKey)) continue;
+        seen.add(mergeKey);
+        merged.push(item);
+      }
+    }
+    return merged;
   }
   function saveHighlights(hls) {
     localStorage.setItem(HL_KEY(), JSON.stringify(hls));
@@ -480,6 +620,22 @@ const commentSystem = (() => {
     return String(value || "").replace(/\s+/g, " ").trim();
   }
 
+  function _findExactTextRange(excerpt) {
+    for (const node of _acceptedTextNodes()) {
+      const idx = node.textContent.indexOf(excerpt);
+      if (idx === -1) continue;
+      try {
+        const range = document.createRange();
+        range.setStart(node, idx);
+        range.setEnd(node, idx + excerpt.length);
+        return range;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
   function _findTextRangeAcrossNodes(excerpt) {
     const needle = _normalizeForAnchor(excerpt);
     if (!needle) return null;
@@ -504,7 +660,30 @@ const commentSystem = (() => {
     const range = document.createRange();
     range.setStart(startRef.node, startRef.offset);
     range.setEnd(endRef.node, endRef.offset + 1);
+    if (_normalizeForAnchor(range.toString()) !== needle) return null;
     return range;
+  }
+
+  function _markGroupText(excerpt) {
+    return _findMarksForExcerpt(excerpt).map(m => m.textContent || "").join(" ");
+  }
+
+  function _markGroupLooksLikeExcerpt(excerpt) {
+    const needle = _normalizeForAnchor(excerpt);
+    const text = _normalizeForAnchor(_markGroupText(excerpt));
+    if (!needle || !text) return false;
+    if (text === needle) return true;
+    return text.includes(needle) && text.length <= needle.length * 1.25 + 24;
+  }
+
+  function _removeMarksForExcerpt(excerpt) {
+    _findMarksForExcerpt(excerpt).forEach(mark => {
+      const parent = mark.parentNode;
+      if (!parent) return;
+      while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+      parent.removeChild(mark);
+      try { parent.normalize(); } catch {}
+    });
   }
 
   function _bindMarkInteractions(mark, excerpt) {
@@ -639,36 +818,45 @@ const commentSystem = (() => {
   }
 
   function insertMark(range, excerpt) {
-    // 跨表格单元格时，逐 td 分别高亮，不破坏表格结构
-    if (_rangeSpansTableCells(range)) {
-      return _highlightAcrossTableCells(range, excerpt);
-    }
-    const mark = _createMark(excerpt);
     try {
-      range.surroundContents(mark);
-      // 验证 mark 确实包住了内容
-      if (!mark.textContent.trim()) return false;
-      return true;
-    } catch {
-      // 跨节点选区（列表、多段落等）：逐文字节点分别包 mark，不破坏 DOM 结构
-      return _highlightAcrossNodes(range, excerpt);
+      // 跨表格单元格时，逐 td 分别高亮，不破坏表格结构
+      if (_rangeSpansTableCells(range)) {
+        return _highlightAcrossTableCells(range, excerpt);
+      }
+      const mark = _createMark(excerpt);
+      try {
+        range.surroundContents(mark);
+        // 验证 mark 确实包住了内容
+        if (!mark.textContent.trim()) return false;
+        return true;
+      } catch {
+        // 跨节点选区（列表、多段落等）：逐文字节点分别包 mark，不破坏 DOM 结构
+        return _highlightAcrossNodes(range, excerpt);
+      }
+    } catch (err) {
+      console.warn("[KB] highlight failed, will continue without blocking panel:", err);
+      return false;
     }
   }
 
   // ── 高亮（由小bar或右键菜单触发，range 存在）──
   function doHighlight(excerpt, range) {
-    if (!range) return;
+    if (!range) {
+      highlightByText(excerpt);
+      return _findMarksForExcerpt(excerpt).length > 0;
+    }
     const position = serializeRange(range);
     let ok = insertMark(range, excerpt); // 先插 mark，再清 selection
-    window.getSelection()?.removeAllRanges();
+    try { window.getSelection()?.removeAllRanges(); } catch {}
     // 如果 range 方式失败（跨节点等），fallback 到文字匹配
     if (!ok) {
       highlightByText(excerpt);
-      return; // highlightByText 内部已处理 addHighlight
+      ok = _findMarksForExcerpt(excerpt).length > 0;
     }
-    if (position) {
+    if (ok && position) {
       addHighlight(excerpt, position);
     }
+    return ok;
   }
 
   // ── 高亮 + 打开评论面板（点"评论"按钮）──
@@ -680,26 +868,17 @@ const commentSystem = (() => {
   // ── 右键菜单触发：selection 已消失，用文字内容在页面上匹配并高亮 ──
   function highlightByText(excerpt) {
     if (!excerpt) return;
+    const exactRange = _findExactTextRange(excerpt);
+    if (exactRange) {
+      const position = serializeRange(exactRange);
+      if (insertMark(exactRange, excerpt) && position) addHighlight(excerpt, position);
+      return;
+    }
     const crossNodeRange = _findTextRangeAcrossNodes(excerpt);
     if (crossNodeRange) {
       const position = serializeRange(crossNodeRange);
       if (insertMark(crossNodeRange, excerpt) && position) addHighlight(excerpt, position);
       return;
-    }
-    // 用 TreeWalker 找到文本节点中匹配的位置
-    for (const node of _acceptedTextNodes()) {
-      const idx = node.textContent.indexOf(excerpt);
-      if (idx !== -1) {
-        try {
-          const range = document.createRange();
-          range.setStart(node, idx);
-          range.setEnd(node, idx + excerpt.length);
-          const position = serializeRange(range);
-          insertMark(range, excerpt);
-          if (position) addHighlight(excerpt, position);
-        } catch { /* 跨节点忽略 */ }
-        return;
-      }
     }
   }
 
@@ -710,7 +889,12 @@ const commentSystem = (() => {
       if (!h.position) return;
       if (_findMarksForExcerpt(h.excerpt).length) return;
       const range = deserializeRange(h.position);
-      if (range) insertMark(range, h.excerpt);
+      if (!range) return;
+      if (!insertMark(range, h.excerpt)) return;
+      if (!_markGroupLooksLikeExcerpt(h.excerpt)) {
+        _removeMarksForExcerpt(h.excerpt);
+        highlightByText(h.excerpt);
+      }
     });
   }
 
@@ -993,11 +1177,11 @@ const commentSystem = (() => {
       }
       .kb-reply-body { font-size: 13px; line-height: 1.6; margin: 0; }
       .kb-reply.ai .kb-reply-body > p:first-child { margin-top: 0; }
-      .kb-reply.ai .kb-reply-body p { margin: 0 0 4px 0; }
+      .kb-reply.ai .kb-reply-body p { margin: 0 0 4px 0; font-size: 13px; line-height: 1.6; }
       .kb-reply.ai .kb-reply-body p:last-child { margin-bottom: 0; }
       .kb-reply.user .kb-reply-body { white-space: pre-wrap; }
       .kb-reply.ai .kb-reply-body ul, .kb-reply.ai .kb-reply-body ol { margin: 3px 0 5px 0; padding-left: 16px; }
-      .kb-reply.ai .kb-reply-body li { margin-bottom: 2px; }
+      .kb-reply.ai .kb-reply-body li { margin-bottom: 2px; font-size: 13px; line-height: 1.6; }
       .kb-reply.ai .kb-reply-body h1, .kb-reply.ai .kb-reply-body h2 { font-size: 13px; font-weight: 600; margin: 6px 0 3px; }
       .kb-reply.ai .kb-reply-body h3, .kb-reply.ai .kb-reply-body h4 { font-size: 13px; font-weight: 600; margin: 5px 0 3px; }
       .kb-reply.ai .kb-reply-body strong { font-weight: 600; }
@@ -1179,11 +1363,14 @@ const commentSystem = (() => {
   }
 
   // ── 构建面板 ──
-  function buildPanel() {
+  function buildPanel(options = {}) {
     if (panelEl) return;
     injectStyles();
     panelEl = document.createElement("div");
     panelEl.id = "kb-comment-panel";
+    if (options.hidden) {
+      panelEl.classList.add("kb-btn-hidden");
+    }
     panelEl.innerHTML = `
       <div id="kb-cp-header">
         <h3>评注<span class="kb-cp-count" id="kb-cp-count"></span></h3>
@@ -2150,49 +2337,62 @@ const commentSystem = (() => {
   // ── 对外接口：打开评论面板（高亮由调用方处理）──
   // 划线后调用此函数：展开输入区，让用户写一条评论
   function open(excerpt, url, title) {
-    currentExcerpt = excerpt;
-    buildPanel();
-    // 更新输入区 quote 预览
-    const qp = document.getElementById("kb-cp-quote-preview");
-    if (qp) {
-      if (excerpt && excerpt.trim()) {
-        qp.textContent = `"${excerpt.slice(0, 80)}${excerpt.length > 80 ? "…" : ""}"`;
-        qp.style.display = "block";
-      } else {
-        qp.textContent = "";
-        qp.style.display = "none";
+    try {
+      currentExcerpt = excerpt;
+      buildPanel();
+      if (!panelEl) throw new Error("comment panel element was not created");
+      // 更新输入区 quote 预览
+      const qp = document.getElementById("kb-cp-quote-preview");
+      if (qp) {
+        if (excerpt && excerpt.trim()) {
+          qp.textContent = `"${excerpt.slice(0, 80)}${excerpt.length > 80 ? "…" : ""}"`;
+          qp.style.display = "block";
+        } else {
+          qp.textContent = "";
+          qp.style.display = "none";
+        }
       }
+      // 清空输入框
+      const ta = document.getElementById("kb-cp-textarea");
+      if (ta) ta.value = "";
+      panelOpen = true;
+      panelEl.classList.remove("kb-btn-hidden");
+      document.body.style.marginRight = "360px";
+      render();
+      syncVisibleCommentsFromBackend({ notify: false });
+      startPendingAiResumeLoop();
+      updateBadge();
+      // 展开输入区 + 聚焦（这是划线触发的）
+      expandInputArea(true);
+    } catch (err) {
+      console.error("[KB] open comment panel failed:", err);
+      showToast("评注面板打开失败：请刷新当前网页后重试", "error");
     }
-    // 清空输入框
-    const ta = document.getElementById("kb-cp-textarea");
-    if (ta) ta.value = "";
-    panelOpen = true;
-    panelEl.classList.remove("kb-btn-hidden");
-    document.body.style.marginRight = "360px";
-    render();
-    syncVisibleCommentsFromBackend({ notify: false });
-    startPendingAiResumeLoop();
-    updateBadge();
-    // 展开输入区 + 聚焦（这是划线触发的）
-    expandInputArea(true);
   }
 
   // 页面加载时恢复高亮 + 渲染已有评论
+  let initialized = false;
   function init() {
+    if (initialized) return;
+    initialized = true;
     // 关键：stylesheet 必须先注入，否则 restoreHighlights 重建出来的 mark 会失去 .kb-comment-highlight 的样式（淡橙底）
     injectStyles();
     restoreHighlights();
     restoreCommentHighlights();
     const comments = load();
     if (comments.length > 0) {
-      buildPanel();
-      panelEl.classList.add("kb-btn-hidden");
+      buildPanel({ hidden: !panelOpen });
+      if (!panelOpen) {
+        panelEl.classList.add("kb-btn-hidden");
+        document.body.style.marginRight = "";
+      }
       render();
       syncVisibleCommentsFromBackend({ notify: true });
       startPendingAiResumeLoop();
     }
     // badge 响应式更新：有高亮或评论时常驻显示
     updateBadge();
+    hydratePageCommentsFromBackend();
     setTimeout(capturePageExposureIfAllowed, 2500);
 
     // 检测受限 iframe（如 ChatGPT Deep Research），DOM 动态插入时也能捕获

@@ -72,6 +72,178 @@ if [ "$DEPS_OK" = false ]; then
   exit 1
 fi
 
+choose_qwen_endpoint_for_setup() {
+  echo ""
+  echo "  先选千问 API 类型。"
+  echo ""
+  echo "  1) 阿里云百炼 / 中国内地标准 API  普通百炼 API Key 通常选这个"
+  echo "  2) Qwen Global / 新加坡标准 API   海外或 Global Key 选这个"
+  echo "  3) Qwen Coding Plan / 中国内地    只有 Coding Plan 订阅用户选"
+  echo "  4) Qwen Coding Plan / Global      只有 Coding Plan 订阅用户选"
+  echo "  5) 手动填写 Base URL"
+  echo ""
+  read -p "  输入 1 / 2 / 3 / 4 / 5 后回车 [1]：" QWEN_ENDPOINT_CHOICE
+  QWEN_ENDPOINT_CHOICE="${QWEN_ENDPOINT_CHOICE:-1}"
+  case "$QWEN_ENDPOINT_CHOICE" in
+    1)
+      API_PROVIDER_LABEL="千问 / Qwen API（阿里云百炼 / 中国内地标准 API）"
+      API_BASE_URL_DEFAULT="https://dashscope.aliyuncs.com/compatible-mode/v1"
+      ;;
+    2)
+      API_PROVIDER_LABEL="千问 / Qwen API（Qwen Global / 新加坡标准 API）"
+      API_BASE_URL_DEFAULT="https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+      ;;
+    3)
+      API_PROVIDER_LABEL="千问 / Qwen API（Qwen Coding Plan / 中国内地）"
+      API_BASE_URL_DEFAULT="https://coding.dashscope.aliyuncs.com/v1"
+      ;;
+    4)
+      API_PROVIDER_LABEL="千问 / Qwen API（Qwen Coding Plan / Global）"
+      API_BASE_URL_DEFAULT="https://coding-intl.dashscope.aliyuncs.com/v1"
+      ;;
+    5)
+      API_PROVIDER_LABEL="千问 / Qwen API（自定义 endpoint）"
+      API_BASE_URL_DEFAULT=""
+      ;;
+    *)
+      echo "  ✗ 没看懂这个选择：$QWEN_ENDPOINT_CHOICE"
+      exit 1
+      ;;
+  esac
+}
+
+choose_qwen_model_for_setup() {
+  echo ""
+  echo "  再选默认模型。"
+  echo ""
+  echo "  1) qwen3.5-plus  推荐默认，OpenClaw Qwen provider 默认模型"
+  echo "  2) qwen3.6-plus  更强；标准 API 更适合，Coding Plan 可能不支持"
+  echo "  3) qwen-plus     保守兼容；旧百炼项目遇到不支持时选这个"
+  echo "  4) 手动填写模型名"
+  echo ""
+  read -p "  输入 1 / 2 / 3 / 4 后回车 [1]：" QWEN_MODEL_CHOICE
+  QWEN_MODEL_CHOICE="${QWEN_MODEL_CHOICE:-1}"
+
+  case "$QWEN_MODEL_CHOICE" in
+    1)
+      LLM_MODEL="qwen3.5-plus"
+      ;;
+    2)
+      LLM_MODEL="qwen3.6-plus"
+      ;;
+    3)
+      LLM_MODEL="qwen-plus"
+      ;;
+    4)
+      read_with_default_for_setup "Model" "" LLM_MODEL
+      ;;
+    *)
+      echo "  ✗ 没看懂这个模型选择：$QWEN_MODEL_CHOICE"
+      exit 1
+      ;;
+  esac
+}
+
+choose_openrouter_model_for_setup() {
+  echo ""
+  echo "  OpenRouter 的模型名通常长这样：openai/gpt-4o-mini。"
+  echo "  如果不知道选哪个，直接回车用默认模型；如果你在 OpenRouter 网站复制了模型 ID，就选 2。"
+  echo ""
+  echo "  1) openai/gpt-4o-mini  默认，便宜稳妥"
+  echo "  2) 手动填写 OpenRouter 模型 ID"
+  echo ""
+  read -p "  输入 1 / 2 后回车 [1]：" OPENROUTER_MODEL_CHOICE
+  OPENROUTER_MODEL_CHOICE="${OPENROUTER_MODEL_CHOICE:-1}"
+
+  case "$OPENROUTER_MODEL_CHOICE" in
+    1)
+      LLM_MODEL="openai/gpt-4o-mini"
+      ;;
+    2)
+      read_with_default_for_setup "OpenRouter Model ID" "" LLM_MODEL
+      ;;
+    *)
+      echo "  ✗ 没看懂这个模型选择：$OPENROUTER_MODEL_CHOICE"
+      exit 1
+      ;;
+  esac
+}
+
+choose_api_preset() {
+  echo "  请选择 API 服务商："
+  echo ""
+  echo "  1) 千问 / Qwen API    有阿里云百炼或 Qwen API Key 的用户选这个"
+  echo "  2) OpenRouter API     有 OpenRouter API Key 的用户选这个"
+  echo ""
+  read -p "  输入 1 / 2 后回车 [1]：" API_CHOICE
+  API_CHOICE="${API_CHOICE:-1}"
+
+  case "$API_CHOICE" in
+    1|qwen|Qwen|QWEN|dashscope|DashScope|bailian|Bailian|千问|百炼)
+      LLM_API_PROVIDER="qwen"
+      choose_qwen_endpoint_for_setup
+      ;;
+    2|openrouter|OpenRouter)
+      LLM_API_PROVIDER="openrouter"
+      API_PROVIDER_LABEL="OpenRouter API"
+      API_BASE_URL_DEFAULT="https://openrouter.ai/api/v1"
+      ;;
+    *)
+      echo "  ✗ 没看懂这个选择：$API_CHOICE"
+      exit 1
+      ;;
+  esac
+}
+
+read_api_key_for_setup() {
+  echo ""
+  echo "  请粘贴 API Key 后按回车。为安全起见，粘贴时屏幕不会显示字符，这是正常的。"
+  read -s -p "  API Key（不会显示，粘贴后按回车）：" LLM_API_KEY
+  echo ""
+  if [ -z "$LLM_API_KEY" ]; then
+    echo "  ✗ 没有收到 API Key。请确认终端窗口处于选中状态，然后重新运行脚本。"
+    exit 1
+  fi
+  echo "  ✓ 已收到 API Key（长度 ${#LLM_API_KEY} 位，已隐藏，不会打印原文）"
+}
+
+read_with_default_for_setup() {
+  local prompt="$1"
+  local default_value="$2"
+  local result_var="$3"
+  local entered_value=""
+  if [ -n "$default_value" ]; then
+    read -p "  $prompt [$default_value]：" entered_value
+    entered_value="${entered_value:-$default_value}"
+  else
+    while [ -z "$entered_value" ]; do
+      read -p "  $prompt：" entered_value
+      if [ -z "$entered_value" ]; then
+        echo "  这里不能为空。"
+      fi
+    done
+  fi
+  printf -v "$result_var" "%s" "$entered_value"
+}
+
+configure_api_settings() {
+  LLM_API_PROVIDER=""
+  LLM_API_KEY=""
+  LLM_BASE_URL=""
+  LLM_MODEL=""
+
+  choose_api_preset
+  read_api_key_for_setup
+  read_with_default_for_setup "LLM Base URL" "$API_BASE_URL_DEFAULT" LLM_BASE_URL
+  LLM_BASE_URL="${LLM_BASE_URL%/}"
+  if [ "$LLM_API_PROVIDER" = "qwen" ]; then
+    choose_qwen_model_for_setup
+  else
+    choose_openrouter_model_for_setup
+  fi
+  echo "  ✓ API 标准模式：$API_PROVIDER_LABEL / $LLM_MODEL"
+}
+
 # ── 2. 安装 Python 依赖 ───────────────────────────────────
 echo ""
 echo "→ 安装 Python 依赖..."
@@ -112,20 +284,24 @@ if [ ! -f "$CONFIG_FILE" ]; then
 
   echo ""
   echo "→ 配置 LLM..."
-  echo "  mem-ai 会优先使用本地 Claude Code / Codex（如果已安装），否则使用 OpenAI-compatible API。"
-  echo "  API 可接 OpenRouter / OpenAI / DeepSeek / Kimi 等兼容接口。"
+  echo "  先支持 4 种模型服务：Claude Code、Codex、千问 / Qwen API、OpenRouter API。"
   echo ""
   if [ -z "$CLAUDE_BIN" ] && [ -z "$CODEX_BIN" ]; then
-    echo "  未检测到本地 Claude Code / Codex，请配置 API key。"
+    echo "  未检测到本地 Claude Code / Codex，请配置 API 标准模式。"
+    configure_api_settings
   else
-    echo "  已检测到本地 agent。API key 可留空；留空时本地 agent 失败不会自动走 API。"
+    LLM_API_PROVIDER=""
+    LLM_API_KEY=""
+    LLM_BASE_URL=""
+    LLM_MODEL=""
+    echo "  已检测到本地 agent。API 标准模式可选；不配置时本地 agent 失败不会自动走 API。"
+    read -p "  是否现在配置 API 标准模式？[y/N] " CONFIGURE_API
+    if [ "$CONFIGURE_API" = "y" ] || [ "$CONFIGURE_API" = "Y" ]; then
+      configure_api_settings
+    else
+      echo "  跳过 API 标准模式。之后可运行 sh choose_ai_service.sh 切换。"
+    fi
   fi
-  read -s -p "  LLM API Key（可选，回车跳过）: " LLM_API_KEY
-  echo ""
-  read -p "  LLM Base URL [https://openrouter.ai/api/v1]: " LLM_BASE_URL
-  LLM_BASE_URL="${LLM_BASE_URL:-https://openrouter.ai/api/v1}"
-  read -p "  LLM Model [openai/gpt-4o-mini]: " LLM_MODEL
-  LLM_MODEL="${LLM_MODEL:-openai/gpt-4o-mini}"
 
   if [ -z "$LLM_API_KEY" ] && [ -z "$CLAUDE_BIN" ] && [ -z "$CODEX_BIN" ]; then
     echo "  ✗ 未配置可用 LLM 后端。请填写 API key，或先安装 Claude Code / Codex CLI。"
@@ -141,21 +317,32 @@ if [ ! -f "$CONFIG_FILE" ]; then
     LLM_PROVIDER="${AVAILABLE_PROVIDERS[0]}"
   else
     echo ""
-    echo "  检测到多个可用 LLM 后端，请固定选择一个。之后如需切换，手动修改 ~/.kb_config 后重启。"
-    echo "  可选：${AVAILABLE_PROVIDERS[*]}"
+    echo "  检测到多个可用模型服务，请选择默认使用哪一个。之后如需切换，运行 sh choose_ai_service.sh。"
     while true; do
-      read -p "  固定使用哪个后端？[${AVAILABLE_PROVIDERS[*]}]: " LLM_PROVIDER
-      VALID_PROVIDER=false
-      for p in "${AVAILABLE_PROVIDERS[@]}"; do
-        if [ "$LLM_PROVIDER" = "$p" ]; then
-          VALID_PROVIDER=true
-          break
-        fi
+      MODEL_OPTION_LABELS=()
+      MODEL_OPTION_VALUES=()
+      if [ -n "$CLAUDE_BIN" ]; then
+        MODEL_OPTION_LABELS+=("Claude Code 直连")
+        MODEL_OPTION_VALUES+=("claude_code")
+      fi
+      if [ -n "$CODEX_BIN" ]; then
+        MODEL_OPTION_LABELS+=("Codex 直连")
+        MODEL_OPTION_VALUES+=("codex_cli")
+      fi
+      if [ -n "$LLM_API_KEY" ]; then
+        MODEL_OPTION_LABELS+=("${API_PROVIDER_LABEL} / ${LLM_MODEL}")
+        MODEL_OPTION_VALUES+=("api")
+      fi
+
+      for i in "${!MODEL_OPTION_VALUES[@]}"; do
+        echo "  $((i + 1))) ${MODEL_OPTION_LABELS[$i]}"
       done
-      if [ "$VALID_PROVIDER" = true ]; then
+      read -p "  输入编号后回车：" MODEL_PROVIDER_CHOICE
+      if [[ "$MODEL_PROVIDER_CHOICE" =~ ^[0-9]+$ ]] && [ "$MODEL_PROVIDER_CHOICE" -ge 1 ] && [ "$MODEL_PROVIDER_CHOICE" -le "${#MODEL_OPTION_VALUES[@]}" ]; then
+        LLM_PROVIDER="${MODEL_OPTION_VALUES[$((MODEL_PROVIDER_CHOICE - 1))]}"
         break
       fi
-      echo "  请输入上面列出的一个值。"
+      echo "  请输入上面列出的编号。"
     done
   fi
 
@@ -177,6 +364,7 @@ NOTION_DATABASE_ID=${DATABASE_ID}
 MEMAI_LLM_PROVIDER=${LLM_PROVIDER}
 MEMAI_LOCAL_AGENT=${LOCAL_AGENT}
 MEMAI_LLM_FALLBACK=${LLM_FALLBACK}
+MEMAI_LLM_API_PROVIDER=${LLM_API_PROVIDER}
 MEMAI_LLM_API_KEY=${LLM_API_KEY}
 MEMAI_LLM_BASE_URL=${LLM_BASE_URL}
 MEMAI_LLM_MODEL=${LLM_MODEL}

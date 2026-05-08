@@ -330,14 +330,45 @@ def fetch_last_thinking_summary(conn: sqlite3.Connection):
     return dict(row) if row else None
 
 
-def call_claude(prompt: str, timeout_sec: int = 120) -> str:
-    """Legacy name kept for call-site stability. Calls configured LLM provider."""
+def call_llm_with_meta(prompt: str, timeout_sec: int = 120) -> tuple[str, dict]:
+    """Call configured LLM provider and return content plus runtime provider metadata."""
+    client = get_llm_client()
     try:
-        return get_llm_client().generate_text(prompt, timeout=timeout_sec)
+        content = client.generate_text(prompt, timeout=timeout_sec)
+        return content, client.last_call_meta
     except LLMTimeoutError as e:
+        if client.last_call_meta:
+            client.last_call_meta["status"] = "timeout"
         raise RuntimeError(f"llm timeout after {timeout_sec}s") from e
     except LLMError as e:
         raise RuntimeError(str(e)) from e
+
+
+def call_claude(prompt: str, timeout_sec: int = 120) -> str:
+    """Legacy name kept for call-site stability. Calls configured LLM provider."""
+    content, _meta = call_llm_with_meta(prompt, timeout_sec=timeout_sec)
+    return content
+
+
+def _update_job_runtime_meta(conn: sqlite3.Connection, job_id: int, updates: dict):
+    if not updates:
+        return
+    row = conn.execute("SELECT payload_json FROM jobs WHERE id=?", (job_id,)).fetchone()
+    try:
+        payload = json.loads((row[0] if row else "") or "{}")
+        if not isinstance(payload, dict):
+            payload = {}
+    except Exception:
+        payload = {}
+    runtime = payload.get("_runtime")
+    if not isinstance(runtime, dict):
+        runtime = {}
+    runtime.update(updates)
+    payload["_runtime"] = runtime
+    conn.execute(
+        "UPDATE jobs SET payload_json=? WHERE id=?",
+        (json.dumps(payload, ensure_ascii=False), job_id),
+    )
 
 
 def parse_thinking_output(stdout: str) -> dict:
@@ -466,9 +497,13 @@ def handle_synthesize_thinking(conn: sqlite3.Connection, job: dict):
     # 3. 调 LLM
     log(f"calling LLM (synthesize_thinking, {len(comments)} comments, prompt {len(prompt)} chars)")
     t0 = time.time()
-    stdout = call_claude(prompt, timeout_sec=180)
+    stdout, llm_meta = call_llm_with_meta(prompt, timeout_sec=180)
+    _update_job_runtime_meta(conn, job["id"], {"llm_call": llm_meta})
     elapsed = round(time.time() - t0, 1)
-    log(f"LLM returned {len(stdout)} chars in {elapsed}s")
+    log(
+        f"LLM returned {len(stdout)} chars in {elapsed}s "
+        f"provider={llm_meta.get('provider')} model={llm_meta.get('model')}"
+    )
 
     # 4. 解析输出
     data = parse_thinking_output(stdout)
@@ -622,7 +657,12 @@ def handle_synthesize_skills(conn: sqlite3.Connection, job: dict):
     )
 
     log(f"job#{job['id']} synthesize_skills: calling LLM with {len(rules)} rules")
-    content = call_claude(prompt, timeout_sec=180)
+    content, llm_meta = call_llm_with_meta(prompt, timeout_sec=180)
+    _update_job_runtime_meta(conn, job["id"], {"llm_call": llm_meta})
+    log(
+        f"job#{job['id']} synthesize_skills: provider={llm_meta.get('provider')} "
+        f"model={llm_meta.get('model')}"
+    )
     parsed = _safe_parse_curated_json(content)
 
     valid_ids = {r.get("id") for r in rules}
@@ -898,7 +938,12 @@ def handle_memory_growth_for_comment(conn: sqlite3.Connection, job: dict):
         agent_reply=(agent_reply or "")[:1600],
     )
     log(f"job#{job['id']} memory_growth: calling LLM for comment#{comment_id}")
-    content = call_claude(prompt, timeout_sec=180)
+    content, llm_meta = call_llm_with_meta(prompt, timeout_sec=180)
+    _update_job_runtime_meta(conn, job["id"], {"llm_call": llm_meta})
+    log(
+        f"job#{job['id']} memory_growth: provider={llm_meta.get('provider')} "
+        f"model={llm_meta.get('model')} comment#{comment_id}"
+    )
     parsed = _safe_parse_growth_json(content)
     now = _growth_now()
 

@@ -2259,15 +2259,46 @@ def _get_child_env():
     env["PATH"] = path
     return env
 
-def _call_claude(prompt: str, system_prompt: str, timeout: int = 1800) -> tuple:
-    """Legacy name kept for call-site stability. Calls configured LLM provider."""
+def _llm_no_call_meta(reason: str) -> dict:
+    """Runtime marker for paths that intentionally do not call an LLM."""
     try:
-        content = get_llm_client().generate_text(prompt, system_prompt=system_prompt, timeout=timeout)
-        return content, 0
+        status = get_llm_status()
+    except Exception:
+        status = {}
+    return {
+        "provider": status.get("selected_provider"),
+        "provider_config": status.get("provider_config"),
+        "local_agent": status.get("local_agent"),
+        "api_provider": status.get("api_provider"),
+        "api_base_url": status.get("api_base_url"),
+        "model": status.get("api_model") or "default",
+        "status": "not_called",
+        "reason": reason,
+    }
+
+
+def _call_llm_with_meta(prompt: str, system_prompt: str, timeout: int = 1800) -> tuple:
+    """Call the configured LLM provider and return content, rc, and provider metadata."""
+    client = get_llm_client()
+    try:
+        content = client.generate_text(prompt, system_prompt=system_prompt, timeout=timeout)
+        return content, 0, client.last_call_meta
     except LLMTimeoutError as e:
+        if client.last_call_meta:
+            client.last_call_meta["status"] = "timeout"
         raise subprocess.TimeoutExpired(cmd="llm_provider", timeout=timeout) from e
     except LLMError as e:
-        return str(e)[:1000], 1
+        return str(e)[:1000], 1, client.last_call_meta
+
+
+def _call_claude(prompt: str, system_prompt: str, timeout: int = 1800) -> tuple:
+    """Legacy name kept for call-site stability. Calls configured LLM provider."""
+    content, rc, meta = _call_llm_with_meta(prompt, system_prompt, timeout)
+    print(
+        f"[agent_api] llm call provider={meta.get('provider')} "
+        f"model={meta.get('model')} status={meta.get('status')} rc={rc}"
+    )
+    return content, rc
 
 def _parse_router_json(text: str) -> dict:
     """从路由器回复中提取 JSON，支持多层降级"""
@@ -2350,6 +2381,7 @@ def run_router(page_url: str, page_title: str, selected_text: str,
     """调用路由器 prompt（Step 1），返回解析后的 JSON dict"""
     if _codex_router_should_use_heuristic():
         result = _heuristic_router_result(comment, selected_text, page_title)
+        result["_router_call"] = _llm_no_call_meta("codex_cli_heuristic_router")
         print(f"[agent_api] router heuristic: intent={result.get('intent')} role={result.get('role')} provider=codex_cli")
         return result
 
@@ -2370,13 +2402,19 @@ def run_router(page_url: str, page_title: str, selected_text: str,
     system_prompt = "你是意图路由器。只输出 JSON，不要任何其他文字、解释或 markdown 代码块。"
 
     try:
-        content, rc = _call_claude(prompt, system_prompt, timeout=30)
+        content, rc, call_meta = _call_llm_with_meta(prompt, system_prompt, timeout=30)
         if rc != 0:
             print(f"[agent_api] router error: rc={rc} content={content[:200]}")
             return None
         result = _parse_router_json(content)
         if result:
-            print(f"[agent_api] router: intent={result.get('intent')} role={result.get('role')} confidence={result.get('confidence')}")
+            result["_router_call"] = {**call_meta, "stage": "router"}
+            print(
+                "[agent_api] router: "
+                f"intent={result.get('intent')} role={result.get('role')} "
+                f"confidence={result.get('confidence')} provider={call_meta.get('provider')} "
+                f"model={call_meta.get('model')}"
+            )
         return result
     except subprocess.TimeoutExpired:
         print("[agent_api] router timeout (30s)")
@@ -2787,18 +2825,24 @@ def _trigger_learning_layer(comment_id: int, user_comment: str, agent_reply: str
 
 def run_agent_v2(comment_id: int, intent: str, role: str, prompt: str,
                  plan: str = "", quick_response: str = "", learned: list = None,
-                 user_comment: str = "", context_pack: dict = None):
+                 user_comment: str = "", context_pack: dict = None,
+                 router_call: dict = None):
     """后台线程：v2 agent 执行，结果写回 replies 表"""
     import time
     start_time = time.time()
     status = "error"
     content = ""
+    step2_call = None
+    router_call = router_call or _llm_no_call_meta("manual_route_or_router_unavailable")
 
     # 如果有 quick_response，直接用，不调 Step 2
     if quick_response and quick_response.strip():
         content = quick_response.strip()
         status = "success"
-        print(f"[agent_api] v2 quick_response for comment_id={comment_id} role={role}")
+        print(
+            f"[agent_api] v2 quick_response for comment_id={comment_id} role={role} "
+            f"router_provider={router_call.get('provider')} model={router_call.get('model')}"
+        )
     else:
         # 需要调 Step 2
         print(f"[agent_api] v2 Step 2: comment_id={comment_id} role={role} prompt_len={len(prompt)}")
@@ -2809,14 +2853,23 @@ def run_agent_v2(comment_id: int, intent: str, role: str, prompt: str,
             "否则控制在 300-500 字以内，最多 5 个要点。不要为了显得全面而展开所有分支。"
         )
         try:
-            content, rc = _call_claude(prompt, system_prompt, timeout=1800)
+            content, rc, step2_call = _call_llm_with_meta(prompt, system_prompt, timeout=1800)
+            print(
+                f"[agent_api] v2 Step 2 provider={step2_call.get('provider')} "
+                f"model={step2_call.get('model')} comment_id={comment_id}"
+            )
             if rc == 0 and content:
                 status = "success"
             else:
                 content = f"Agent 执行出错（returncode={rc}）：{content[:500]}"
         except subprocess.TimeoutExpired:
+            step2_call = _llm_no_call_meta("step2_timeout")
+            step2_call["status"] = "timeout"
             content = "Agent 超时（30分钟），请重试或拆解任务。"
         except Exception as e:
+            step2_call = _llm_no_call_meta("step2_exception")
+            step2_call["status"] = "error"
+            step2_call["error"] = str(e)[:500]
             content = f"Agent 调用失败：{str(e)}"
 
     elapsed = round(time.time() - start_time, 1)
@@ -2829,12 +2882,23 @@ def run_agent_v2(comment_id: int, intent: str, role: str, prompt: str,
     # 判断是否为 plan 回复（researcher 规划阶段的产出）
     is_plan_response = (intent == "task" and not plan and status == "success"
                         and ("确认" in content or "执行」" in content))
+    answer_source = "router_quick_response" if quick_response and quick_response.strip() else "step2"
+    answer_call = router_call if answer_source == "router_quick_response" else (step2_call or {})
 
     # 构建 debug_meta
     debug_meta = json.dumps({
         "version": "v2",
         "intent": intent,
         "role": role,
+        "llm_provider": answer_call.get("provider"),
+        "llm_model": answer_call.get("model"),
+        "llm_api_provider": answer_call.get("api_provider"),
+        "llm": {
+            "answer_source": answer_source,
+            "answer_call": answer_call,
+            "router_call": router_call,
+            "step2_call": step2_call,
+        },
         "elapsed_s": elapsed,
         "prompt_tokens_est": len(prompt) // 4,
         "reply_tokens_est": len(content) // 4,
@@ -2909,14 +2973,20 @@ def run_agent_v1_fallback(comment_id: int, agent_type: str,
     )
     status = "error"
     content = ""
+    llm_call = None
     try:
-        content, rc = _call_claude(prompt, system_prompt, timeout=1800)
+        content, rc, llm_call = _call_llm_with_meta(prompt, system_prompt, timeout=1800)
         status = "success" if rc == 0 and content else "error"
         if rc != 0:
             content = f"Agent 执行出错：{content[:500]}"
     except subprocess.TimeoutExpired:
+        llm_call = _llm_no_call_meta("v1_fallback_timeout")
+        llm_call["status"] = "timeout"
         content = "Agent 超时（30分钟），请重试。"
     except Exception as e:
+        llm_call = _llm_no_call_meta("v1_fallback_exception")
+        llm_call["status"] = "error"
+        llm_call["error"] = str(e)[:500]
         content = f"Agent 调用失败：{str(e)}"
 
     elapsed = round(time.time() - start_time, 1)
@@ -2924,6 +2994,15 @@ def run_agent_v1_fallback(comment_id: int, agent_type: str,
         "version": "v1_fallback",
         "intent": "dialogue",
         "role": role,
+        "llm_provider": (llm_call or {}).get("provider"),
+        "llm_model": (llm_call or {}).get("model"),
+        "llm_api_provider": (llm_call or {}).get("api_provider"),
+        "llm": {
+            "answer_source": "v1_fallback",
+            "answer_call": llm_call,
+            "router_call": None,
+            "step2_call": llm_call,
+        },
         "elapsed_s": elapsed,
         "prompt_tokens_est": len(prompt) // 4,
         "reply_tokens_est": len(content) // 4,
@@ -3109,7 +3188,8 @@ def create_comment(body: CommentCreate):
             _conn.commit()
             _conn.close()
             run_agent_v2(comment_id, intent, role, prompt, user_comment=cleaned_comment,
-                         context_pack=context_pack)
+                         context_pack=context_pack,
+                         router_call=_llm_no_call_meta("manual_v1_agent_route"))
             return
 
         # 路径 2：v2 路由器
@@ -3142,7 +3222,8 @@ def create_comment(body: CommentCreate):
 
         run_agent_v2(comment_id, intent, role, prompt,
                      quick_response=quick_response, learned=learned,
-                     user_comment=cleaned_comment, context_pack=context_pack)
+                     user_comment=cleaned_comment, context_pack=context_pack,
+                     router_call=router_result.get("_router_call"))
 
     thread = threading.Thread(target=_dispatch, daemon=True)
     thread.start()
@@ -3363,7 +3444,8 @@ def rerun_agent(comment_id: int):
                            {"plan_confirmed": True, "plan": plan_text[:500]})
             run_agent_v2(comment_id, "task", role, prompt,
                          plan=f"用户已确认",
-                         user_comment=comment, context_pack=context_pack)
+                         user_comment=comment, context_pack=context_pack,
+                         router_call=_llm_no_call_meta("plan_confirmed_skip_router"))
             return
 
         # ── 正常路径：走 v2 路由器 ──
@@ -3385,7 +3467,8 @@ def rerun_agent(comment_id: int):
         write_debug_log(comment_id, f"v2_rerun_{role}", prompt, router_result)
         run_agent_v2(comment_id, intent, role, prompt,
                      quick_response=quick_response, learned=learned,
-                     user_comment=comment, context_pack=context_pack)
+                     user_comment=comment, context_pack=context_pack,
+                     router_call=router_result.get("_router_call"))
 
     thread = threading.Thread(target=_rerun, daemon=True)
     thread.start()
@@ -3788,6 +3871,45 @@ def debug_env():
         "db_path": DB_PATH,
         "db_exists": os.path.exists(DB_PATH),
     }
+
+
+@app.get("/runtime/status")
+def runtime_status():
+    """Current runtime provider plus queued/running background LLM jobs."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        counts = {
+            row["status"]: row["n"]
+            for row in conn.execute(
+                "SELECT status, COUNT(*) AS n FROM jobs GROUP BY status"
+            ).fetchall()
+        }
+        active_rows = conn.execute(
+            """SELECT id, kind, status, attempts, created_at, started_at, payload_json
+               FROM jobs
+               WHERE status IN ('queued','running')
+               ORDER BY created_at ASC
+               LIMIT 20"""
+        ).fetchall()
+        active_jobs = []
+        for row in active_rows:
+            item = dict(row)
+            item["payload_json"] = _json_obj(item.get("payload_json") or "{}")
+            active_jobs.append(item)
+    finally:
+        conn.close()
+    return {
+        "data_dir": DATA_DIR,
+        "db_path": DB_PATH,
+        "llm": get_llm_status(),
+        "jobs": {
+            "counts": counts,
+            "active_count": len(active_jobs),
+            "active": active_jobs,
+        },
+    }
+
 
 @app.get("/config")
 def get_config():

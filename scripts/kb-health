@@ -82,7 +82,8 @@ def port_listening(port):
 
 def http_get(url, timeout=3):
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as r:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(url, timeout=timeout) as r:
             return r.status, r.read().decode()
     except urllib.error.HTTPError as e:
         return e.code, ""

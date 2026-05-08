@@ -151,14 +151,14 @@ This is an active prototype, not a finished product.
 | Node.js | 18+ | `node --version` |
 | Chrome | 最新 | 用于加载插件 |
 | Notion 账号 | — | 用于存储批注 |
-| LLM 后端 | — | 二选一：OpenAI-compatible API key，或本地 Claude Code / Codex CLI |
+| LLM 后端 | — | 四选一：Claude Code、Codex CLI、千问 / Qwen API、OpenRouter API |
 
 可选本地后端：
 
 - Claude Code：`npm install -g @anthropic-ai/claude-code`，适合已有 Claude 订阅的用户
 - Codex CLI：适合已有 Codex 本地环境的用户
 
-没有本地后端也能使用标准模式，配置 OpenRouter / OpenAI / DeepSeek / Kimi 等兼容 API 即可。
+没有本地后端也能使用标准模式，先支持千问 / Qwen API 和 OpenRouter API。
 
 ---
 
@@ -173,16 +173,29 @@ cd knowledge-base-extension
 
 ### 第二步：准备 LLM 后端
 
-mem-ai 支持两种方式：
+mem-ai 先支持 4 种模型服务：
 
-1. 本地后端：如果你已经安装并登录 Claude Code / Codex CLI，可以在安装脚本里固定选择一个后端，复用本地订阅额度。
-2. API 标准模式：如果没有本地后端，在 `setup.sh` 中填写 OpenAI-compatible API key。
+1. Claude Code 直连：已安装并登录 Claude Code 的用户选这个。
+2. Codex 直连：已安装并登录 Codex CLI 的用户选这个。
+3. 千问 / Qwen API：有阿里云百炼或 Qwen API Key 的用户选这个。
+4. OpenRouter API：有 OpenRouter API Key 的用户选这个。
 
-如果同一台机器同时有 Claude Code 和 Codex CLI，安装脚本会要求你手动选择一个固定后端。之后想切换时，运行：
+之后想切换默认模型服务时，运行：
 
 ```bash
 sh choose_ai_service.sh
 ```
+
+菜单会先让你选择 Claude Code / Codex / 千问 / OpenRouter。千问用户选 `3) 千问 / Qwen API` 后，脚本会继续一步步选择 API 类型和默认模型：
+
+- 阿里云百炼 / 中国内地标准 API：`https://dashscope.aliyuncs.com/compatible-mode/v1`
+- Qwen Global / 新加坡标准 API：`https://dashscope-intl.aliyuncs.com/compatible-mode/v1`
+- Qwen Coding Plan / 中国内地：`https://coding.dashscope.aliyuncs.com/v1`
+- Qwen Coding Plan / Global：`https://coding-intl.dashscope.aliyuncs.com/v1`
+
+API Key 输入时不会显示字符，这是为了避免密钥出现在屏幕上；粘贴后按回车，脚本会提示「已收到 API Key」。
+
+切换前脚本会检查后台 worker 和 jobs 队列。如果还有 `queued` / `running` 的记忆增长或整理任务，它会先列出来并让你确认是否继续，避免前台回复切到新服务、后台任务还在旧服务里跑。新产生的 AI 回复会在 `debug_meta` 里记录实际 provider/model；新后台 job 会在 `payload_json._runtime.llm_call` 里记录实际调用服务。
 
 Claude Code 用户可先登录：
 
@@ -240,7 +253,7 @@ bash setup.sh
 - 检查所有依赖是否就绪
 - 安装 Python 依赖（fastapi、uvicorn）
 - 引导你输入 Notion Token 和 Database ID，写入 `~/.kb_config`
-- 引导你固定选择一个 LLM 后端：Claude Code / Codex / API
+- 引导你固定选择一个模型服务：Claude Code / Codex / 千问 / OpenRouter
 - 初始化本地 SQLite 数据库
 - 验证 Notion Token 是否有效
 
@@ -401,7 +414,7 @@ cat ~/.knowledge-base-extension/learned_rules.json
 
 **Q: 没有 Claude Code / Codex 能用吗？**
 
-可以。运行 `bash setup.sh` 时填写 OpenRouter / OpenAI / DeepSeek / Kimi 等 OpenAI-compatible API key，即可使用标准模式。标准模式支持评论区回复、记忆笔记本、profile / skills / thinking 蒸馏；本地文件维护和长链路交付任务需要本地 agent 后端。
+可以。运行 `bash setup.sh` 时选择千问 / Qwen API 或 OpenRouter API，即可使用标准模式。标准模式支持评论区回复、记忆笔记本、profile / skills / thinking 蒸馏；本地文件维护和长链路交付任务需要本地 agent 后端。
 
 **Q: 我有 Claude Code，能不额外花 API 钱吗？**
 
@@ -422,7 +435,7 @@ claude login
 sh choose_ai_service.sh
 ```
 
-它会让你在 3 个选项里选：Codex 直连、Claude Code 直连、自己的 API，并在保存后询问是否立刻重启服务。
+它会让你在 4 个选项里选：Claude Code 直连、Codex 直连、千问 / Qwen API、OpenRouter API，并在保存后询问是否立刻重启服务。
 
 **Q: 插件配置页保存后不生效**
 

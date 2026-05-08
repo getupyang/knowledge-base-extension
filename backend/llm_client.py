@@ -15,9 +15,10 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
@@ -100,6 +101,9 @@ def _api_key() -> Optional[str]:
         "MEMAI_LLM_API_KEY",
         "OPENROUTER_API_KEY",
         "OPENAI_API_KEY",
+        "DASHSCOPE_API_KEY",
+        "QWEN_API_KEY",
+        "BAILIAN_API_KEY",
         "DEEPSEEK_API_KEY",
         "MOONSHOT_API_KEY",
         "KIMI_API_KEY",
@@ -115,11 +119,16 @@ def _api_base_url() -> str:
         os.environ.get("MEMAI_LLM_BASE_URL")
         or os.environ.get("OPENAI_BASE_URL")
         or os.environ.get("OPENAI_API_BASE")
+        or os.environ.get("DASHSCOPE_BASE_URL")
+        or os.environ.get("QWEN_BASE_URL")
+        or os.environ.get("BAILIAN_BASE_URL")
     )
     if explicit:
         return explicit.rstrip("/")
     if os.environ.get("OPENROUTER_API_KEY"):
         return "https://openrouter.ai/api/v1"
+    if os.environ.get("DASHSCOPE_API_KEY") or os.environ.get("QWEN_API_KEY") or os.environ.get("BAILIAN_API_KEY"):
+        return "https://dashscope.aliyuncs.com/compatible-mode/v1"
     if os.environ.get("DEEPSEEK_API_KEY"):
         return "https://api.deepseek.com"
     if os.environ.get("MOONSHOT_API_KEY") or os.environ.get("KIMI_API_KEY"):
@@ -133,6 +142,8 @@ def _default_model(base_url: str) -> str:
         return configured
     if "deepseek" in base_url:
         return "deepseek-chat"
+    if "dashscope" in base_url or "aliyuncs.com/compatible-mode" in base_url:
+        return "qwen3.5-plus"
     if "moonshot" in base_url:
         return "kimi-latest"
     if "openrouter" in base_url:
@@ -365,10 +376,31 @@ class OpenAICompatibleProvider(BaseProvider):
             raise LLMCallError(f"api response parse error: {str(e)} raw={raw[:500]}") from e
 
 
+def _provider_call_meta(provider: BaseProvider, model: Optional[str] = None,
+                        fallback_from: str = "") -> dict[str, Any]:
+    provider_model = getattr(provider, "model", None)
+    base_url = getattr(provider, "base_url", None)
+    effective_model = model or provider_model or os.environ.get("MEMAI_LLM_MODEL", "")
+    if provider.name == "codex_cli":
+        effective_model = model or os.environ.get("MEMAI_CODEX_MODEL", "") or "default"
+    elif provider.name == "claude_code":
+        effective_model = model or os.environ.get("MEMAI_CLAUDE_MODEL", "") or "default"
+    return {
+        "provider": provider.name,
+        "provider_config": os.environ.get("MEMAI_LLM_PROVIDER", "auto"),
+        "local_agent": os.environ.get("MEMAI_LOCAL_AGENT", "none"),
+        "api_provider": os.environ.get("MEMAI_LLM_API_PROVIDER", ""),
+        "api_base_url": base_url,
+        "model": effective_model,
+        "fallback_used": bool(fallback_from),
+        "fallback_from": fallback_from,
+    }
+
+
 def _provider_from_name(name: str) -> BaseProvider:
     if name == "mock":
         return MockProvider()
-    if name in {"api", "openai", "openai_compatible", "openrouter"}:
+    if name in {"api", "openai", "openai_compatible", "openrouter", "qwen", "dashscope", "bailian"}:
         return OpenAICompatibleProvider()
     if name == "claude_code":
         return ClaudeCodeProvider()
@@ -435,6 +467,7 @@ def _extract_json(text: str) -> Any:
 @dataclass
 class LLMClient:
     provider: Optional[BaseProvider] = None
+    last_call_meta: dict[str, Any] = field(default_factory=dict)
 
     def _current_provider(self) -> BaseProvider:
         if self.provider is None:
@@ -449,13 +482,46 @@ class LLMClient:
         model: Optional[str] = None,
     ) -> str:
         primary = self._current_provider()
+        started = time.time()
+        meta = _provider_call_meta(primary, model=model)
+        self.last_call_meta = {**meta, "status": "running"}
         try:
-            return primary.generate_text(prompt, system_prompt=system_prompt, timeout=timeout, model=model)
-        except LLMError:
+            content = primary.generate_text(prompt, system_prompt=system_prompt, timeout=timeout, model=model)
+            self.last_call_meta = {
+                **meta,
+                "status": "success",
+                "elapsed_s": round(time.time() - started, 3),
+            }
+            return content
+        except LLMError as primary_error:
             fallback = os.environ.get("MEMAI_LLM_FALLBACK", "api").strip().lower()
             if primary.name != "api" and fallback == "api" and _api_key():
                 api_provider = OpenAICompatibleProvider()
-                return api_provider.generate_text(prompt, system_prompt=system_prompt, timeout=timeout, model=model)
+                fallback_started = time.time()
+                fallback_meta = _provider_call_meta(api_provider, model=model, fallback_from=primary.name)
+                self.last_call_meta = {**fallback_meta, "status": "running"}
+                try:
+                    content = api_provider.generate_text(prompt, system_prompt=system_prompt, timeout=timeout, model=model)
+                    self.last_call_meta = {
+                        **fallback_meta,
+                        "status": "success",
+                        "elapsed_s": round(time.time() - fallback_started, 3),
+                    }
+                    return content
+                except LLMError as fallback_error:
+                    self.last_call_meta = {
+                        **fallback_meta,
+                        "status": "error",
+                        "elapsed_s": round(time.time() - fallback_started, 3),
+                        "error": str(fallback_error)[:500],
+                    }
+                    raise
+            self.last_call_meta = {
+                **meta,
+                "status": "error",
+                "elapsed_s": round(time.time() - started, 3),
+                "error": str(primary_error)[:500],
+            }
             raise
 
     def generate_json(
@@ -481,6 +547,8 @@ def get_llm_status() -> dict[str, Any]:
     status: dict[str, Any] = {
         "provider_config": os.environ.get("MEMAI_LLM_PROVIDER", "auto"),
         "local_agent": os.environ.get("MEMAI_LOCAL_AGENT", "none"),
+        "api_provider": os.environ.get("MEMAI_LLM_API_PROVIDER", ""),
+        "api_model": os.environ.get("MEMAI_LLM_MODEL", ""),
         "api_key_configured": bool(_api_key()),
         "api_base_url": _api_base_url() if _api_key() else None,
         "claude_code": {"available": bool(claude_bin), "bin": claude_bin},

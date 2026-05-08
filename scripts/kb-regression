@@ -303,6 +303,21 @@ class Regression:
             "Boolean(c.agentCommentId) || aiReplies.length > 0" not in content,
             "agentCommentId only means the comment was synced to backend; it must not hide the first AI summon entry",
         )
+        assert_true(
+            "function _findExactTextRange(excerpt)" in content
+            and "const exactRange = _findExactTextRange(excerpt);" in content
+            and content.index("const exactRange = _findExactTextRange(excerpt);") < content.index("const crossNodeRange = _findTextRangeAcrossNodes(excerpt);"),
+            "anchor restore must try the legacy exact single-text-node path before cross-node fallback",
+        )
+        assert_true(
+            "_normalizeForAnchor(range.toString()) !== needle" in content,
+            "cross-node anchor fallback must verify the produced DOM Range exactly matches the excerpt",
+        )
+        assert_true(
+            ".kb-reply.ai .kb-reply-body p { margin: 0 0 4px 0; font-size: 13px; line-height: 1.6; }" in content
+            and ".kb-reply.ai .kb-reply-body li { margin-bottom: 2px; font-size: 13px; line-height: 1.6; }" in content,
+            "AI markdown reply typography must not inherit host-page paragraph/list font sizes",
+        )
 
         notebook_terms = [
             "/notebook/page-cache/",
