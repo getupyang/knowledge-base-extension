@@ -212,6 +212,7 @@ class Regression:
             "src/sidepanel/sidepanel.js",
             "scripts/test-claude-collector.js",
             "scripts/test-comment-system.js",
+            "scripts/test-anchor-overlap.js",
         ]
         for js_file in js_files:
             run_cmd(["node", "--check", js_file])
@@ -310,8 +311,19 @@ class Regression:
             "anchor restore must try the legacy exact single-text-node path before cross-node fallback",
         )
         assert_true(
-            "_normalizeForAnchor(range.toString()) !== needle" in content,
+            "if (normalize(range.toString()) !== needle) return null;" in content,
             "cross-node anchor fallback must verify the produced DOM Range exactly matches the excerpt",
+        )
+        assert_true(
+            "function _compactForAnchor(value)" in content
+            and "_findTextRangeAcrossNodes(excerpt, { compactWhitespace: true })" in content,
+            "anchor restore must also handle formatting whitespace inserted between DOM nodes",
+        )
+        accepted_text_nodes = re.search(r"function _acceptedTextNodes\(\)([\s\S]+?)\n  }\n\n  function _normalizeForAnchor", content)
+        assert_true(accepted_text_nodes, "_acceptedTextNodes function not found")
+        assert_true(
+            "mark.kb-comment-highlight" not in accepted_text_nodes.group(1),
+            "anchor search must include text inside existing highlight marks so overlapping comments can still anchor",
         )
         assert_true(
             ".kb-reply.ai .kb-reply-body p { margin: 0 0 4px 0; font-size: 13px; line-height: 1.6; }" in content

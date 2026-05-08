@@ -602,7 +602,7 @@ const commentSystem = (() => {
       acceptNode(node) {
         const parent = node.parentElement;
         if (!parent) return NodeFilter.FILTER_REJECT;
-        if (parent.closest("#kb-comment-panel, #kb-toast, mark.kb-comment-highlight, script, style, textarea")) {
+        if (parent.closest("#kb-comment-panel, #kb-toast, script, style, textarea")) {
           return NodeFilter.FILTER_REJECT;
         }
         return NodeFilter.FILTER_ACCEPT;
@@ -618,6 +618,10 @@ const commentSystem = (() => {
 
   function _normalizeForAnchor(value) {
     return String(value || "").replace(/\s+/g, " ").trim();
+  }
+
+  function _compactForAnchor(value) {
+    return String(value || "").replace(/\s+/g, "").trim();
   }
 
   function _findExactTextRange(excerpt) {
@@ -636,8 +640,10 @@ const commentSystem = (() => {
     return null;
   }
 
-  function _findTextRangeAcrossNodes(excerpt) {
-    const needle = _normalizeForAnchor(excerpt);
+  function _findTextRangeAcrossNodes(excerpt, opts = {}) {
+    const compactWhitespace = Boolean(opts.compactWhitespace);
+    const normalize = compactWhitespace ? _compactForAnchor : _normalizeForAnchor;
+    const needle = normalize(excerpt);
     if (!needle) return null;
     const nodes = _acceptedTextNodes();
     let haystack = "";
@@ -645,6 +651,7 @@ const commentSystem = (() => {
     for (const node of nodes) {
       for (let i = 0; i < node.textContent.length; i++) {
         const raw = node.textContent[i];
+        if (compactWhitespace && /\s/.test(raw)) continue;
         const normalized = /\s/.test(raw) ? " " : raw;
         if (normalized === " " && haystack.endsWith(" ")) continue;
         haystack += normalized;
@@ -660,7 +667,7 @@ const commentSystem = (() => {
     const range = document.createRange();
     range.setStart(startRef.node, startRef.offset);
     range.setEnd(endRef.node, endRef.offset + 1);
-    if (_normalizeForAnchor(range.toString()) !== needle) return null;
+    if (normalize(range.toString()) !== needle) return null;
     return range;
   }
 
@@ -878,6 +885,12 @@ const commentSystem = (() => {
     if (crossNodeRange) {
       const position = serializeRange(crossNodeRange);
       if (insertMark(crossNodeRange, excerpt) && position) addHighlight(excerpt, position);
+      return;
+    }
+    const compactCrossNodeRange = _findTextRangeAcrossNodes(excerpt, { compactWhitespace: true });
+    if (compactCrossNodeRange) {
+      const position = serializeRange(compactCrossNodeRange);
+      if (insertMark(compactCrossNodeRange, excerpt) && position) addHighlight(excerpt, position);
       return;
     }
   }
