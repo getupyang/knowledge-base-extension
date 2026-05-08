@@ -867,7 +867,7 @@ let _lastThoughtMapData = null;
 
 async function loadThoughtMap(force) {
   if (!_thoughtMapPromise || force) {
-    _thoughtMapPromise = api("/notebook/thought-map?days=42");
+    _thoughtMapPromise = api("/notebook/thought-map");
   }
   const box = $("kb-nb-thought-map");
   if (!box) return;
@@ -1104,7 +1104,7 @@ function renderThoughtMap(data) {
   box.innerHTML = `
     <div class="kb-nb-thought-hero">
       <div>
-        <div class="kb-nb-page-mono">过去 ${data.window_days || 42} 天 · 本地批注证据</div>
+        <div class="kb-nb-page-mono">${escapeHtml(data.window_label || `过去 ${data.window_days || 42} 天`)} · 本地批注证据</div>
         ${renderThoughtHeroSummary(lanes, data.observation)}
         <p>Agent 会用这些变化判断：哪些问题该带入长期主线，哪些只是先观察，哪些不该过度解释。</p>
       </div>
@@ -1399,7 +1399,7 @@ function init() {
   api("/notebook/chat?limit=1").then(d => {
     $("kb-nb-count-chat").textContent = d.items.length ? "…" : 0;
   }).catch(() => {});
-  api("/notebook/thought-map?days=42").then(d => {
+  api("/notebook/thought-map").then(d => {
     $("kb-nb-count-thought-map").textContent = d.stats?.node_count || 0;
   }).catch(() => {});
   loadDiary();

@@ -1132,7 +1132,18 @@ _TOPIC_STOP_TERMS = {
     "openai", "anthropic", "google", "github", "medium", "substack", "youtube", "wikipedia",
     "页面", "这篇", "这个", "这些", "那些", "什么", "为什么", "怎么", "如何", "是否",
     "可以", "有没有", "是不是", "一下", "感觉", "其实", "但是", "因为", "所以",
+    "评价一下", "总结一下", "解释一下", "分析一下", "调研一下", "介绍一下",
+    "展开讲讲", "详细展开", "展开说说", "帮我看看", "给我看看",
 }
+
+_TOPIC_CONTAINER_TITLE_RE = re.compile(
+    r"(^|\b)(daily|weekly|digest|newsletter|report|日报|周报|月报|快报|合集|云文档)(\b|$)",
+    re.I,
+)
+
+_TOPIC_ACTION_ONLY_RE = re.compile(
+    r"^(帮我|请|麻烦)?(评价|评估|总结|解释|分析|调研|介绍|展开|对比|讲讲|说说|看看)(一下|下|一下吧|一下吗|看看|吗|吧)?$"
+)
 
 
 def _topic_hash(label: str) -> str:
@@ -1164,6 +1175,10 @@ def _is_topic_like(label: str) -> bool:
     key = _topic_key(value)
     if not key or key in _TOPIC_STOP_TERMS:
         return False
+    if _TOPIC_ACTION_ONLY_RE.fullmatch(value):
+        return False
+    if len(value) <= 8 and any(marker in value for marker in ("评价", "总结", "解释", "分析", "调研", "展开", "讲讲", "说说")):
+        return False
     if re.fullmatch(r"[0-9#.\-_/ ]+", value):
         return False
     return True
@@ -1181,6 +1196,8 @@ def _is_slug_or_date_title(label: str) -> bool:
 def _split_title(title: str) -> list:
     title = (title or "").strip()
     if not title:
+        return []
+    if _TOPIC_CONTAINER_TITLE_RE.search(title):
         return []
     chunks = re.split(r"\s(?:[-–—|·•]\s|[|｜])", title)
     out = []
@@ -1223,13 +1240,13 @@ def _extract_thought_candidates(row: dict) -> list:
             return
         candidates.append({"label": cleaned, "key": key, "source": source, "weight": weight})
 
-    for label in _split_title(row.get("page_title") or ""):
-        add(label, "page_title", 1.0)
     direct_comment = (row.get("comment") or "").split("---追问---", 1)[0]
     for term in _extract_named_terms(direct_comment, limit=4):
-        add(term, "comment", 0.85)
+        add(term, "comment", 1.05)
     for term in _extract_named_terms(row.get("selected_text") or "", limit=4):
-        add(term, "selected_text", 0.7)
+        add(term, "selected_text", 0.9)
+    for label in _split_title(row.get("page_title") or ""):
+        add(label, "page_title", 0.55)
     for term in _extract_named_terms(row.get("surrounding_text") or "", limit=2):
         add(term, "surrounding_text", 0.45)
     return candidates[:4]
@@ -1354,17 +1371,35 @@ def _dynamic_thought_lane(rank: int, evidence_count: int, recent: int, previous:
     return "occasional"
 
 
-def _build_thought_map(conn: sqlite3.Connection, days: int = 42) -> dict:
+def _resolve_thought_window(rows: list, requested_days: Optional[int], now: datetime) -> tuple[int, str, str]:
+    if requested_days is not None:
+        days = max(14, min(int(requested_days or 42), 180))
+        return days, "requested", f"过去 {days} 天"
+    dates = [_parse_dt(r.get("created_at")) for r in rows]
+    dates = [d for d in dates if d]
+    if not dates:
+        return 14, "auto", "暂无本地批注"
+    oldest = min(dates)
+    newest = max(dates)
+    span_days = max(1, (newest.date() - oldest.date()).days + 1)
+    days = max(14, min((now.date() - oldest.date()).days + 1, 180))
+    if span_days <= days:
+        return days, "auto", f"本机全部批注 · 覆盖 {span_days} 天"
+    return days, "auto", f"本机最近 {days} 天批注"
+
+
+def _build_thought_map(conn: sqlite3.Connection, days: Optional[int] = None) -> dict:
     """Build a local, evidence-backed thought map from this computer's SQLite comments."""
     conn.row_factory = sqlite3.Row
     now = datetime.now()
-    window_start = now - timedelta(days=days)
     rows = [dict(r) for r in conn.execute(
         """SELECT id, created_at, page_url, page_title, selected_text, surrounding_text, comment
            FROM comments
            ORDER BY created_at DESC
            LIMIT 800"""
     ).fetchall()]
+    days, window_mode, window_label = _resolve_thought_window(rows, days, now)
+    window_start = now - timedelta(days=days)
     rows = [r for r in rows if (_parse_dt(r.get("created_at")) or now) >= window_start]
     bucket_count = 6
     bucket_days = max(1, days // bucket_count)
@@ -1536,6 +1571,8 @@ def _build_thought_map(conn: sqlite3.Connection, days: int = 42) -> dict:
     return {
         "generated_at": _now_iso(),
         "window_days": days,
+        "window_mode": window_mode,
+        "window_label": window_label,
         "bucket_days": bucket_days,
         "observation": observation,
         "stats": {
@@ -4383,9 +4420,10 @@ def notebook_memory_map():
 
 
 @app.get("/notebook/thought-map")
-def notebook_thought_map(days: int = 42):
+def notebook_thought_map(days: Optional[int] = None):
     """User-facing thought map across recent, ongoing, and cooling lines."""
-    days = max(14, min(int(days or 42), 90))
+    if days is not None:
+        days = max(14, min(int(days or 42), 180))
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try:

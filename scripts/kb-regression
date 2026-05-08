@@ -279,6 +279,10 @@ class Regression:
                 forbidden not in backend,
                 f"backend must not contain product-owner specific thought-map label: {forbidden}",
             )
+        assert_true(
+            "/notebook/thought-map?days=42" not in notebook,
+            "notebook must let the backend choose the local thought-map window instead of forcing 42 days",
+        )
 
         worker_terms = [
             "memory_growth_for_comment",
