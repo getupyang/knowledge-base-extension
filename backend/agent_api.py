@@ -14,6 +14,7 @@ import shutil
 import threading
 import urllib.error
 import urllib.request
+import hashlib
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
 from typing import Optional
@@ -1114,108 +1115,7 @@ def _infer_project_label(signal: dict, text: str, fallback: str = "") -> str:
         value = (signal.get(key) or "").strip()
         if value:
             return _normalize_project_label(value)
-    haystack = f"{text} {fallback}".lower()
-    patterns = [
-        (r"openmemory|mem0|memory|记忆|context loader|growth pipeline|批注|annotation|readwise|glasp|hypothesis", "知识管理与个人记忆系统"),
-        (r"benchmark|评测|eval|gdpval|cranfield|netflix recommender|推荐系统|指标", "评测与产品方法论"),
-        (r"street view|visual census|时空|lbs|卫星|房地产|港口|集装箱|社会影响", "AI 社会影响与空间数据研究"),
-        (r"mtp|mla|draft model|speculative decoding|推理加速", "AI 推理架构研究"),
-    ]
-    for pattern, label in patterns:
-        if re.search(pattern, haystack):
-            return label
     return _normalize_project_label(fallback or text)
-
-
-THOUGHT_TOPIC_DEFINITIONS = [
-    {
-        "id": "knowledge-memory-systems",
-        "label": "知识管理与个人记忆系统",
-        "role": "mainline",
-        "keywords": [
-            "记忆", "memory", "批注", "评论区", "context loader", "growth pipeline",
-            "notebook", "问记忆", "当前项目", "active questions", "theme", "project",
-            "Notion", "SQLite", "Mem0", "OpenMemory", "Readwise", "Glasp", "Hypothesis",
-        ],
-        "read": "持续线索：围绕知识记录、记忆生长、上下文装载和使用体验在推进。",
-    },
-    {
-        "id": "evaluation-methodology",
-        "label": "评测与产品方法论",
-        "role": "merge",
-        "keywords": [
-            "benchmark", "评测", "eval", "gold", "golden", "case", "Needs Met",
-            "GDPval", "Cranfield", "Netflix", "推荐系统", "replay", "rubric",
-            "第一视角", "第三视角",
-        ],
-        "read": "正在合流：评测不再是旁支资料，而是在变成判断产品价值和改进方向的方法问题。",
-    },
-    {
-        "id": "adoption-distribution",
-        "label": "真实用户从哪里来，为什么会持续用",
-        "role": "branch",
-        "keywords": [
-            "用户采用", "用户反馈", "用户行为", "采用", "门槛", "摩擦", "频次",
-            "producthunt", "hackernews", "发帖", "社交媒体", "分发", "GTM", "aha",
-        ],
-        "read": "产品问题：你在反复确认谁会真的用、有多高门槛、用户从哪里来，而不是只做技术正确的系统。",
-        "possible_misread": "它既可能是一条主题线，也可能是一组活跃问题；需要继续看它是否反复驱动下一步行动。",
-    },
-    {
-        "id": "agent-workflow",
-        "label": "Agent 工作流与工程化协作",
-        "role": "branch",
-        "keywords": [
-            "Claude Code", "Codex", "MCP", "worker", "context_pack",
-            "Hermes", "Honcho", "编排", "回归", "自测", "工具路由", "模式选择",
-            "AI 同事", "工程化同事", "agent 编排",
-        ],
-        "read": "背景能力线：它影响工具使用和工程判断，但是否成为主线需要看后续证据。",
-        "possible_misread": "如果后续又围绕 agent 编排、回归、自测连续提出任务，它应重新升温。",
-    },
-    {
-        "id": "social-impact-spatiotemporal",
-        "label": "AI 社会影响与空间数据研究",
-        "role": "sprout",
-        "keywords": [
-            "李飞飞", "Timnit", "Street View", "visual census", "时空", "LBS",
-            "卫星", "港口", "集装箱", "房地产", "失业率", "社会影响",
-        ],
-        "read": "新近捕捉：本系统最近第一次看到这条线索，不能判断它是新兴趣还是长期兴趣首次留下证据。",
-        "possible_misread": "产品内只能说“最近捕捉到”，不能凭场外信息说这是长期兴趣。",
-    },
-    {
-        "id": "ai-video-gtm",
-        "label": "AI 视频 / 产品发布表达",
-        "role": "sprout",
-        "keywords": [
-            "Velo", "Hera", "演示视频", "发布视频", "产品发布", "动态品牌", "GTM 视频",
-            "录屏讲解", "AI demo video",
-        ],
-        "read": "新芽：和产品传播、发布表达相关，暂时更像机会观察而不是主线项目。",
-    },
-    {
-        "id": "reasoning-architecture",
-        "label": "AI 推理架构 / 加速机制",
-        "role": "branch",
-        "keywords": [
-            "MTP", "MLA", "draft model", "speculative decoding", "推理加速",
-        ],
-        "read": "偶发技术理解：目前更像顺着材料补概念，不足以说明它已经成为稳定研究线。",
-        "possible_misread": "如果用户继续跨天追问 MTP/MLA、工程影响、论文或实现细节，这条线应升级。",
-    },
-    {
-        "id": "early-value-narrative",
-        "label": "第一天价值 / 创业方向探索",
-        "role": "archive",
-        "keywords": [
-            "第一天", "第1天", "AHA", "会议", "Granola", "飞轮",
-            "知识工作者", "非技术用户", "最小闭环",
-        ],
-        "read": "降温背景线：早期价值和方向探索仍是底层问题，但近期被更具体的产品机制和评测问题接管。",
-        "possible_misread": "降温不是不重要，只是最近没有像前期那样直接占据近场注意力。",
-    },
-]
 
 
 def _parse_dt(value: str) -> Optional[datetime]:
@@ -1227,25 +1127,112 @@ def _parse_dt(value: str) -> Optional[datetime]:
         return None
 
 
-def _matches_topic(text: str, keywords: list) -> bool:
-    lowered = (text or "").lower()
-    for keyword in keywords or []:
-        k = str(keyword).strip().lower()
-        if k and k in lowered:
-            return True
+_TOPIC_STOP_TERMS = {
+    "the", "and", "for", "with", "that", "this", "from", "into", "what", "why", "how",
+    "openai", "anthropic", "google", "github", "medium", "substack", "youtube", "wikipedia",
+    "页面", "这篇", "这个", "这些", "那些", "什么", "为什么", "怎么", "如何", "是否",
+    "可以", "有没有", "是不是", "一下", "感觉", "其实", "但是", "因为", "所以",
+}
+
+
+def _topic_hash(label: str) -> str:
+    return hashlib.sha1((label or "").encode("utf-8")).hexdigest()[:10]
+
+
+def _topic_key(label: str) -> str:
+    value = (label or "").lower()
+    value = re.sub(r"https?://\S+", " ", value)
+    value = re.sub(r"#[0-9]+", " ", value)
+    value = re.sub(r"[\s\-_–—|:：,，.。!！?？;；/\\()\[\]{}<>《》「」“”\"'`]+", "", value)
+    return value[:80]
+
+
+def _clean_topic_label(text: str) -> str:
+    value = (text or "").strip()
+    value = re.sub(r"https?://\S+", " ", value)
+    value = re.sub(r"\s+", " ", value)
+    value = value.strip(" \t\r\n-–—|:：,，.。!！?？;；/\\()[]{}<>《》「」“”\"'`")
+    value = re.sub(r"^(请问|我想知道|我想问|能不能|可不可以|帮我看看|举几个例子吧)[，,：:\s]*", "", value)
+    value = re.sub(r"(是什么意思|是什么|有哪些|怎么办|为什么)$", "", value).strip()
+    return value[:38]
+
+
+def _is_topic_like(label: str) -> bool:
+    value = _clean_topic_label(label)
+    if len(value) < 3:
+        return False
+    key = _topic_key(value)
+    if not key or key in _TOPIC_STOP_TERMS:
+        return False
+    if re.fullmatch(r"[0-9#.\-_/ ]+", value):
+        return False
+    return True
+
+
+def _is_slug_or_date_title(label: str) -> bool:
+    value = (label or "").strip().lower()
+    if re.fullmatch(r"\d{4}[-_/]\d{2}[-_/]\d{2}(?:[-_][a-z0-9]+)?", value):
+        return True
+    if re.fullmatch(r"[a-z0-9]+(?:[-_][a-z0-9]+){2,}", value):
+        return True
     return False
 
 
-def _matched_topic_terms(text: str, keywords: list, limit: int = 5) -> list:
-    lowered = (text or "").lower()
+def _split_title(title: str) -> list:
+    title = (title or "").strip()
+    if not title:
+        return []
+    chunks = re.split(r"\s(?:[-–—|·•]\s|[|｜])", title)
     out = []
-    for keyword in keywords or []:
-        k = str(keyword).strip()
-        if k and k.lower() in lowered and k not in out:
-            out.append(k)
-        if len(out) >= limit:
-            break
+    for chunk in chunks[:3]:
+        cleaned = _clean_topic_label(chunk)
+        if _is_slug_or_date_title(cleaned):
+            continue
+        if _is_topic_like(cleaned):
+            out.append(cleaned)
     return out
+
+
+def _extract_named_terms(text: str, limit: int = 8) -> list:
+    text = (text or "").replace("\n", " ")
+    out = []
+    for match in re.findall(r"[《「“\"]([^《》「」“”\"]{3,38})[》」”\"]", text):
+        cleaned = _clean_topic_label(match)
+        if _is_topic_like(cleaned) and cleaned not in out:
+            out.append(cleaned)
+    for match in re.findall(r"\b[A-Z][A-Za-z0-9*+.#/-]{1,}(?:\s+[A-Z][A-Za-z0-9*+.#/-]{1,}){0,3}\b", text):
+        cleaned = _clean_topic_label(match)
+        if _is_topic_like(cleaned) and cleaned.lower() not in _TOPIC_STOP_TERMS and cleaned not in out:
+            out.append(cleaned)
+    for match in re.findall(r"[\u4e00-\u9fff][\u4e00-\u9fffA-Za-z0-9 +#·/-]{3,28}", text):
+        cleaned = _clean_topic_label(match)
+        if _is_topic_like(cleaned) and cleaned not in out:
+            out.append(cleaned)
+    return out[:limit]
+
+
+def _extract_thought_candidates(row: dict) -> list:
+    candidates = []
+
+    def add(label: str, source: str, weight: float) -> None:
+        cleaned = _clean_topic_label(label)
+        if not _is_topic_like(cleaned):
+            return
+        key = _topic_key(cleaned)
+        if any(item["key"] == key for item in candidates):
+            return
+        candidates.append({"label": cleaned, "key": key, "source": source, "weight": weight})
+
+    for label in _split_title(row.get("page_title") or ""):
+        add(label, "page_title", 1.0)
+    direct_comment = (row.get("comment") or "").split("---追问---", 1)[0]
+    for term in _extract_named_terms(direct_comment, limit=4):
+        add(term, "comment", 0.85)
+    for term in _extract_named_terms(row.get("selected_text") or "", limit=4):
+        add(term, "selected_text", 0.7)
+    for term in _extract_named_terms(row.get("surrounding_text") or "", limit=2):
+        add(term, "surrounding_text", 0.45)
+    return candidates[:4]
 
 
 _THOUGHT_ACTION_MARKERS = [
@@ -1332,52 +1319,43 @@ def _score_level(score: float) -> str:
     return "低"
 
 
-def _thought_card_interpretation(spec: dict, row: dict, terms: list, behavior: dict) -> str:
-    sid = spec.get("id")
-    title = row.get("page_title") or "这个页面"
-    selected = (row.get("selected_text") or "").replace("\n", " ")
-    comment = (row.get("comment") or "").replace("\n", " ")
-    term_text = "、".join(terms[:3]) if terms else "相关线索"
-    if sid == "ai-video-gtm":
-        if "我要试试" in comment or "正需要" in comment:
-            return f"这条不是普通阅读兴趣：你在看到 {term_text} 这类产品后写下明确试用/需求表达，说明它正在变成可行动的产品机会观察。"
-        if "前几天" in comment or "类似" in comment:
-            return f"这条显示你在做跨日报对比：你不是只问单个产品，而是在识别 {term_text} 这类 AI 视频/发布表达工具是否形成一组机会。"
-    if sid == "reasoning-architecture":
-        if behavior.get("curiosity_hit") and not behavior.get("action_hit") and behavior.get("followups", 0) == 0:
-            return f"这更像一次技术概念补全：你顺着材料问 {term_text} 是什么，目前还不足以证明它成为稳定研究线。"
-    if sid == "social-impact-spatiotemporal":
-        return "这条说明本系统最近捕捉到你对 AI、街景/时空数据与社会影响之间关系的兴趣；但仅凭产品内证据，不能判断它是新兴趣还是长期兴趣首次出现。"
-    if sid == "adoption-distribution":
-        return "这条的有效信号是你在追问真实用户反馈、使用门槛或分发质量，而不是只关心产品功能本身。"
-    if sid == "agent-workflow":
-        if "叽里呱啦" in comment or "只有标题" in comment:
-            return "这条的有效信号不是情绪表达，而是你要求 agent 从标题进入真实内容，不接受浅层摘要。"
-        return "这条显示你在校准 agent 的工作方式：希望它可执行、可回归、能用真实证据推进任务。"
-    if sid == "evaluation-methodology":
-        return "这条说明评测问题正在从资料阅读变成产品方法论：你关心指标如何定义、如何服务产品目标、后续是否真的被使用。"
-    if sid == "early-value-narrative":
-        return "这条属于早期方向探索的证据：你在追问第一天价值、aha moment 或创业方向是否成立。"
+def _thought_card_interpretation(topic_label: str, row: dict, source: str, behavior: dict) -> str:
+    source_text = {
+        "page_title": "页面标题",
+        "comment": "你的评论",
+        "selected_text": "划线原文",
+        "surrounding_text": "划线上下文",
+    }.get(source or "", "本地证据")
     if behavior.get("labels"):
-        return f"这条被纳入是因为它同时命中了 {term_text}，并带有「{'、'.join(behavior['labels'])}」这类行为信号。"
-    return f"这条被纳入是因为页面/划线内容命中了 {term_text}，但行为强度需要更多后续证据确认。"
+        return f"这条被纳入「{topic_label}」，因为{source_text}里出现了这条线索，并带有「{'、'.join(behavior['labels'])}」这类行为信号。"
+    return f"这条被纳入「{topic_label}」，因为{source_text}里出现了这条线索；是否稳定，还需要更多后续证据确认。"
 
 
-def _thought_possible_misread(spec: dict, evidence_count: int, behavior_scores: list) -> str:
-    if spec.get("possible_misread"):
-        return spec["possible_misread"]
+def _thought_possible_misread(evidence_count: int, behavior_scores: list) -> str:
     avg = sum(behavior_scores) / max(1, len(behavior_scores))
     if evidence_count <= 2 and avg < 0.45:
         return "证据还少，可能只是顺手提问，不能过早定性为稳定兴趣。"
     return "这是系统基于本地批注的当前推断；如果用户确认、改名或合并，可信度会更高。"
 
 
-def _build_thought_map(conn: sqlite3.Connection, days: int = 42) -> dict:
-    """Build a user-facing thought map over multiple time scales.
+def _dynamic_thought_lane(rank: int, evidence_count: int, recent: int, previous: int, older: int, action_count: int, distinct_day_count: int, span_days: int, intent_strength: str) -> str:
+    if recent == 0 and (previous > 0 or older > 0):
+        return "cooling"
+    if recent > 0 and older == 0 and evidence_count <= 3:
+        return "sprout"
+    if rank == 0 and (evidence_count >= 2 or action_count > 0 or distinct_day_count >= 2):
+        return "mainline"
+    if recent > previous and (older > 0 or distinct_day_count >= 2):
+        return "merging"
+    if evidence_count <= 1 and intent_strength != "高":
+        return "occasional"
+    if span_days >= 7 or distinct_day_count >= 2:
+        return "branch"
+    return "occasional"
 
-    This is a product sketch: deterministic, evidence-backed, and explicitly
-    not a complete user-interest profile.
-    """
+
+def _build_thought_map(conn: sqlite3.Connection, days: int = 42) -> dict:
+    """Build a local, evidence-backed thought map from this computer's SQLite comments."""
     conn.row_factory = sqlite3.Row
     now = datetime.now()
     window_start = now - timedelta(days=days)
@@ -1390,35 +1368,37 @@ def _build_thought_map(conn: sqlite3.Connection, days: int = 42) -> dict:
     rows = [r for r in rows if (_parse_dt(r.get("created_at")) or now) >= window_start]
     bucket_count = 6
     bucket_days = max(1, days // bucket_count)
-    nodes = []
-    for spec in THOUGHT_TOPIC_DEFINITIONS:
-        evidence = []
-        buckets = [0] * bucket_count
-        behavior_scores = []
-        distinct_days = set()
-        for row in rows:
-            text = " ".join([
-                row.get("page_title") or "",
-                row.get("selected_text") or "",
-                row.get("surrounding_text") or "",
-                row.get("comment") or "",
-            ])
-            if not _matches_topic(text, spec["keywords"]):
+    clusters = {}
+    for row in rows:
+        behavior = _thought_behavior_signal(row)
+        candidates = _extract_thought_candidates(row)
+        for candidate in candidates:
+            key = candidate["key"]
+            if not key:
                 continue
+            cluster = clusters.setdefault(key, {
+                "label": candidate["label"],
+                "label_weight": 0,
+                "score": 0.0,
+                "evidence": [],
+                "buckets": [0] * bucket_count,
+                "behavior_scores": [],
+                "distinct_days": set(),
+                "source_counts": {},
+            })
+            weighted_score = candidate["weight"] * (0.65 + behavior["score"])
+            cluster["score"] += weighted_score
+            if candidate["weight"] > cluster["label_weight"]:
+                cluster["label"] = candidate["label"]
+                cluster["label_weight"] = candidate["weight"]
             dt = _parse_dt(row.get("created_at")) or now
-            distinct_days.add(dt.date().isoformat())
+            cluster["distinct_days"].add(dt.date().isoformat())
             age_days = max(0, (now - dt).days)
             bucket_idx = bucket_count - 1 - min(bucket_count - 1, age_days // bucket_days)
-            buckets[bucket_idx] += 1
-            direct_text = " ".join([
-                row.get("page_title") or "",
-                row.get("selected_text") or "",
-                row.get("comment") or "",
-            ])
-            terms = _matched_topic_terms(direct_text, spec["keywords"])
-            behavior = _thought_behavior_signal(row)
-            behavior_scores.append(behavior["score"])
-            evidence.append({
+            cluster["buckets"][bucket_idx] += 1
+            cluster["behavior_scores"].append(behavior["score"])
+            cluster["source_counts"][candidate["source"]] = cluster["source_counts"].get(candidate["source"], 0) + 1
+            cluster["evidence"].append({
                 "id": row.get("id"),
                 "created_at": row.get("created_at"),
                 "page_title": row.get("page_title") or "",
@@ -1426,10 +1406,23 @@ def _build_thought_map(conn: sqlite3.Connection, days: int = 42) -> dict:
                 "selected_text": (row.get("selected_text") or "")[:220],
                 "comment": (row.get("comment") or "")[:360],
                 "raw_comment": row.get("comment") or "",
-                "matched_terms": terms,
+                "matched_terms": [candidate["label"]],
                 "behavior": behavior,
-                "interpretation": _thought_card_interpretation(spec, row, terms, behavior),
+                "interpretation": _thought_card_interpretation(candidate["label"], row, candidate["source"], behavior),
             })
+
+    cluster_items = list(clusters.values())
+    cluster_items.sort(key=lambda c: (
+        -c["score"],
+        -len(c["evidence"]),
+        max((e.get("created_at") or "" for e in c["evidence"]), default=""),
+    ))
+    nodes = []
+    for rank, cluster in enumerate(cluster_items[:10]):
+        evidence = cluster["evidence"]
+        buckets = cluster["buckets"]
+        behavior_scores = cluster["behavior_scores"]
+        distinct_days = cluster["distinct_days"]
         if not evidence:
             continue
         evidence.sort(key=lambda x: x.get("created_at") or "", reverse=True)
@@ -1451,41 +1444,14 @@ def _build_thought_map(conn: sqlite3.Connection, days: int = 42) -> dict:
         if action_count and recent > 0:
             intensity_score = max(intensity_score, 0.72)
         persistence_score = min(1.0, span_days / 28 * 0.42 + distinct_day_count / 6 * 0.38 + len(evidence) / 12 * 0.2)
-        role_centrality = {
-            "mainline": 0.95,
-            "merge": 0.84,
-            "branch": 0.42,
-            "sprout": 0.36,
-            "archive": 0.32,
-        }.get(spec.get("role"), 0.35)
-        if spec["id"] == "adoption-distribution":
-            role_centrality = 0.72
-        elif spec["id"] == "agent-workflow":
-            role_centrality = 0.54
+        role_centrality = min(0.9, 0.32 + len(evidence) / 10 * 0.26 + distinct_day_count / 5 * 0.22 + (0.1 if action_count else 0))
         centrality_score = min(1.0, role_centrality + (0.12 if recent >= 3 else 0) + (0.08 if action_count else 0))
         confidence = _score_level(confidence_score)
         intent_strength = _score_level(intensity_score)
         persistence = _score_level(persistence_score)
         centrality = _score_level(centrality_score)
 
-        if spec["role"] == "mainline" and (recent > 0 or len(evidence) >= 8):
-            lane = "mainline"
-        elif spec["role"] == "archive":
-            lane = "cooling"
-        elif spec["role"] == "sprout" and recent > 0:
-            lane = "sprout"
-        elif confidence == "低" and intent_strength != "高" and len(evidence) <= 2:
-            lane = "occasional"
-        elif spec["id"] == "reasoning-architecture" and recent <= 1 and action_count == 0:
-            lane = "occasional"
-        elif recent > 0 and older == 0 and len(evidence) <= 3:
-            lane = "sprout"
-        elif spec["role"] == "merge" and recent > 0:
-            lane = "merging"
-        elif recent == 0 and previous == 0 and older > 0:
-            lane = "cooling"
-        else:
-            lane = "branch"
+        lane = _dynamic_thought_lane(rank, len(evidence), recent, previous, older, action_count, distinct_day_count, span_days, intent_strength)
         if recent > previous:
             trend = "rising"
         elif recent == 0 and (previous > 0 or older > 0):
@@ -1499,14 +1465,25 @@ def _build_thought_map(conn: sqlite3.Connection, days: int = 42) -> dict:
             key=lambda e: (e["behavior"]["score"], e.get("created_at") or ""),
             reverse=True,
         )
+        label = cluster["label"]
+        read = f"这条线索来自这台电脑最近 {len(evidence)} 条本地批注，主要围绕「{label}」展开。"
+        top_sources = sorted(cluster["source_counts"].items(), key=lambda kv: kv[1], reverse=True)
+        if top_sources:
+            source_name = {
+                "page_title": "页面标题",
+                "comment": "评论",
+                "selected_text": "划线",
+                "surrounding_text": "上下文",
+            }.get(top_sources[0][0], "本地证据")
+            read += f" 主要证据来源是{source_name}。"
         nodes.append({
-            "id": spec["id"],
-            "label": spec["label"],
+            "id": f"topic-{_topic_hash(label)}",
+            "label": label,
             "lane": lane,
             "trend": trend,
-            "read": spec["read"],
-            "why_it_matters": spec["read"],
-            "possible_misread": _thought_possible_misread(spec, len(evidence), behavior_scores),
+            "read": read,
+            "why_it_matters": read,
+            "possible_misread": _thought_possible_misread(len(evidence), behavior_scores),
             "intent_strength": intent_strength,
             "confidence": confidence,
             "persistence": persistence,
@@ -1549,9 +1526,9 @@ def _build_thought_map(conn: sqlite3.Connection, days: int = 42) -> dict:
     main = (lanes["mainline"] or nodes[:1] or [{}])[0]
     emerging = (lanes["sprout"] or lanes["merging"] or lanes["branch"] or [])[:2]
     cooling = lanes["cooling"][:2]
-    observation = "我看到你这段时间不是散乱地看内容，而是在把若干线索拉回一条主线。"
+    observation = "我只基于这台电脑的本地批注生成思考地图；当前证据还不足以形成稳定主线。"
     if main:
-        observation = f"我看到「{main.get('label')}」仍是主线。"
+        observation = f"我看到本机批注里最集中的线索是「{main.get('label')}」。"
         if emerging:
             observation += " 最近升温的是 " + "、".join(f"「{n['label']}」" for n in emerging) + "。"
         if cooling:

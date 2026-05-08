@@ -258,17 +258,26 @@ class Regression:
         ]
         missing = [term for term in backend_terms if term not in backend]
         assert_true(not missing, f"backend contract terms missing: {missing}")
-        thought_defs = re.search(r"THOUGHT_TOPIC_DEFINITIONS = \[([\s\S]+?)\n\]\n\n", backend)
-        assert_true(thought_defs, "THOUGHT_TOPIC_DEFINITIONS not found")
+        assert_true(
+            "THOUGHT_TOPIC_DEFINITIONS" not in backend,
+            "thought map must not use hardcoded product-owner topic definitions",
+        )
         for forbidden in [
             "mem-ai /",
             "记忆产品主线",
             "如何证明自己有用",
             "会影响 mem-ai",
+            "第一天价值 / 创业方向探索",
+            "真实用户从哪里来，为什么会持续用",
+            "评测与产品方法论",
+            "knowledge-memory-systems",
+            "evaluation-methodology",
+            "adoption-distribution",
+            "early-value-narrative",
         ]:
             assert_true(
-                forbidden not in thought_defs.group(1),
-                f"thought map topic definitions must not contain product-owner specific label: {forbidden}",
+                forbidden not in backend,
+                f"backend must not contain product-owner specific thought-map label: {forbidden}",
             )
 
         worker_terms = [
