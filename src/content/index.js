@@ -1531,7 +1531,7 @@ const commentSystem = (() => {
       </div>`;
     }).join("");
     const aiReplies = c.replies.filter(r => r.isAI);
-    const hasAnyAI = Boolean(c.agentCommentId) || aiReplies.length > 0;
+    const hasAnyAI = aiReplies.length > 0;
     let actionHtml = "";
     if (_askAIRunning.has(c.id)) {
       actionHtml = `<span style="color:var(--kb-blue);font-size:11px;font-family:'JetBrains Mono',monospace;letter-spacing:0.04em;">AI 思考中…</span>`;
