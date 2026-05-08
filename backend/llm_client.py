@@ -248,6 +248,13 @@ class ClaudeCodeProvider(BaseProvider):
             raise LLMCallError(f"claude_code exit {result.returncode}: {detail}")
         try:
             data = json.loads(result.stdout)
+            api_error_status = data.get("api_error_status")
+            if api_error_status:
+                detail = data.get("result") or data.get("message") or result.stdout
+                raise LLMCallError(f"claude_code api_error_status {api_error_status}: {str(detail)[:1000]}")
+            if data.get("is_error") is True:
+                detail = data.get("result") or data.get("message") or result.stdout
+                raise LLMCallError(f"claude_code error: {str(detail)[:1000]}")
             return data.get("result", result.stdout)
         except json.JSONDecodeError:
             return result.stdout

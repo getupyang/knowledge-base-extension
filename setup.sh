@@ -207,6 +207,38 @@ read_api_key_for_setup() {
   echo "  ✓ 已收到 API Key（长度 ${#LLM_API_KEY} 位，已隐藏，不会打印原文）"
 }
 
+read_optional_secret_for_setup() {
+  local prompt="$1"
+  local result_var="$2"
+  local entered_value=""
+  read -s -p "  ${prompt}" entered_value
+  echo ""
+  printf -v "$result_var" "%s" "$entered_value"
+}
+
+configure_claude_auth_for_setup() {
+  ANTHROPIC_API_KEY_FOR_CONFIG="${ANTHROPIC_API_KEY:-}"
+  ANTHROPIC_BASE_URL_FOR_CONFIG=""
+  ANTHROPIC_AUTH_TOKEN_FOR_CONFIG=""
+  CLAUDE_CODE_OAUTH_TOKEN_FOR_CONFIG=""
+
+  echo ""
+  echo "  Claude Code 可以用账号登录，也可以用 Anthropic API Key。"
+  if [ -n "$ANTHROPIC_API_KEY_FOR_CONFIG" ]; then
+    echo "  ✓ 已检测到当前终端里的 ANTHROPIC_API_KEY，会写入本机配置供后台服务使用。"
+    return 0
+  fi
+
+  echo "  如果你是 Claude Code 账号登录，直接回车跳过。"
+  echo "  如果你是 API Key 模式，请粘贴 ANTHROPIC_API_KEY。"
+  read_optional_secret_for_setup "ANTHROPIC_API_KEY（可空，不会显示）：" ANTHROPIC_API_KEY_FOR_CONFIG
+  if [ -n "$ANTHROPIC_API_KEY_FOR_CONFIG" ]; then
+    echo "  ✓ 已收到 ANTHROPIC_API_KEY（长度 ${#ANTHROPIC_API_KEY_FOR_CONFIG} 位，已隐藏）"
+  else
+    echo "  已跳过 Claude API Key 保存。"
+  fi
+}
+
 read_with_default_for_setup() {
   local prompt="$1"
   local default_value="$2"
@@ -354,6 +386,14 @@ if [ ! -f "$CONFIG_FILE" ]; then
     # 防止本地订阅用户不知情地产生 API 成本；需要时手动改成 api。
     LLM_FALLBACK="fail"
   fi
+  if [ "$LLM_PROVIDER" = "claude_code" ]; then
+    configure_claude_auth_for_setup
+  else
+    ANTHROPIC_API_KEY_FOR_CONFIG="${ANTHROPIC_API_KEY:-}"
+    ANTHROPIC_BASE_URL_FOR_CONFIG=""
+    ANTHROPIC_AUTH_TOKEN_FOR_CONFIG=""
+    CLAUDE_CODE_OAUTH_TOKEN_FOR_CONFIG=""
+  fi
 
   cat > "$CONFIG_FILE" << EOF
 # 知识库助手配置文件
@@ -370,6 +410,10 @@ MEMAI_LLM_BASE_URL=${LLM_BASE_URL}
 MEMAI_LLM_MODEL=${LLM_MODEL}
 CLAUDE_BIN=${CLAUDE_BIN}
 MEMAI_CLAUDE_BIN=${CLAUDE_BIN}
+ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY_FOR_CONFIG}
+ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN_FOR_CONFIG}
+ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL_FOR_CONFIG}
+CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN_FOR_CONFIG}
 MEMAI_CODEX_BIN=${CODEX_BIN}
 MEMAI_CODEX_SANDBOX=read-only
 KB_DATA_DIR=${DATA_DIR}

@@ -5,4 +5,10 @@
 NOTION_TOKEN=ntn_your_token_here
 NOTION_DATABASE_ID=your_32char_database_id_here
 CLAUDE_BIN=/Users/YOUR_USERNAME/.npm-global/bin/claude
+MEMAI_CLAUDE_BIN=/Users/YOUR_USERNAME/.npm-global/bin/claude
+# 如果 Claude Code 使用 Anthropic API Key，而不是账号登录，请填写：
+ANTHROPIC_API_KEY=
+ANTHROPIC_AUTH_TOKEN=
+ANTHROPIC_BASE_URL=
+CLAUDE_CODE_OAUTH_TOKEN=
 RESEARCH_DIR=/path/to/knowledge-base-extension/backend

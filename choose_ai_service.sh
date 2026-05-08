@@ -154,6 +154,56 @@ read_api_key() {
   echo "已收到 API Key（长度 ${#api_key} 位，已隐藏，不会打印原文）。"
 }
 
+read_hidden_optional() {
+  prompt="$1"
+  hidden_value=""
+  printf "%s" "$prompt"
+  if [ -t 0 ]; then
+    stty -echo 2>/dev/null || true
+  fi
+  read -r hidden_value
+  if [ -t 0 ]; then
+    stty echo 2>/dev/null || true
+  fi
+  echo ""
+}
+
+persist_existing_env_if_set() {
+  key="$1"
+  label="$2"
+  eval "env_value=\${$key:-}"
+  if [ -n "$env_value" ]; then
+    upsert_config "$key" "$env_value"
+    echo "已保存 ${label}（长度 ${#env_value} 位，已隐藏）。"
+    return 0
+  fi
+  return 1
+}
+
+configure_claude_code_auth() {
+  echo ""
+  echo "Claude Code 可以用账号登录，也可以用 Anthropic API Key。"
+  echo "如果你平时是用 API Key 跑 claude，这里需要让后台服务也拿到同一个 key。"
+
+  saved_auth=0
+  persist_existing_env_if_set "ANTHROPIC_API_KEY" "ANTHROPIC_API_KEY" && saved_auth=1
+
+  if [ "$saved_auth" -eq 1 ]; then
+    return 0
+  fi
+
+  echo "未在当前终端环境里检测到 ANTHROPIC_API_KEY。"
+  echo "如果你是 Claude Code 账号登录，直接回车跳过；如果你是 API Key 模式，请粘贴 key。"
+  read_hidden_optional "ANTHROPIC_API_KEY（可空，不会显示）："
+  if [ -n "$hidden_value" ]; then
+    upsert_config "ANTHROPIC_API_KEY" "$hidden_value"
+    echo "已保存 ANTHROPIC_API_KEY（长度 ${#hidden_value} 位，已隐藏）。"
+  else
+    echo "已跳过 API Key 保存。后端会使用 Claude Code 自己的登录/配置。"
+    echo "如果你使用 ANTHROPIC_AUTH_TOKEN、ANTHROPIC_BASE_URL 或 CLAUDE_CODE_OAUTH_TOKEN，请手动写入 $CONFIG_FILE。"
+  fi
+}
+
 read_required() {
   prompt="$1"
   value=""
@@ -349,6 +399,7 @@ set_claude() {
   upsert_config "MEMAI_LLM_FALLBACK" "fail"
   upsert_config "CLAUDE_BIN" "$claude_bin"
   upsert_config "MEMAI_CLAUDE_BIN" "$claude_bin"
+  configure_claude_code_auth
   chmod 600 "$CONFIG_FILE" 2>/dev/null || true
   echo ""
   echo "已切换为：Claude Code 直连"
