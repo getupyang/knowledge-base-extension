@@ -964,16 +964,6 @@ const commentSystem = (() => {
         cursor: pointer; padding: 0; font-family: inherit;
       }
       .kb-reply-btn:hover { color: var(--kb-terra); }
-      .kb-regenerate-btn {
-        border: 1px solid var(--kb-line);
-        border-radius: 3px;
-        padding: 5px 10px;
-        background: var(--kb-paper);
-      }
-      .kb-regenerate-btn:hover {
-        border-color: var(--kb-terra);
-        background: var(--kb-paper-2);
-      }
       .kb-ai-btn {
         background: var(--kb-ink); color: var(--kb-paper);
         border: none; border-radius: 3px;
@@ -1530,7 +1520,7 @@ const commentSystem = (() => {
     } else if (_aiUnreadCommentIds.has(c.id)) {
       actionHtml = `
         <button class="kb-ai-ready-btn" data-jump-ai="${c.id}">AI 已回复 · 查看</button>
-        ${hasAnyAI ? `<button class="kb-reply-btn kb-regenerate-btn" data-ask-ai="${c.id}">重新生成</button>` : ""}
+        ${hasAnyAI ? `<button class="kb-reply-btn" data-ask-ai="${c.id}">重新生成</button>` : ""}
       `;
     } else if (!hasAnyAI) {
       actionHtml = `<button class="kb-ai-btn" data-ask-ai="${c.id}">请 AI 回复</button>`;
@@ -1539,7 +1529,7 @@ const commentSystem = (() => {
     } else {
       actionHtml = `
         <button class="kb-reply-btn" data-open-reply="${c.id}">继续追问</button>
-        <button class="kb-reply-btn kb-regenerate-btn" data-ask-ai="${c.id}">重新生成</button>
+        <button class="kb-reply-btn" data-ask-ai="${c.id}">重新生成</button>
       `;
     }
     return `
