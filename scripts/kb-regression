@@ -294,6 +294,15 @@ class Regression:
         reply_body = reply_flow.group(1)
         assert_true("/reply" in reply_body, "submitReply must persist the user follow-up to backend")
         assert_true("askAI(commentId);" in reply_body, "submitReply must trigger AI by default after recording")
+        assert_true(
+            "const hasAnyAI = aiReplies.length > 0;" in content,
+            "comment card AI summon state must depend on actual AI replies, not agentCommentId; "
+            "synced first comments with no AI reply must still show 请 AI 回复",
+        )
+        assert_true(
+            "Boolean(c.agentCommentId) || aiReplies.length > 0" not in content,
+            "agentCommentId only means the comment was synced to backend; it must not hide the first AI summon entry",
+        )
 
         notebook_terms = [
             "/notebook/page-cache/",

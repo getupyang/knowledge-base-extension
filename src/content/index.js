@@ -338,6 +338,30 @@ const commentSystem = (() => {
     save(comments);
     return c;
   }
+  function countAIReplies(c) {
+    return (c?.replies || []).filter(r => r.isAI).length;
+  }
+  function setAiPending(commentId, patch = {}) {
+    const comments = load();
+    const c = comments.find(x => x.id === commentId);
+    if (!c) return null;
+    c.aiPending = {
+      startedAt: new Date().toISOString(),
+      existingAIReplyCount: countAIReplies(c),
+      ...(c.aiPending || {}),
+      ...patch,
+    };
+    save(comments);
+    return c;
+  }
+  function clearAiPending(commentId) {
+    const comments = load();
+    const c = comments.find(x => x.id === commentId);
+    if (!c || !c.aiPending) return null;
+    delete c.aiPending;
+    save(comments);
+    return c;
+  }
 
   // ── highlights 持久化存储（独立于 comments）──
   const HL_KEY = () => "kb_highlights_" + location.href.split("?")[0];
@@ -431,6 +455,56 @@ const commentSystem = (() => {
   function _findMarksForExcerpt(excerpt) {
     const id = _excerptId(excerpt);
     return Array.from(document.querySelectorAll('mark.kb-comment-highlight[data-excerpt-id="' + id + '"]'));
+  }
+
+  function _acceptedTextNodes() {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        const parent = node.parentElement;
+        if (!parent) return NodeFilter.FILTER_REJECT;
+        if (parent.closest("#kb-comment-panel, #kb-toast, mark.kb-comment-highlight, script, style, textarea")) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    });
+    const nodes = [];
+    let node;
+    while ((node = walker.nextNode())) {
+      if (node.textContent) nodes.push(node);
+    }
+    return nodes;
+  }
+
+  function _normalizeForAnchor(value) {
+    return String(value || "").replace(/\s+/g, " ").trim();
+  }
+
+  function _findTextRangeAcrossNodes(excerpt) {
+    const needle = _normalizeForAnchor(excerpt);
+    if (!needle) return null;
+    const nodes = _acceptedTextNodes();
+    let haystack = "";
+    const index = [];
+    for (const node of nodes) {
+      for (let i = 0; i < node.textContent.length; i++) {
+        const raw = node.textContent[i];
+        const normalized = /\s/.test(raw) ? " " : raw;
+        if (normalized === " " && haystack.endsWith(" ")) continue;
+        haystack += normalized;
+        index.push({ node, offset: i });
+      }
+    }
+    const start = haystack.indexOf(needle);
+    if (start === -1) return null;
+    const end = start + needle.length - 1;
+    const startRef = index[start];
+    const endRef = index[end];
+    if (!startRef || !endRef) return null;
+    const range = document.createRange();
+    range.setStart(startRef.node, startRef.offset);
+    range.setEnd(endRef.node, endRef.offset + 1);
+    return range;
   }
 
   function _bindMarkInteractions(mark, excerpt) {
@@ -606,19 +680,14 @@ const commentSystem = (() => {
   // ── 右键菜单触发：selection 已消失，用文字内容在页面上匹配并高亮 ──
   function highlightByText(excerpt) {
     if (!excerpt) return;
+    const crossNodeRange = _findTextRangeAcrossNodes(excerpt);
+    if (crossNodeRange) {
+      const position = serializeRange(crossNodeRange);
+      if (insertMark(crossNodeRange, excerpt) && position) addHighlight(excerpt, position);
+      return;
+    }
     // 用 TreeWalker 找到文本节点中匹配的位置
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
-      acceptNode(node) {
-        const parent = node.parentElement;
-        if (!parent) return NodeFilter.FILTER_REJECT;
-        if (parent.closest("#kb-comment-panel, #kb-toast, mark.kb-comment-highlight, script, style, textarea")) {
-          return NodeFilter.FILTER_REJECT;
-        }
-        return NodeFilter.FILTER_ACCEPT;
-      }
-    });
-    let node;
-    while ((node = walker.nextNode())) {
+    for (const node of _acceptedTextNodes()) {
       const idx = node.textContent.indexOf(excerpt);
       if (idx !== -1) {
         try {
@@ -1382,21 +1451,36 @@ const commentSystem = (() => {
       c.replies = Array.isArray(c.replies) ? c.replies : [];
       let changed = false;
       let addedAI = false;
+      let fulfilledPending = false;
       for (const rr of remote.replies || []) {
         const text = rr.content || "";
         if (!text.trim()) continue;
         const isAI = rr.author === "agent";
         if (_remoteReplyAlreadyLocal(c.replies, rr, isAI, text)) continue;
-        c.replies.push({
+        const replyRecord = {
           id: Date.now() + c.replies.length,
           remoteReplyId: rr.id,
           text,
           isAI,
           debugMeta: rr.debug_meta || null,
           createdAt: rr.created_at || new Date().toISOString(),
-        });
+        };
+        const replaceReplyId = isAI ? c.aiPending?.replaceReplyId : null;
+        const replaceIdx = replaceReplyId
+          ? c.replies.findIndex(r => String(r.id) === String(replaceReplyId))
+          : -1;
+        if (replaceIdx >= 0) {
+          c.replies[replaceIdx] = replyRecord;
+          if (isAI) fulfilledPending = true;
+        } else {
+          c.replies.push(replyRecord);
+        }
         changed = true;
         if (isAI) addedAI = true;
+      }
+      if (c.aiPending && (fulfilledPending || countAIReplies(c) > (c.aiPending.existingAIReplyCount || 0))) {
+        delete c.aiPending;
+        changed = true;
       }
       if (!changed) return false;
       c.replies.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
@@ -1416,6 +1500,22 @@ const commentSystem = (() => {
   function syncVisibleCommentsFromBackend(opts = {}) {
     const comments = load().filter(c => c.agentCommentId);
     comments.forEach(c => syncCommentFromBackend(c.id, opts));
+  }
+
+  let _pendingAiResumeTimer = null;
+  function resumePendingAiReplies() {
+    const pending = load().filter(c => c.aiPending && c.agentCommentId && !_askAIRunning.has(c.id));
+    pending.forEach(c => syncCommentFromBackend(c.id, { notify: true }));
+    if (!pending.length && _pendingAiResumeTimer) {
+      clearInterval(_pendingAiResumeTimer);
+      _pendingAiResumeTimer = null;
+    }
+  }
+  function startPendingAiResumeLoop() {
+    if (_pendingAiResumeTimer) return;
+    if (!load().some(c => c.aiPending && c.agentCommentId)) return;
+    resumePendingAiReplies();
+    _pendingAiResumeTimer = setInterval(resumePendingAiReplies, 5000);
   }
 
   function jumpToAiReply(commentId) {
@@ -1533,7 +1633,7 @@ const commentSystem = (() => {
     const aiReplies = c.replies.filter(r => r.isAI);
     const hasAnyAI = aiReplies.length > 0;
     let actionHtml = "";
-    if (_askAIRunning.has(c.id)) {
+    if (_askAIRunning.has(c.id) || c.aiPending) {
       actionHtml = `<span style="color:var(--kb-blue);font-size:11px;font-family:'JetBrains Mono',monospace;letter-spacing:0.04em;">AI 思考中…</span>`;
     } else if (_aiUnreadCommentIds.has(c.id)) {
       actionHtml = `<button class="kb-ai-ready-btn" data-jump-ai="${c.id}">AI 已回复 · 查看</button>`;
@@ -1895,15 +1995,28 @@ const commentSystem = (() => {
 
       // 记录 rerun 前已有的 agent reply 数量，轮询时等待新增
       let existingAgentReplyCount = 0;
+      const existingAIReplyCount = countAIReplies(c);
 
       // 如果已有 agentCommentId，rerun with latest conversation；否则新建
       if (agentCommentId) {
+        setAiPending(commentId, {
+          agentCommentId,
+          replaceReplyId: options.replaceReplyId || null,
+          existingAIReplyCount,
+        });
+        startPendingAiResumeLoop();
         // 先查当前有多少条 agent reply
         try {
           const preResp = await fetch(`http://localhost:8766/comments/${agentCommentId}`);
           if (preResp.ok) {
             const preData = await preResp.json();
             existingAgentReplyCount = preData.replies.filter(r => r.author === "agent").length;
+            setAiPending(commentId, {
+              agentCommentId,
+              replaceReplyId: options.replaceReplyId || null,
+              existingAIReplyCount,
+              existingAgentReplyCount,
+            });
           }
         } catch { /* ignore */ }
         // 更新 comment 内容为完整对话再 rerun
@@ -1935,6 +2048,13 @@ const commentSystem = (() => {
         const fresh = load();
         const match = fresh.find(x => x.id === commentId);
         if (match) { match.agentCommentId = agentCommentId; save(fresh); }
+        setAiPending(commentId, {
+          agentCommentId,
+          replaceReplyId: options.replaceReplyId || null,
+          existingAIReplyCount,
+          existingAgentReplyCount,
+        });
+        startPendingAiResumeLoop();
       }
 
       // 轮询等待 agent 回复（每5秒，最多360次=30分钟）
@@ -1989,6 +2109,7 @@ const commentSystem = (() => {
         } else {
           addReply(commentId, reply, true, replyDebugMeta);
         }
+        clearAiPending(commentId);
         if (shouldNotify) _markAiReplyReady(commentId);
         // 每次 AI 回复后更新 Notion（upsert：有 page 则追加，无则新建）
         const freshC = load().find(x => x.id === commentId);
@@ -2000,6 +2121,7 @@ const commentSystem = (() => {
         } else {
           addReply(commentId, pendingText, true);
         }
+        clearAiPending(commentId);
       }
     } catch (err) {
       const msg = err.message || String(err);
@@ -2016,6 +2138,7 @@ const commentSystem = (() => {
       } else {
         addReply(commentId, failureText, true);
       }
+      clearAiPending(commentId);
     }
 
     removeThinking();
@@ -2048,6 +2171,7 @@ const commentSystem = (() => {
     document.body.style.marginRight = "360px";
     render();
     syncVisibleCommentsFromBackend({ notify: false });
+    startPendingAiResumeLoop();
     updateBadge();
     // 展开输入区 + 聚焦（这是划线触发的）
     expandInputArea(true);
@@ -2065,6 +2189,7 @@ const commentSystem = (() => {
       panelEl.classList.add("kb-btn-hidden");
       render();
       syncVisibleCommentsFromBackend({ notify: true });
+      startPendingAiResumeLoop();
     }
     // badge 响应式更新：有高亮或评论时常驻显示
     updateBadge();
