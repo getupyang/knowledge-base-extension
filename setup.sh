@@ -217,7 +217,7 @@ read_with_default_for_setup() {
     entered_value="${entered_value:-$default_value}"
   else
     while [ -z "$entered_value" ]; do
-      read -p "  $prompt：" entered_value
+      read -p "  ${prompt}：" entered_value
       if [ -z "$entered_value" ]; then
         echo "  这里不能为空。"
       fi
@@ -449,7 +449,7 @@ if [ -n "$NOTION_TOKEN" ] && [ "$NOTION_TOKEN" != "ntn_your_token_here" ]; then
   if [ "$HTTP_CODE" = "200" ]; then
     echo "  ✓ Notion Token 有效"
   else
-    echo "  ✗ Notion Token 无效（HTTP $HTTP_CODE），请检查 $CONFIG_FILE"
+    echo "  ✗ Notion Token 无效（HTTP ${HTTP_CODE}），请检查 $CONFIG_FILE"
   fi
 else
   echo "  ⚠ 未配置 Notion Token，Notion 写入功能不可用"

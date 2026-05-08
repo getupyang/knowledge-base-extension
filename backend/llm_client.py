@@ -442,10 +442,12 @@ def _select_provider() -> BaseProvider:
         return OpenAICompatibleProvider()
 
     local_hint = _available_local_provider_names()
-    if local_hint:
+    if len(local_hint) == 1:
+        return _provider_from_name(local_hint[0])
+    if len(local_hint) > 1:
         raise LLMConfigError(
-            "Local LLM provider detected but not selected. "
-            f"Set MEMAI_LLM_PROVIDER to one of: {', '.join(local_hint)}"
+            "Multiple local LLM providers available "
+            f"({', '.join(local_hint)}). Set MEMAI_LLM_PROVIDER to one fixed value."
         )
     raise LLMConfigError("No LLM provider available: configure API key or install Claude Code/Codex")
 

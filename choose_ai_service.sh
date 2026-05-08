@@ -65,10 +65,11 @@ check_background_jobs_before_switch() {
   echo ""
   echo "切换前检查后台任务..."
 
+  worker_pid=""
   if [ -f "$LOG_DIR/worker.pid" ]; then
     worker_pid="$(cat "$LOG_DIR/worker.pid" 2>/dev/null || true)"
     if [ -n "$worker_pid" ] && ps -p "$worker_pid" >/dev/null 2>&1; then
-      echo "Worker：正在运行（PID $worker_pid）"
+      echo "Worker：正在运行（PID ${worker_pid}）"
     else
       echo "Worker：未运行或 pid 已失效"
     fi
@@ -81,7 +82,7 @@ check_background_jobs_before_switch() {
     return 0
   fi
   if [ ! -f "$DB_FILE" ]; then
-    echo "未找到本地 DB：$DB_FILE，跳过 jobs 队列检查。"
+    echo "未找到本地 DB：${DB_FILE}，跳过 jobs 队列检查。"
     return 0
   fi
 
