@@ -1253,6 +1253,14 @@ def _infer_project_label(signal: dict, text: str, fallback: str = "") -> str:
     return _normalize_project_label(fallback or text)
 
 
+def _explicit_project_label(signal: dict) -> str:
+    for key in ("project", "project_name", "name", "area", "workstream"):
+        value = (signal.get(key) or "").strip()
+        if value:
+            return _normalize_project_label(value)
+    return ""
+
+
 def _parse_dt(value: str) -> Optional[datetime]:
     if not value:
         return None
@@ -1265,6 +1273,7 @@ def _parse_dt(value: str) -> Optional[datetime]:
 _TOPIC_STOP_TERMS = {
     "the", "and", "for", "with", "that", "this", "from", "into", "what", "why", "how",
     "openai", "anthropic", "google", "github", "medium", "substack", "youtube", "wikipedia",
+    "show", "showcase", "moment",
     "页面", "这篇", "这个", "这些", "那些", "什么", "为什么", "怎么", "如何", "是否",
     "可以", "有没有", "是不是", "一下", "感觉", "其实", "但是", "因为", "所以",
     "评价一下", "总结一下", "解释一下", "分析一下", "调研一下", "介绍一下",
@@ -1278,6 +1287,26 @@ _TOPIC_CONTAINER_TITLE_RE = re.compile(
 
 _TOPIC_ACTION_ONLY_RE = re.compile(
     r"^(帮我|请|麻烦)?(评价|评估|总结|解释|分析|调研|介绍|展开|对比|讲讲|说说|看看)(一下|下|一下吧|一下吗|看看|吗|吧)?$"
+)
+_TOPIC_ACTION_PREFIX_RE = re.compile(
+    r"^(帮我|请|麻烦|可以|能不能|可不可以|你能不能)?\s*"
+    r"(评价|评估|总结|解释|分析|调研|介绍|展开|对比|讲讲|说说|看看|举例|举几个例子)"
+    r"(一下|下|一下吧|一下吗|吧|吗|嘛)?(?:[，,：:\s]+|$)"
+)
+_TOPIC_QUESTION_MARKERS = (
+    "为什么", "如何", "怎么", "是否", "是不是", "有没有", "能不能", "可不可以",
+    "哪些", "哪里", "谁", "怎样", "什么", "how ", "why ", "what ", "which ",
+)
+_THOUGHT_SIGNAL_SOURCES = {"active_question", "theme_signal", "project_signal"}
+_THOUGHT_USER_INTENT_SOURCES = {"comment", "comment_question", "selected_text"} | _THOUGHT_SIGNAL_SOURCES
+_THOUGHT_SOURCE_OBJECT_SOURCES = {"page_title", "surrounding_text"}
+_TOPIC_WEAK_FRAGMENT_TERMS = {
+    "关注度高", "非常颠覆性", "颠覆性", "用户最嗨的点", "最爽的点", "用户反馈",
+    "有哪些偏好", "有什么特点", "哪些特点", "什么特点",
+}
+_TOPIC_SHOWCASE_FRAGMENT_RE = re.compile(
+    r"^(?:哪些)?show\s*case最(?:show)?$|^(?:哪些)?showcase最(?:show)?$",
+    re.I,
 )
 
 
@@ -1296,9 +1325,12 @@ def _topic_key(label: str) -> str:
 def _clean_topic_label(text: str) -> str:
     value = (text or "").strip()
     value = re.sub(r"https?://\S+", " ", value)
+    value = re.sub(r"(?i)\bshow\s+case\b", "showcase", value)
     value = re.sub(r"\s+", " ", value)
     value = value.strip(" \t\r\n-–—|:：,，.。!！?？;；/\\()[]{}<>《》「」“”\"'`")
     value = re.sub(r"^(请问|我想知道|我想问|能不能|可不可以|帮我看看|举几个例子吧)[，,：:\s]*", "", value)
+    value = _TOPIC_ACTION_PREFIX_RE.sub("", value, count=1).strip()
+    value = re.sub(r"^(?:[0-9]+|[一二三四五六七八九十]+)[、.．)\)]\s*", "", value).strip()
     value = re.sub(r"(是什么意思|是什么|有哪些|怎么办|为什么)$", "", value).strip()
     return value[:38]
 
@@ -1307,12 +1339,23 @@ def _is_topic_like(label: str) -> bool:
     value = _clean_topic_label(label)
     if len(value) < 3:
         return False
+    if value.startswith(("的", "了", "和", "与")):
+        return False
     key = _topic_key(value)
     if not key or key in _TOPIC_STOP_TERMS:
+        return False
+    lower = value.lower()
+    if re.fullmatch(r"[a-z]{2,14}", lower):
         return False
     if _TOPIC_ACTION_ONLY_RE.fullmatch(value):
         return False
     if len(value) <= 8 and any(marker in value for marker in ("评价", "总结", "解释", "分析", "调研", "展开", "讲讲", "说说")):
+        return False
+    if value.startswith(("这些", "这个", "那个", "这件事", "背后")):
+        return False
+    if "这个事情" in value or "什么趋势" in value:
+        return False
+    if value in _TOPIC_WEAK_FRAGMENT_TERMS or _TOPIC_SHOWCASE_FRAGMENT_RE.fullmatch(value):
         return False
     if re.fullmatch(r"[0-9#.\-_/ ]+", value):
         return False
@@ -1363,11 +1406,98 @@ def _extract_named_terms(text: str, limit: int = 8) -> list:
     return out[:limit]
 
 
+def _extract_question_phrases(text: str, limit: int = 3) -> list:
+    text = (text or "").replace("---追问---", "\n")
+    out = []
+    for raw in re.split(r"[。！？!?；;\n]+", text):
+        raw = raw.strip()
+        if not raw:
+            continue
+        lower = raw.lower()
+        if not any(marker in lower for marker in _TOPIC_QUESTION_MARKERS):
+            continue
+        for chunk in re.split(r"[，,：:]", raw):
+            cleaned = _clean_topic_label(chunk)
+            if _is_topic_like(cleaned) and cleaned not in out:
+                out.append(cleaned)
+                break
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _compact_named_subject(text: str) -> str:
+    for term in _extract_named_terms(text, limit=6):
+        cleaned = _clean_topic_label(term)
+        if _is_topic_like(cleaned):
+            return cleaned[:26]
+    return ""
+
+
+def _extract_showcase_subject(text: str) -> str:
+    source = (text or "").replace("\n", " ")
+    patterns = [
+        r"\b([A-Z][A-Za-z0-9*+.#/-]{2,})\s+(?:show\s*case|showcase)\b",
+        r"\b(?:show\s*case|showcase)\s*[-–—|:：]\s*([A-Z][A-Za-z0-9*+.#/-]{2,})\b",
+        r"\b([A-Za-z][A-Za-z0-9*+.#/-]{2,})\s*的\s*(?:show\s*case|showcase)\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, source, re.I)
+        if not match:
+            continue
+        subject = _clean_topic_label(match.group(1))
+        if subject and subject.lower() not in _TOPIC_STOP_TERMS:
+            return subject[:24]
+    return ""
+
+
+def _refine_thought_label(label: str, row: dict, source: str) -> str:
+    cleaned = _clean_topic_label(label)
+    comment = row.get("comment") or ""
+    selected = row.get("selected_text") or ""
+    title = row.get("page_title") or ""
+    text = " ".join([cleaned, comment, selected, title])
+    lower = text.lower()
+
+    if "showcase" in lower:
+        subject = _extract_showcase_subject(" ".join([title, selected, comment, cleaned]))
+        if subject and any(marker in text for marker in ("调研", "哪些", "趋势", "偏好", "渠道", "特点", "关注度")):
+            return f"{subject} showcase 生态调研"[:38]
+    if any(marker in text for marker in ("论文", "方法论", "范式", "读法")) and any(
+        marker in text for marker in ("复用", "迁移", "研究", "介绍")
+    ):
+        return "研究方法论复用"
+    if any(marker in text for marker in ("社区", "共同体", "活动", "参与", "组织")) and any(
+        marker in text for marker in ("机制", "经验", "入口", "项目", "实践")
+    ):
+        return "共同体实践与参与路径"
+    if any(marker in text for marker in ("视频", "展示", "demo", "录制")) and any(
+        marker in text for marker in ("产品", "工具", "表达", "发布")
+    ):
+        return "产品展示表达任务"
+    if any(marker in lower for marker in ("benchmark", "metric")) or any(marker in text for marker in ("评测", "指标", "验证")):
+        if any(marker in text for marker in ("产品", "采用", "真实", "决策", "目标", "结果")):
+            return "评测证据如何影响真实决策"
+    if "后续" in text and ("影响" in text or "衍生" in text or "项目" in text):
+        subject = _compact_named_subject(" ".join([selected, title, comment]))
+        return f"{subject}的后续影响"[:38] if subject else "研究项目的后续影响"
+    similar_match = re.search(r"(?:有哪些类似|类似)\s*([^，,。？?]{3,34})", cleaned)
+    if similar_match and ("参加" in text or "活动" in text):
+        subject = _clean_topic_label(similar_match.group(1))
+        return f"类似 {subject} 的活动与参与路径"[:38]
+    if cleaned.startswith(("这些", "这个", "那个", "这件事", "背后")) or "背后是什么" in cleaned:
+        if any(marker in lower for marker in ("model", "gpt", "claude", "llm")) or "模型" in text:
+            return "模型现实任务表现差异原因"
+        subject = _compact_named_subject(" ".join([selected, title]))
+        return f"{subject} 的原因追问"[:38] if subject else cleaned
+    return cleaned
+
+
 def _extract_thought_candidates(row: dict) -> list:
     candidates = []
 
     def add(label: str, source: str, weight: float) -> None:
-        cleaned = _clean_topic_label(label)
+        cleaned = _refine_thought_label(label, row, source)
         if not _is_topic_like(cleaned):
             return
         key = _topic_key(cleaned)
@@ -1376,6 +1506,8 @@ def _extract_thought_candidates(row: dict) -> list:
         candidates.append({"label": cleaned, "key": key, "source": source, "weight": weight})
 
     direct_comment = (row.get("comment") or "").split("---追问---", 1)[0]
+    for phrase in _extract_question_phrases(direct_comment, limit=2):
+        add(phrase, "comment_question", 1.18)
     for term in _extract_named_terms(direct_comment, limit=4):
         add(term, "comment", 1.05)
     for term in _extract_named_terms(row.get("selected_text") or "", limit=4):
@@ -1490,13 +1622,126 @@ def _thought_possible_misread(evidence_count: int, behavior_scores: list) -> str
     return "这是系统基于本地批注的当前推断；如果用户确认、改名或合并，可信度会更高。"
 
 
+def _thought_source_object_only(source_counts: dict, action_count: int) -> bool:
+    total = sum(int(v or 0) for v in (source_counts or {}).values())
+    if total <= 0:
+        return False
+    source_object = sum(int(source_counts.get(k) or 0) for k in _THOUGHT_SOURCE_OBJECT_SOURCES)
+    user_intent = sum(int(source_counts.get(k) or 0) for k in _THOUGHT_USER_INTENT_SOURCES)
+    return source_object >= total and user_intent == 0 and action_count == 0
+
+
+def _looks_entity_only_topic(label: str) -> bool:
+    value = (label or "").strip()
+    if re.fullmatch(r"[A-Z][A-Za-z0-9*+.#/-]{1,}(?:\s+[A-Z][A-Za-z0-9*+.#/-]{1,}){0,3}", value):
+        return True
+    if re.fullmatch(r"[A-Z][A-Za-z0-9*+.#/-]{1,}", value):
+        return True
+    return False
+
+
+def _thought_read_for_node(label: str, lane: str, trend: str, evidence_count: int, source_counts: dict,
+                           action_count: int, distinct_day_count: int) -> str:
+    if source_counts.get("active_question"):
+        return f"这更像一个你正在推进的未解问题：{label}。之后相关回复会优先带入这条问题线索，而不是只解释当前页面。"
+    if source_counts.get("theme_signal"):
+        return f"这是一条从多次本地批注里升起的关注面：{label}。它会作为背景主题参与后续上下文选择。"
+    if source_counts.get("project_signal"):
+        return f"这来自本机明确项目/工作流信号：{label}。系统会把它当作候选工作容器，而不是用户确认的长期档案。"
+    if _thought_source_object_only(source_counts, action_count):
+        return f"目前「{label}」更像你接触过的资料对象或页面线索；先不提升为项目，只在相关问题出现时作为背景。"
+    if lane == "mainline":
+        return f"这条线索在本机批注里最集中：{label}。后续回复应优先检查它是否和当前问题有关，避免把问题当成孤立提问。"
+    if trend == "rising" or lane in ("sprout", "merging"):
+        return f"最近围绕「{label}」的证据在升温。系统会继续观察它是否变成稳定问题线，而不是马上写死。"
+    if lane == "cooling":
+        return f"「{label}」仍有历史证据，但近期出现变少。它会降为背景，不主动抢占解释方向。"
+    if evidence_count <= 2 or distinct_day_count <= 1:
+        return f"「{label}」现在还是一条较弱线索，可能只是一次顺手提问；需要更多本地证据确认。"
+    return f"本机多次批注都碰到「{label}」。它会作为候选主题参与后续回复的上下文排序。"
+
+
+def _thought_label_contains(node: dict, *needles: str) -> bool:
+    label = (node or {}).get("label") or ""
+    lower = label.lower()
+    return any((needle.lower() in lower if re.fullmatch(r"[A-Za-z0-9 _/-]+", needle) else needle in label) for needle in needles)
+
+
+def _thought_aha(main: dict, emerging: list, cooling: list, nodes: list) -> dict:
+    if not nodes:
+        return {
+            "headline": "现在还不是总结你的时候",
+            "read": "本机证据太少。系统先保留原始批注，不把一次性兴趣包装成长期主题。",
+            "next_question": "先继续正常批注；等同一类问题跨几天反复出现，再生成更强判断。",
+            "evidence_comment_ids": [],
+        }
+
+    lead = main or (emerging[0] if emerging else nodes[0])
+    lead_label = lead.get("label") or "当前问题"
+    rising_labels = [n.get("label") for n in emerging if n.get("label")]
+    evidence_ids = []
+    for node in [lead] + list(emerging or [])[:2]:
+        for cid in node.get("evidence_comment_ids") or []:
+            if cid and cid not in evidence_ids:
+                evidence_ids.append(cid)
+
+    all_focus = [lead] + list(emerging or [])
+    has_eval = any(_thought_label_contains(n, "评测", "benchmark", "产品判断") for n in all_focus)
+    has_reading = any(_thought_label_contains(n, "读论文", "论文方法论", "方法论复用") for n in all_focus)
+    has_video = any(_thought_label_contains(n, "视频", "展示") for n in all_focus)
+    has_social = any(_thought_label_contains(n, "社会技术", "活动参与", "附近理论", "双年展") for n in all_focus)
+    has_model_reason = any(_thought_label_contains(n, "模型现实任务", "差异原因") for n in all_focus)
+
+    if has_eval and has_reading:
+        headline = "你不是在收集论文和评测，而是在找一套判断产品是否真的变好的方法"
+        read = "反复出现的不是某篇论文本身，而是“指标、任务、用户价值、真实采用”之间怎样连起来。读论文、看 benchmark、追问后续影响，其实都在服务同一个判断：一个系统怎样证明自己不是看起来很强，而是真的让产品变好。"
+        next_question = "下一步最值得问：这些案例里，哪一种证据真正改变了产品决策，哪一种只是论文里的漂亮指标？"
+    elif has_eval:
+        headline = f"你围着「{lead_label}」转，核心不是资料更多，而是证据能不能改变判断"
+        read = "这些批注的共同点是：你不满足于官方叙事或单页解释，会追问真实应用、后续采用和评测是否改变了实践。系统后续应该优先帮你找“证据链”，而不是只补背景知识。"
+        next_question = "下一步最值得问：这个评测或指标有没有进入真实产品、团队决策或行业标准？"
+    elif has_social:
+        headline = "你最近的社会技术兴趣，落点已经从“这是什么”转向“我怎么参与并复用它”"
+        read = "Burning Man、黑客营地、附近研究、双年展这些表面上很散，但底层都在问同一件事：理念如何变成可参与的场域、组织经验和真实产物。"
+        next_question = "下一步最值得问：这些场域留下了哪些可复用的组织方法，以及你今年能从哪个入口实际参与？"
+    elif has_video:
+        headline = "这个新线索更像一个马上要执行的产品表达任务"
+        read = "围绕视频、展示和工具选择的批注不是长期研究主题，而是当下要把产品讲清楚的执行问题。系统应该帮你压缩选择成本，而不是展开成泛泛的工具榜单。"
+        next_question = "下一步最值得问：你的产品视频第一版到底要证明什么，是功能、使用场景，还是用户看到后的行动？"
+    elif has_model_reason:
+        headline = "你在追问模型表现差异背后的机制，而不只是要例子"
+        read = "这些问题表面是分类解释或例子补全，底层是在判断：不同模型、不同任务形态为什么会表现不同，以及这种差异对产品设计意味着什么。"
+        next_question = "下一步最值得问：哪些任务差异来自模型能力，哪些其实来自任务定义和反馈循环设计？"
+    elif main and rising_labels:
+        headline = f"主线是「{lead_label}」，但真正的新变化在「{rising_labels[0]}」"
+        read = "稳定主线提供背景，新升温线索说明你最近的注意力正在换挡。系统后续应该把新问题放进旧主线里判断，而不是把它当成孤立兴趣。"
+        next_question = f"下一步最值得问：新出现的「{rising_labels[0]}」是在延伸主线，还是在开启一条新的工作线？"
+    else:
+        headline = f"现在最清楚的线索是「{lead_label}」，但还不能写死成长期画像"
+        read = "证据已经足够形成一个候选问题，但跨天持续性或行动信号还不够强。系统会先把它当作下一次回复的上下文候选，而不是替用户下结论。"
+        next_question = f"下一步最值得问：你继续追这个问题时，是想要背景解释、行动方案，还是判断框架？"
+
+    if cooling:
+        cooling_label = cooling[0].get("label") or ""
+        if cooling_label:
+            read += f" 同时「{cooling_label}」在降温，说明它更适合作为背景，不该再抢占顶部解释。"
+
+    return {
+        "headline": headline,
+        "read": read,
+        "next_question": next_question,
+        "evidence_comment_ids": evidence_ids[:8],
+    }
+
+
 def _dynamic_thought_lane(rank: int, evidence_count: int, recent: int, previous: int, older: int, action_count: int, distinct_day_count: int, span_days: int, intent_strength: str) -> str:
     if recent == 0 and (previous > 0 or older > 0):
         return "cooling"
-    if recent > 0 and older == 0 and evidence_count <= 3:
-        return "sprout"
-    if rank == 0 and (evidence_count >= 2 or action_count > 0 or distinct_day_count >= 2):
+    persistent = evidence_count >= 4 and (span_days >= 7 or distinct_day_count >= 3)
+    if persistent and (rank <= 5 or span_days >= 14 or distinct_day_count >= 5):
         return "mainline"
+    if recent > 0 and older == 0 and (span_days < 3 or distinct_day_count <= 2):
+        return "sprout"
     if recent > previous and (older > 0 or distinct_day_count >= 2):
         return "merging"
     if evidence_count <= 1 and intent_strength != "高":
@@ -1539,47 +1784,159 @@ def _build_thought_map(conn: sqlite3.Connection, days: Optional[int] = None) -> 
     bucket_count = 6
     bucket_days = max(1, days // bucket_count)
     clusters = {}
+    rejected_candidates = []
+
+    def add_cluster_candidate(row: dict, candidate: dict, behavior: dict, extra_score: float = 0.0,
+                              interpretation: str = "") -> None:
+        source = candidate.get("source") or "local_evidence"
+        cleaned_label = _refine_thought_label(candidate.get("label") or "", row, source)
+        if not _is_topic_like(cleaned_label):
+            rejected_candidates.append({
+                "label": candidate.get("label") or "",
+                "source": source,
+                "reason": "not_topic_like",
+            })
+            return
+        if source not in _THOUGHT_SIGNAL_SOURCES and _looks_entity_only_topic(cleaned_label) and not behavior.get("action_hit") and not behavior.get("followups"):
+            rejected_candidates.append({
+                "label": cleaned_label,
+                "source": source,
+                "reason": "entity_only_without_intent",
+            })
+            return
+        key = candidate.get("key") or _topic_key(cleaned_label)
+        key = _topic_key(cleaned_label)
+        if not key:
+            return
+        cluster = clusters.setdefault(key, {
+            "label": cleaned_label,
+            "label_weight": 0,
+            "score": 0.0,
+            "evidence": [],
+            "buckets": [0] * bucket_count,
+            "behavior_scores": [],
+            "distinct_days": set(),
+            "source_counts": {},
+            "seen_evidence_keys": set(),
+        })
+        label_weight = float(candidate.get("weight") or 0)
+        if label_weight > cluster["label_weight"]:
+            cluster["label"] = cleaned_label
+            cluster["label_weight"] = label_weight
+        weighted_score = label_weight * (0.65 + _float_or(behavior.get("score"))) + extra_score
+        cluster["score"] += weighted_score
+
+        dt = _parse_dt(row.get("created_at") or row.get("signal_created_at")) or now
+        cluster["distinct_days"].add(dt.date().isoformat())
+        age_days = max(0, (now - dt).days)
+        bucket_idx = bucket_count - 1 - min(bucket_count - 1, age_days // bucket_days)
+        cluster["buckets"][bucket_idx] += 1
+        cluster["behavior_scores"].append(_float_or(behavior.get("score")))
+        cluster["source_counts"][source] = cluster["source_counts"].get(source, 0) + 1
+
+        evidence_key = (row.get("id") or row.get("comment_id") or row.get("signal_id"), source, key)
+        if evidence_key in cluster["seen_evidence_keys"]:
+            return
+        cluster["seen_evidence_keys"].add(evidence_key)
+        cluster["evidence"].append({
+            "id": row.get("id") or row.get("comment_id"),
+            "created_at": row.get("created_at") or row.get("signal_created_at"),
+            "page_title": row.get("page_title") or "",
+            "page_url": row.get("page_url") or "",
+            "selected_text": (row.get("selected_text") or "")[:220],
+            "comment": (row.get("comment") or "")[:360],
+            "raw_comment": row.get("comment") or "",
+            "matched_terms": [cleaned_label],
+            "behavior": behavior,
+            "interpretation": interpretation or _thought_card_interpretation(cleaned_label, row, source, behavior),
+        })
+
     for row in rows:
         behavior = _thought_behavior_signal(row)
         candidates = _extract_thought_candidates(row)
         for candidate in candidates:
-            key = candidate["key"]
-            if not key:
-                continue
-            cluster = clusters.setdefault(key, {
-                "label": candidate["label"],
-                "label_weight": 0,
-                "score": 0.0,
-                "evidence": [],
-                "buckets": [0] * bucket_count,
-                "behavior_scores": [],
-                "distinct_days": set(),
-                "source_counts": {},
-            })
-            weighted_score = candidate["weight"] * (0.65 + behavior["score"])
-            cluster["score"] += weighted_score
-            if candidate["weight"] > cluster["label_weight"]:
-                cluster["label"] = candidate["label"]
-                cluster["label_weight"] = candidate["weight"]
-            dt = _parse_dt(row.get("created_at")) or now
-            cluster["distinct_days"].add(dt.date().isoformat())
-            age_days = max(0, (now - dt).days)
-            bucket_idx = bucket_count - 1 - min(bucket_count - 1, age_days // bucket_days)
-            cluster["buckets"][bucket_idx] += 1
-            cluster["behavior_scores"].append(behavior["score"])
-            cluster["source_counts"][candidate["source"]] = cluster["source_counts"].get(candidate["source"], 0) + 1
-            cluster["evidence"].append({
-                "id": row.get("id"),
-                "created_at": row.get("created_at"),
-                "page_title": row.get("page_title") or "",
-                "page_url": row.get("page_url") or "",
-                "selected_text": (row.get("selected_text") or "")[:220],
-                "comment": (row.get("comment") or "")[:360],
-                "raw_comment": row.get("comment") or "",
-                "matched_terms": [candidate["label"]],
-                "behavior": behavior,
-                "interpretation": _thought_card_interpretation(candidate["label"], row, candidate["source"], behavior),
-            })
+            add_cluster_candidate(row, candidate, behavior)
+
+    cutoff = window_start.isoformat()
+    signal_limit = 160
+    active_question_rows = [dict(r) for r in conn.execute(
+        """SELECT aq.id AS signal_id, aq.comment_id, aq.question, aq.signal_strength,
+                  aq.created_at AS signal_created_at,
+                  c.id, c.created_at, c.page_url, c.page_title, c.selected_text, c.surrounding_text, c.comment
+           FROM active_question_signals aq
+           LEFT JOIN comments c ON c.id = aq.comment_id
+           WHERE aq.status='active'
+             AND COALESCE(c.created_at, aq.created_at) >= ?
+           ORDER BY aq.created_at DESC
+           LIMIT ?""",
+        (cutoff, signal_limit),
+    ).fetchall()]
+    for row in active_question_rows:
+        label = _clean_topic_label(row.get("question") or "")
+        behavior = _thought_behavior_signal(row)
+        strength = _float_or(row.get("signal_strength"))
+        behavior["score"] = max(_float_or(behavior.get("score")), min(1.0, 0.42 + strength * 0.58))
+        behavior["labels"] = list(dict.fromkeys((behavior.get("labels") or []) + ["active question"]))
+        add_cluster_candidate(
+            row,
+            {"label": label, "key": _topic_key(label), "source": "active_question", "weight": 1.42 + strength * 0.35},
+            behavior,
+            extra_score=0.35 + strength * 0.35,
+            interpretation=f"这条来自本机 memory growth 抽出的 active question：{label}。",
+        )
+
+    theme_rows = [dict(r) for r in conn.execute(
+        """SELECT ts.id AS signal_id, ts.comment_id, ts.theme, ts.intensity, ts.evidence_count,
+                  ts.created_at AS signal_created_at,
+                  c.id, c.created_at, c.page_url, c.page_title, c.selected_text, c.surrounding_text, c.comment
+           FROM theme_signals ts
+           LEFT JOIN comments c ON c.id = ts.comment_id
+           WHERE COALESCE(c.created_at, ts.created_at) >= ?
+           ORDER BY ts.created_at DESC
+           LIMIT ?""",
+        (cutoff, signal_limit),
+    ).fetchall()]
+    for row in theme_rows:
+        label = _clean_topic_label(row.get("theme") or "")
+        behavior = _thought_behavior_signal(row)
+        intensity = _float_or(row.get("intensity"))
+        behavior["score"] = max(_float_or(behavior.get("score")), min(1.0, 0.34 + intensity * 0.58))
+        behavior["labels"] = list(dict.fromkeys((behavior.get("labels") or []) + ["theme signal"]))
+        add_cluster_candidate(
+            row,
+            {"label": label, "key": _topic_key(label), "source": "theme_signal", "weight": 1.22 + intensity * 0.28},
+            behavior,
+            extra_score=0.22 + intensity * 0.28,
+            interpretation=f"这条来自本机 memory growth 抽出的主题信号：{label}。",
+        )
+
+    project_rows = [dict(r) for r in conn.execute(
+        """SELECT ps.id AS signal_id, ps.comment_id, ps.signal_json, ps.confidence,
+                  ps.created_at AS signal_created_at,
+                  c.id, c.created_at, c.page_url, c.page_title, c.selected_text, c.surrounding_text, c.comment
+           FROM project_signals ps
+           LEFT JOIN comments c ON c.id = ps.comment_id
+           WHERE COALESCE(c.created_at, ps.created_at) >= ?
+           ORDER BY ps.created_at DESC
+           LIMIT ?""",
+        (cutoff, signal_limit),
+    ).fetchall()]
+    for row in project_rows:
+        signal = _json_obj(row.get("signal_json"))
+        label = _explicit_project_label(signal)
+        if not label:
+            continue
+        behavior = _thought_behavior_signal(row)
+        confidence = _float_or(row.get("confidence"), _float_or(signal.get("confidence")))
+        behavior["score"] = max(_float_or(behavior.get("score")), min(1.0, 0.38 + confidence * 0.48))
+        behavior["labels"] = list(dict.fromkeys((behavior.get("labels") or []) + ["project signal"]))
+        add_cluster_candidate(
+            row,
+            {"label": label, "key": _topic_key(label), "source": "project_signal", "weight": 1.1 + confidence * 0.22},
+            behavior,
+            extra_score=0.16 + confidence * 0.22,
+            interpretation=f"这条来自本机明确项目/工作流信号：{label}。",
+        )
 
     cluster_items = list(clusters.values())
     cluster_items.sort(key=lambda c: (
@@ -1588,14 +1945,33 @@ def _build_thought_map(conn: sqlite3.Connection, days: Optional[int] = None) -> 
         max((e.get("created_at") or "" for e in c["evidence"]), default=""),
     ))
     nodes = []
-    for rank, cluster in enumerate(cluster_items[:10]):
-        evidence = cluster["evidence"]
-        buckets = cluster["buckets"]
-        behavior_scores = cluster["behavior_scores"]
+    for rank, cluster in enumerate(cluster_items[:24]):
+        raw_evidence = cluster["evidence"]
         distinct_days = cluster["distinct_days"]
-        if not evidence:
+        if not raw_evidence:
             continue
+        deduped = {}
+        for item in sorted(
+            raw_evidence,
+            key=lambda e: (e["behavior"]["score"], e.get("created_at") or ""),
+            reverse=True,
+        ):
+            evidence_key = item.get("id") or (
+                item.get("page_url") or "",
+                item.get("created_at") or "",
+                (item.get("raw_comment") or item.get("comment") or "")[:160],
+            )
+            if evidence_key not in deduped:
+                deduped[evidence_key] = item
+        evidence = list(deduped.values())
         evidence.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+        buckets = [0] * bucket_count
+        for item in evidence:
+            dt = _parse_dt(item.get("created_at")) or now
+            age_days = max(0, (now - dt).days)
+            bucket_idx = bucket_count - 1 - min(bucket_count - 1, age_days // bucket_days)
+            buckets[bucket_idx] += 1
+        behavior_scores = [e["behavior"]["score"] for e in evidence]
         recent = buckets[-1]
         previous = buckets[-2] if len(buckets) >= 2 else 0
         older = sum(buckets[:-2])
@@ -1608,20 +1984,38 @@ def _build_thought_map(conn: sqlite3.Connection, days: Optional[int] = None) -> 
         followup_count = sum(int(e["behavior"].get("followups") or 0) for e in evidence)
         avg_behavior = sum(behavior_scores) / max(1, len(behavior_scores))
         recent_behavior_sum = sum(recent_behavior)
+        source_counts = cluster["source_counts"]
+        signal_source_count = sum(int(source_counts.get(k) or 0) for k in _THOUGHT_SIGNAL_SOURCES)
+        user_intent_source_count = sum(int(source_counts.get(k) or 0) for k in _THOUGHT_USER_INTENT_SOURCES)
+        source_object_only = _thought_source_object_only(source_counts, action_count)
         confidence_score = min(1.0, len(evidence) / 10 * 0.42 + distinct_day_count / 5 * 0.34 + (0.24 if span_days >= 14 else 0))
         max_behavior = max(behavior_scores or [0])
         intensity_score = min(1.0, max_behavior * 0.44 + recent_behavior_sum / 4 * 0.25 + action_count / 3 * 0.23 + followup_count / 4 * 0.08)
         if action_count and recent > 0:
             intensity_score = max(intensity_score, 0.72)
+        if signal_source_count:
+            confidence_score = max(confidence_score, min(0.92, 0.46 + signal_source_count * 0.1))
+            intensity_score = max(intensity_score, min(0.9, 0.52 + signal_source_count * 0.08))
+        if source_object_only:
+            confidence_score = min(confidence_score, 0.42)
+            intensity_score = min(intensity_score, 0.32)
         persistence_score = min(1.0, span_days / 28 * 0.42 + distinct_day_count / 6 * 0.38 + len(evidence) / 12 * 0.2)
         role_centrality = min(0.9, 0.32 + len(evidence) / 10 * 0.26 + distinct_day_count / 5 * 0.22 + (0.1 if action_count else 0))
         centrality_score = min(1.0, role_centrality + (0.12 if recent >= 3 else 0) + (0.08 if action_count else 0))
+        if source_object_only:
+            centrality_score = min(centrality_score, 0.38)
         confidence = _score_level(confidence_score)
         intent_strength = _score_level(intensity_score)
         persistence = _score_level(persistence_score)
         centrality = _score_level(centrality_score)
 
         lane = _dynamic_thought_lane(rank, len(evidence), recent, previous, older, action_count, distinct_day_count, span_days, intent_strength)
+        if source_object_only:
+            lane = "occasional"
+        elif signal_source_count and lane == "occasional" and (recent > 0 or distinct_day_count >= 2):
+            lane = "sprout"
+        elif user_intent_source_count == 0 and lane in ("mainline", "merging"):
+            lane = "branch"
         if recent > previous:
             trend = "rising"
         elif recent == 0 and (previous > 0 or older > 0):
@@ -1630,22 +2024,28 @@ def _build_thought_map(conn: sqlite3.Connection, days: Optional[int] = None) -> 
             trend = "new"
         else:
             trend = "steady"
+        if lane == "cooling" and len(evidence) < 3:
+            continue
         evidence_for_display = sorted(
             evidence,
             key=lambda e: (e["behavior"]["score"], e.get("created_at") or ""),
             reverse=True,
         )
+        evidence_comment_ids = []
+        for e in evidence_for_display:
+            cid = e.get("id")
+            if cid and cid not in evidence_comment_ids:
+                evidence_comment_ids.append(cid)
         label = cluster["label"]
-        read = f"这条线索来自这台电脑最近 {len(evidence)} 条本地批注，主要围绕「{label}」展开。"
-        top_sources = sorted(cluster["source_counts"].items(), key=lambda kv: kv[1], reverse=True)
-        if top_sources:
-            source_name = {
-                "page_title": "页面标题",
-                "comment": "评论",
-                "selected_text": "划线",
-                "surrounding_text": "上下文",
-            }.get(top_sources[0][0], "本地证据")
-            read += f" 主要证据来源是{source_name}。"
+        read = _thought_read_for_node(
+            label,
+            lane,
+            trend,
+            len(evidence),
+            source_counts,
+            action_count,
+            distinct_day_count,
+        )
         nodes.append({
             "id": f"topic-{_topic_hash(label)}",
             "label": label,
@@ -1665,6 +2065,7 @@ def _build_thought_map(conn: sqlite3.Connection, days: Optional[int] = None) -> 
                 "centrality": round(centrality_score, 3),
                 "avg_behavior": round(avg_behavior, 3),
             },
+            "source_counts": dict(source_counts),
             "evidence_count": len(evidence),
             "recent_count": recent,
             "action_count": action_count,
@@ -1673,9 +2074,11 @@ def _build_thought_map(conn: sqlite3.Connection, days: Optional[int] = None) -> 
             "first_seen_at": first_seen,
             "last_seen_at": last_seen,
             "sparkline": buckets,
-            "evidence_comment_ids": [e["id"] for e in evidence_for_display[:8] if e.get("id")],
+            "evidence_comment_ids": evidence_comment_ids[:8],
             "evidence": evidence_for_display[:5],
         })
+        if len(nodes) >= 10:
+            break
 
     lane_order = {"mainline": 0, "merging": 1, "branch": 2, "sprout": 3, "occasional": 4, "cooling": 5}
     nodes.sort(key=lambda n: (
@@ -1693,7 +2096,7 @@ def _build_thought_map(conn: sqlite3.Connection, days: Optional[int] = None) -> 
         "occasional": [n for n in nodes if n["lane"] == "occasional"],
         "cooling": [n for n in nodes if n["lane"] == "cooling"],
     }
-    main = (lanes["mainline"] or nodes[:1] or [{}])[0]
+    main = (lanes["mainline"] or [{}])[0]
     emerging = (lanes["sprout"] or lanes["merging"] or lanes["branch"] or [])[:2]
     cooling = lanes["cooling"][:2]
     observation = "我只基于这台电脑的本地批注生成思考地图；当前证据还不足以形成稳定主线。"
@@ -1703,6 +2106,11 @@ def _build_thought_map(conn: sqlite3.Connection, days: Optional[int] = None) -> 
             observation += " 最近升温的是 " + "、".join(f"「{n['label']}」" for n in emerging) + "。"
         if cooling:
             observation += " 有些旧线索开始降温：" + "、".join(f"「{n['label']}」" for n in cooling) + "。"
+    elif emerging:
+        observation = "我还没有看到足够稳定的主线；最近新出现或升温的是 " + "、".join(f"「{n['label']}」" for n in emerging) + "。"
+        if cooling:
+            observation += " 同时，一些旧线索在降温：" + "、".join(f"「{n['label']}」" for n in cooling) + "。"
+    aha = _thought_aha(main, emerging, cooling, nodes)
     return {
         "generated_at": _now_iso(),
         "window_days": days,
@@ -1710,6 +2118,7 @@ def _build_thought_map(conn: sqlite3.Connection, days: Optional[int] = None) -> 
         "window_label": window_label,
         "bucket_days": bucket_days,
         "observation": observation,
+        "aha": aha,
         "stats": {
             "node_count": len(nodes),
             "mainline_count": len(lanes["mainline"]),
@@ -1717,6 +2126,8 @@ def _build_thought_map(conn: sqlite3.Connection, days: Optional[int] = None) -> 
             "sprout_count": len(lanes["sprout"]),
             "occasional_count": len(lanes["occasional"]),
             "cooling_count": len(lanes["cooling"]),
+            "rejected_candidate_count": len(rejected_candidates),
+            "signal_backed_count": sum(1 for n in nodes if any((n.get("source_counts") or {}).get(k) for k in _THOUGHT_SIGNAL_SOURCES)),
         },
         "lanes": lanes,
         "nodes": nodes,
@@ -1804,16 +2215,20 @@ def _build_memory_map(conn: sqlite3.Connection, limit: int = 60) -> dict:
     ).fetchall()]
 
     projects_by_label = {}
+    skipped_project_signal_count = 0
     for row in project_rows:
         signal = _json_obj(row.get("signal_json"))
         summary = (signal.get("summary") or "").strip()
+        label = _explicit_project_label(signal)
+        if not label:
+            skipped_project_signal_count += 1
+            continue
         text = " ".join([
             summary,
             row.get("page_title") or "",
             row.get("selected_text") or "",
             row.get("comment") or "",
         ])
-        label = _infer_project_label(signal, text, row.get("page_title") or "")
         key = label.lower()
         item = projects_by_label.setdefault(key, {
             "id": key,
@@ -1933,6 +2348,7 @@ def _build_memory_map(conn: sqlite3.Connection, limit: int = 60) -> dict:
             "active_question_count": len(questions),
             "theme_count": len(themes),
             "source": "project_signals + active_question_signals + theme_signals",
+            "skipped_project_signal_count": skipped_project_signal_count,
         },
         "projects": projects[:12],
         "active_questions": questions[:20],

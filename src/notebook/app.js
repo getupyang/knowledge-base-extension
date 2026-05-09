@@ -123,7 +123,7 @@ function updateDiaryUnreadNotice() {
   if (diaryNav) diaryNav.classList.toggle("has-unread", count > 0);
   if (diaryCount) {
     if (count > 0) {
-      diaryCount.textContent = String(count);
+      diaryCount.textContent = "";
       diaryCount.classList.add("unread");
       diaryCount.title = `${count} 条未读 AI 回复`;
     } else {
@@ -867,13 +867,20 @@ let _lastThoughtMapData = null;
 
 async function loadThoughtMap(force) {
   if (!_thoughtMapPromise || force) {
-    _thoughtMapPromise = api("/notebook/thought-map");
+    _thoughtMapPromise = Promise.allSettled([
+      api("/notebook/thought-map"),
+      api("/notebook/memory-map"),
+    ]);
   }
   const box = $("kb-nb-thought-map");
   if (!box) return;
   try {
-    const data = await _thoughtMapPromise;
-    renderThoughtMap(data);
+    const [thoughtResult, memoryResult] = await _thoughtMapPromise;
+    if (thoughtResult.status !== "fulfilled") throw thoughtResult.reason;
+    renderThoughtMap({
+      ...thoughtResult.value,
+      memory_map: memoryResult.status === "fulfilled" ? memoryResult.value : null,
+    });
   } catch (e) {
     box.innerHTML = `<div class="kb-nb-empty">读取失败</div>`;
   }
@@ -942,7 +949,7 @@ function flattenThoughtNodes(lanes) {
   return order.flatMap(k => Array.isArray(lanes?.[k]) ? lanes[k] : []);
 }
 
-function renderThoughtHeroSummary(lanes, observation) {
+function renderThoughtHeroSummary(lanes, observation, aha) {
   const main = (lanes.mainline || [])[0];
   const rising = [...(lanes.sprout || []), ...(lanes.merging || [])].filter(n => n.trend === "rising" || n.lane === "sprout").slice(0, 3);
   const cooling = lanes.cooling || [];
@@ -951,8 +958,14 @@ function renderThoughtHeroSummary(lanes, observation) {
     rising.length ? { label: "最近升温", value: rising.map(n => n.label).join("、"), note: "后续会重点观察是否继续出现" } : null,
     cooling.length ? { label: "开始降温", value: cooling.map(n => n.label).join("、"), note: "降低解释优先级，但保留为背景" } : null,
   ].filter(Boolean);
-  if (!rows.length) return `<h3>${escapeHtml(observation || "")}</h3>`;
+  const headline = aha?.headline || observation || "";
+  const read = aha?.read || "";
+  const next = aha?.next_question || "";
+  if (!rows.length && !headline) return "";
   return `
+    ${headline ? `<h3>${escapeHtml(headline)}</h3>` : ""}
+    ${read ? `<p>${escapeHtml(read)}</p>` : ""}
+    ${next ? `<p class="kb-nb-thought-next">${escapeHtml(next)} ${refsHtml(aha?.evidence_comment_ids || [])}</p>` : ""}
     <div class="kb-nb-thought-summary">
       ${rows.map(item => `
         <div>
@@ -1012,6 +1025,219 @@ function renderThoughtTrendList(nodes, activeId) {
       ${items.length ? items.map(n => renderThoughtMapRow(n, activeId)).join("") : `<div class="kb-nb-empty">暂时没有足够证据。</div>`}
     </div>
   `;
+}
+
+function questionTextForCluster(q) {
+  return [q.question || "", q.page_title || ""].join(" ").toLowerCase();
+}
+
+const _betterQuestionActions = new Map();
+
+function clusterQuestions(questions) {
+  const groups = [
+    {
+      id: "eval-product-feedback",
+      label: "AI 产品评测如何真正指导产品迭代？",
+      keywords: ["gdpval", "netflix", "cranfield", "评测", "benchmark", "recommender", "推荐系统", "产品目标", "指标"],
+      better: [
+        "哪些 benchmark 曾经真实改变了一个领域的产品迭代？",
+        "AI memory 产品应该评“被懂”的感觉，还是评任务结果，还是两者之间的因果链？",
+        "如何把第一视角 gold review 和第三方 judge 结合成持续回归体系？",
+      ],
+    },
+    {
+      id: "social-tech-fieldwork",
+      label: "技术共同体如何把理念变成可参与的社会实验？",
+      keywords: ["burning man", "ccc", "emf", "why", "黑客", "社会实验", "共同体", "参与", "活动"],
+      better: [
+        "这些活动分别通过什么机制把松散兴趣变成长期社区？",
+        "中国语境里有没有类似的社会技术实验入口，普通参与者能怎么加入？",
+        "这些活动留下了哪些可复用的组织经验、项目或知识产物？",
+      ],
+    },
+    {
+      id: "spatiotemporal-impact",
+      label: "视觉/时空数据如何从研究走向真实社会影响？",
+      keywords: ["street view", "visual census", "李飞飞", "timnit", "时空", "lbs", "卫星", "社会影响"],
+      better: [
+        "这类项目后来形成了持续研究谱系，还是只停留在一次性论文？",
+        "街景、卫星、LBS 数据在公共研究和商业决策里分别创造了什么价值？",
+        "从个人经历看，我错过的那条时空大数据学习线索，现在还能怎么补回来？",
+      ],
+    },
+  ];
+  return groups.map(group => {
+    const matches = (questions || []).filter(q => {
+      const text = questionTextForCluster(q);
+      return group.keywords.some(k => text.includes(k.toLowerCase()));
+    });
+    return {...group, matches};
+  }).filter(group => group.matches.length >= 2);
+}
+
+function evidenceRefsForQuestion(q) {
+  return (q.evidence_comment_ids || [])
+    .slice(0, 4)
+    .map(id => `[c#${id}]`)
+    .join(" ");
+}
+
+function registerBetterQuestionAction(group, question, questionIndex) {
+  const actionId = `${group.id}-${questionIndex}`;
+  const matches = group.matches.slice(0, 4).map(q => ({
+    question: q.question || "",
+    evidence_comment_ids: q.evidence_comment_ids || [],
+    page_title: q.page_title || "",
+    scope: q.scope || "",
+  }));
+  _betterQuestionActions.set(actionId, {
+    actionId,
+    groupId: group.id,
+    groupLabel: group.label,
+    question,
+    matches,
+  });
+  return actionId;
+}
+
+function betterQuestionPrompt(action) {
+  const surfaceLines = action.matches.map((q, idx) => {
+    const refs = evidenceRefsForQuestion(q);
+    const title = q.page_title ? ` · 来源：${q.page_title}` : "";
+    return `${idx + 1}. ${q.question}${refs ? ` ${refs}` : ""}${title}`;
+  }).join("\n");
+  return [
+    "我在 Notebook 的 Better Question 里点击了一个「更好的下一问」。请把它当作由一组历史批注/追问抽象出来的下一步行动，而不是孤立问题。",
+    "",
+    `## 更好的下一问\n${action.question}`,
+    "",
+    `## 它所属的底层问题\n${action.groupLabel}`,
+    "",
+    `## 表面上我反复在问\n${surfaceLines || "没有可展示的表面问题"}`,
+    "",
+    "## 回答策略",
+    "- 优先使用这些 [c#] 证据和本机记忆上下文回答；引用证据时保留 [c#123]。",
+    "- 先判断这个下一问为什么值得问，再给出能推进判断或行动的框架。",
+    "- 如果需要外部事实才能回答完整，明确列出需要搜索验证的点，不要编。",
+    "- 不要只复述问题；要把表面问题背后的共同张力说清楚。",
+  ].join("\n");
+}
+
+function renderBetterQuestionButton(group, question, index) {
+  const actionId = registerBetterQuestionAction(group, question, index);
+  return `
+    <li>
+      <button type="button" class="kb-nb-better-action" data-better-question="${escapeHtml(actionId)}">
+        <span>${escapeHtml(question)}</span>
+        <em>开问</em>
+      </button>
+    </li>
+  `;
+}
+
+function renderBetterQuestions(memoryMap) {
+  const clusters = clusterQuestions(memoryMap?.active_questions || []);
+  _betterQuestionActions.clear();
+  if (!clusters.length) {
+    return `
+      <div class="kb-nb-thought-better-empty">
+        还没有足够证据合成更好的问题。系统不会把“最近问过什么”直接包装成萦绕。
+      </div>
+    `;
+  }
+  return `
+    <div class="kb-nb-thought-better-list">
+      ${clusters.slice(0, 3).map(group => `
+        <article class="kb-nb-thought-better" data-better-group="${escapeHtml(group.id)}">
+          <div class="kb-nb-page-mono">问题正在成形 · ${group.matches.length} 条表面信号</div>
+          <h3>${escapeHtml(group.label)}</h3>
+          <div class="kb-nb-thought-better-body">
+            <div class="kb-nb-thought-better-main">
+              <div class="kb-nb-thought-better-surface">
+                <b>表面上你在问</b>
+                <ul>
+                  ${group.matches.slice(0, 4).map(q => `<li>${escapeHtml(q.question || "")} ${refsHtml(q.evidence_comment_ids || [])}</li>`).join("")}
+                </ul>
+              </div>
+              <div class="kb-nb-thought-better-next">
+                <b>更好的下一问</b>
+                <ul class="kb-nb-thought-better-actions">
+                  ${group.better.map((q, idx) => renderBetterQuestionButton(group, q, idx)).join("")}
+                </ul>
+              </div>
+            </div>
+            <aside class="kb-nb-thought-better-ask kb-nb-hidden" data-better-ask-panel="${escapeHtml(group.id)}"></aside>
+          </div>
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderBetterAskPanel(action, state, data = {}) {
+  const refs = action.matches.flatMap(q => q.evidence_comment_ids || []);
+  const refText = Array.from(new Set(refs)).slice(0, 8).map(id => `c#${id}`).join(" · ");
+  if (state === "loading") {
+    return `
+      <div class="kb-nb-better-ask-meta">问记忆 · ${escapeHtml(action.groupLabel)}</div>
+      <div class="kb-nb-better-ask-question">${escapeHtml(action.question)}</div>
+      <div class="kb-nb-better-ask-context">${refText ? `已带入 ${escapeHtml(refText)}` : "正在装载相关批注"}</div>
+      <div class="kb-nb-better-ask-loading">读取上下文中…</div>
+    `;
+  }
+  if (state === "error") {
+    return `
+      <div class="kb-nb-better-ask-meta">问记忆 · 调用失败</div>
+      <div class="kb-nb-better-ask-question">${escapeHtml(action.question)}</div>
+      <div class="kb-nb-better-ask-error">${escapeHtml(data.message || "这次没问出来")}</div>
+    `;
+  }
+  const answer = data.answer || "";
+  return `
+    <div class="kb-nb-better-ask-meta">问记忆 · ${escapeHtml(action.groupLabel)}</div>
+    <div class="kb-nb-better-ask-question">${escapeHtml(action.question)}</div>
+    <div class="kb-nb-better-ask-context">${refText ? `已带入 ${escapeHtml(refText)}` : "已带入相关记忆上下文"}</div>
+    <div class="kb-nb-better-ask-answer kb-nb-md">${md(answer)}</div>
+  `;
+}
+
+async function askBetterQuestion(actionId) {
+  const action = _betterQuestionActions.get(actionId);
+  if (!action) return;
+  const article = document.querySelector(`[data-better-group="${CSS.escape(action.groupId)}"]`);
+  const panel = article?.querySelector(`[data-better-ask-panel="${CSS.escape(action.groupId)}"]`);
+  const clicked = article?.querySelector(`[data-better-question="${CSS.escape(actionId)}"]`);
+  if (!article || !panel || !clicked) return;
+  article.classList.add("asking");
+  panel.classList.remove("kb-nb-hidden");
+  panel.innerHTML = renderBetterAskPanel(action, "loading");
+  article.querySelectorAll("[data-better-question]").forEach(btn => {
+    btn.classList.toggle("active", btn === clicked);
+  });
+  article.querySelectorAll("[data-better-question]").forEach(btn => { btn.disabled = true; });
+  try {
+    const resp = await api("/notebook/chat", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ message: betterQuestionPrompt(action) }),
+    });
+    panel.innerHTML = renderBetterAskPanel(action, resp.status === "success" ? "done" : "error", {
+      answer: resp.answer || "",
+      message: resp.answer || "记忆问答调用失败",
+    });
+    bindCommentRefInteractions(panel);
+    $("kb-nb-count-chat").textContent = "…";
+  } catch (e) {
+    panel.innerHTML = renderBetterAskPanel(action, "error", { message: (e && e.message) || "记忆问答失败" });
+  } finally {
+    article.querySelectorAll("[data-better-question]").forEach(btn => { btn.disabled = false; });
+  }
+}
+
+function bindBetterQuestionActions(root) {
+  root.querySelectorAll("[data-better-question]").forEach(btn => {
+    btn.addEventListener("click", () => askBetterQuestion(btn.dataset.betterQuestion));
+  });
 }
 
 function renderThoughtNode(node) {
@@ -1094,9 +1320,29 @@ function bindThoughtMapNodes(nodes) {
   });
 }
 
+function bindThoughtTabs(root) {
+  if (!root) return;
+  const buttons = root.querySelectorAll("[data-thought-tab]");
+  const panels = root.querySelectorAll("[data-thought-panel]");
+  buttons.forEach(btn => {
+    btn.addEventListener("click", () => {
+      const tab = btn.dataset.thoughtTab;
+      buttons.forEach(item => {
+        const active = item.dataset.thoughtTab === tab;
+        item.classList.toggle("active", active);
+        item.setAttribute("aria-selected", active ? "true" : "false");
+      });
+      panels.forEach(panel => {
+        panel.classList.toggle("active", panel.dataset.thoughtPanel === tab);
+      });
+    });
+  });
+}
+
 function renderThoughtMap(data) {
   const box = $("kb-nb-thought-map");
   const lanes = data.lanes || {};
+  const memory = data.memory_map || {};
   const nodes = flattenThoughtNodes(lanes);
   const active = (lanes.sprout || [])[0] || (lanes.mainline || [])[0] || nodes[0];
   _lastThoughtMapData = data;
@@ -1105,21 +1351,39 @@ function renderThoughtMap(data) {
     <div class="kb-nb-thought-hero">
       <div>
         <div class="kb-nb-page-mono">${escapeHtml(data.window_label || `过去 ${data.window_days || 42} 天`)} · 本地批注证据</div>
-        ${renderThoughtHeroSummary(lanes, data.observation)}
-        <p>Agent 会用这些变化判断：哪些问题该带入长期主线，哪些只是先观察，哪些不该过度解释。</p>
+        ${renderThoughtHeroSummary(lanes, data.observation, data.aha)}
+        <p>外显记忆先看两件事：你围绕哪些主题在变化，以及这些表面问题背后有没有更好的下一问。</p>
       </div>
     </div>
-    <div class="kb-nb-thought-ai-note">
-      <b>对后续回复的影响</b>
-      <span>主线更容易进入上下文；新近线索会被继续观察；待观察线索不会被过度解释。</span>
+    <div class="kb-nb-thought-tabs" role="tablist" aria-label="思考地图视图">
+      <button class="active" type="button" role="tab" aria-selected="true" data-thought-tab="topic">
+        <b>Topic</b>
+        <span>主题线索与证据</span>
+      </button>
+      <button type="button" role="tab" aria-selected="false" data-thought-tab="better">
+        <b>Better Question</b>
+        <span>问题正在成形</span>
+      </button>
     </div>
-    <div class="kb-nb-thought-section-head">
-      <span class="kb-nb-page-mono">主题热度</span>
-      <p>先看哪些升温、降温、待观察，再点一条线索看证据。</p>
+    <div class="kb-nb-thought-panel active" data-thought-panel="topic">
+      <div class="kb-nb-thought-section-head">
+        <span class="kb-nb-page-mono">主题线索</span>
+        <p>先看哪些主题是主线、升温、待观察或降温；点一条线索，下方只展开这条线索的证据。</p>
+      </div>
+      ${renderThoughtTrendList(nodes, active?.id)}
+      <div id="kb-nb-thought-focus" class="kb-nb-thought-focus"></div>
     </div>
-    ${renderThoughtTrendList(nodes, active?.id)}
-    <div id="kb-nb-thought-focus" class="kb-nb-thought-focus"></div>
+    <div class="kb-nb-thought-panel" data-thought-panel="better">
+      <div class="kb-nb-thought-section-head">
+        <span class="kb-nb-page-mono">问题正在成形</span>
+        <p>不是列出最近问题，而是把反复出现的表面问题抽象成更底层的思考，并给出更好的下一问。</p>
+      </div>
+      ${renderBetterQuestions(memory)}
+    </div>
   `;
+  bindCrefAnchors(box);
+  bindThoughtTabs(box);
+  bindBetterQuestionActions(box);
   bindThoughtMapNodes(nodes);
   renderThoughtFocus(active);
 }
