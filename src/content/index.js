@@ -2540,7 +2540,7 @@ const commentSystem = (() => {
     if (e.data && e.data.__kb_test === 'simulate_unread_ai_reply') {
       debugMarkUnreadAiReply();
     }
-    if (e.source === window && e.data && e.data.__kb_action === 'kb_better_question_ask_ai') {
+    if (e.data && e.data.__kb_action === 'kb_better_question_ask_ai') {
       const localCommentId = askAIForQuestionExcerpt(e.data.payload || {});
       window.postMessage({
         __kb_action_result: 'kb_better_question_ask_ai',
@@ -2565,3 +2565,7 @@ const commentSystem = (() => {
     version: KB_CONTENT_VERSION,
   };
 })();
+
+try {
+  window.kbCommentSystem = commentSystem;
+} catch {}

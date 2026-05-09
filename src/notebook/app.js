@@ -1034,6 +1034,7 @@ function questionTextForCluster(q) {
 
 const _betterQuestionActions = new Map();
 const _betterQuestionPending = new Map();
+let _commentBridgePromise = null;
 
 function clusterQuestions(questions) {
   const groups = [
@@ -1125,6 +1126,20 @@ function betterQuestionAgentContext(action) {
   ].join("\n");
 }
 
+function ensureCommentBridge() {
+  if (window.kbCommentSystem?.askAIForQuestionExcerpt) return Promise.resolve(true);
+  if (location.protocol !== "chrome-extension:") return Promise.resolve(false);
+  if (_commentBridgePromise) return _commentBridgePromise;
+  _commentBridgePromise = new Promise(resolve => {
+    const script = document.createElement("script");
+    script.src = "../content/index.js";
+    script.onload = () => resolve(Boolean(window.kbCommentSystem?.askAIForQuestionExcerpt));
+    script.onerror = () => resolve(false);
+    document.documentElement.appendChild(script);
+  });
+  return _commentBridgePromise;
+}
+
 function renderBetterQuestionButton(group, question, index) {
   const actionId = registerBetterQuestionAction(group, question, index);
   return `
@@ -1181,20 +1196,28 @@ async function askBetterQuestion(actionId) {
   const article = document.querySelector(`[data-better-group="${CSS.escape(action.groupId)}"]`);
   const clicked = article?.querySelector(`[data-better-question="${CSS.escape(actionId)}"]`);
   if (!article || !clicked) return;
+  const payload = {
+    excerpt: action.question,
+    comment: "请直接回答这句下一问。",
+    contextText: betterQuestionAgentContext(action),
+    source: "notebook_better_question",
+  };
   article.querySelectorAll("[data-better-question]").forEach(btn => {
     btn.classList.toggle("active", btn === clicked);
   });
   clicked.disabled = true;
+  const hasDirectBridge = await ensureCommentBridge();
+  if (hasDirectBridge && window.kbCommentSystem?.askAIForQuestionExcerpt) {
+    const localCommentId = window.kbCommentSystem.askAIForQuestionExcerpt(payload);
+    clicked.disabled = false;
+    toast(localCommentId ? "已在右侧评注里召唤 AI" : "召唤 AI 失败");
+    return;
+  }
   _betterQuestionPending.set(actionId, clicked);
   window.postMessage({
     __kb_action: BETTER_QUESTION_ASK_AI,
     actionId,
-    payload: {
-      excerpt: action.question,
-      comment: "请直接回答这句下一问。",
-      contextText: betterQuestionAgentContext(action),
-      source: "notebook_better_question",
-    },
+    payload,
   }, "*");
   setTimeout(() => {
     if (!_betterQuestionPending.has(actionId)) return;
@@ -1211,7 +1234,7 @@ function bindBetterQuestionActions(root) {
 }
 
 window.addEventListener("message", e => {
-  if (e.source !== window || e.data?.__kb_action_result !== BETTER_QUESTION_ASK_AI) return;
+  if (e.data?.__kb_action_result !== BETTER_QUESTION_ASK_AI) return;
   const actionId = e.data.actionId;
   const btn = _betterQuestionPending.get(actionId);
   if (btn) {
