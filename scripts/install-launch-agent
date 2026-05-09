@@ -109,5 +109,5 @@ launchctl kickstart -k "$USER_DOMAIN/$LABEL" >/dev/null 2>&1 || true
 echo "✓ 已安装开机自动启动：$PLIST_PATH"
 echo "  登录 macOS 后会自动运行：bash $REPO_DIR/start.sh"
 echo "  日志：$LOG_DIR/launch-agent.out.log"
-echo "  状态检查：$REPO_DIR/scripts/launch-agent-status"
-echo "  取消开机启动：$REPO_DIR/scripts/uninstall-launch-agent"
+echo "  一般不需要再运行其他命令；如果要排查，可运行：$REPO_DIR/scripts/launch-agent-status"
+echo "  如果要取消开机启动，可运行：$REPO_DIR/scripts/uninstall-launch-agent"

@@ -586,16 +586,44 @@ else
   echo "  ✓ 未开启 Notion 备份；数据会保存到本地 SQLite，并使用本地备份目录"
 fi
 
+# ── 7. 可选：开机自动恢复后端 ────────────────────────────────
+AUTO_START_ENABLED=false
+echo ""
+echo "→ 开机自动恢复后端..."
+if [ "$(uname -s)" = "Darwin" ] && [ -x "$REPO_DIR/scripts/install-launch-agent" ]; then
+  echo "  Chrome 插件会一直保留；这里解决的是 Mac 重启后本机后端不会自动运行的问题。"
+  echo "  开启后，以后登录 Mac 时会自动恢复知识库浏览器、Agent API 和后台 worker。"
+  read -p "  是否开启？[Y/n]：" ENABLE_AUTO_START
+  ENABLE_AUTO_START="${ENABLE_AUTO_START:-Y}"
+  case "$ENABLE_AUTO_START" in
+    Y|y|yes|YES|Yes|是|好|开启)
+      if "$REPO_DIR/scripts/install-launch-agent"; then
+        AUTO_START_ENABLED=true
+        echo "  ✓ 已开启开机自动恢复"
+      else
+        echo "  ✗ 开机自动恢复开启失败；本次仍可用 bash start.sh 手动启动。"
+      fi
+      ;;
+    *)
+      echo "  ○ 已跳过。之后如果重启 Mac，需要手动运行：bash start.sh"
+      ;;
+  esac
+else
+  echo "  ○ 当前系统不支持自动配置；重启后请手动运行：bash start.sh"
+fi
+
 echo ""
 echo "═══════════════════════════════════════════════════════"
-echo "安装完成！运行以下命令启动工作台："
+echo "安装完成！"
 echo ""
-echo "  bash start.sh"
-echo ""
-echo "如果希望 Mac 重启/重新登录后自动恢复后端，可以手动开启："
-echo ""
-echo "  scripts/install-launch-agent"
-echo ""
+if [ "$AUTO_START_ENABLED" = true ]; then
+  echo "已开启开机自动恢复，后端现在应该已经启动；以后重启 Mac 不需要手动运行 bash start.sh。"
+else
+  echo "运行以下命令启动工作台："
+  echo ""
+  echo "  bash start.sh"
+  echo ""
+fi
 echo "然后在 Chrome 加载插件（开发者模式 → 加载已解压的扩展程序 → 选择本仓库根目录）"
 echo "访问知识库：http://localhost:8765"
 echo "访问记忆笔记本：http://localhost:8765/notebook/"
