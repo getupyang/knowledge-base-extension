@@ -18,7 +18,7 @@ import hashlib
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
 from typing import Optional
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from llm_client import LLMError, LLMTimeoutError, get_llm_client, get_llm_status
@@ -97,6 +97,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def local_extension_cors_guard(request: Request, call_next):
+    """Keep public pages and extension pages able to reach the localhost backend."""
+    origin = request.headers.get("origin") or "*"
+    if request.method == "OPTIONS":
+        requested_headers = request.headers.get("access-control-request-headers", "content-type")
+        headers = {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Methods": "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT",
+            "Access-Control-Allow-Headers": requested_headers,
+            "Access-Control-Max-Age": "600",
+            "Access-Control-Allow-Private-Network": "true",
+        }
+        return Response("OK", status_code=200, headers=headers)
+
+    response = await call_next(request)
+    response.headers.setdefault("Access-Control-Allow-Origin", origin)
+    response.headers.setdefault("Access-Control-Allow-Private-Network", "true")
+    return response
 
 # ──────────────────────────────────────────
 # 数据库初始化

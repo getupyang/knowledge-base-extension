@@ -36,8 +36,14 @@ export MEMAI_LLM_PROVIDER="${MEMAI_LLM_PROVIDER:-auto}"
 export MEMAI_LOCAL_AGENT="${MEMAI_LOCAL_AGENT:-none}"
 export MEMAI_LLM_FALLBACK="${MEMAI_LLM_FALLBACK:-fail}"
 export HOME="$HOME"  # 显式传递，防止 uvicorn 子进程丢失 HOME 导致 claude 找不到认证配置
+export NO_PROXY="localhost,127.0.0.1,::1,${NO_PROXY:-}"
+export no_proxy="localhost,127.0.0.1,::1,${no_proxy:-}"
 # RESEARCH_DIR：server.py 的文档根目录，从 ~/.kb_config 读（指向用户的私人 MD 文件目录）
 export RESEARCH_DIR="${RESEARCH_DIR:-$BACKEND_DIR}"
+
+local_curl() {
+  env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY curl --noproxy "*" "$@"
+}
 
 print_llm_runtime_summary() {
   provider="${MEMAI_LLM_PROVIDER:-auto}"
@@ -138,7 +144,7 @@ nohup python3 -m uvicorn agent_api:app --host 127.0.0.1 --port 8766 > "$LOG_DIR/
 AGENT_PID=$!
 
 for i in {1..30}; do
-  if curl -s http://localhost:8766/health > /dev/null 2>&1; then
+  if local_curl -s http://localhost:8766/health > /dev/null 2>&1; then
     break
   fi
   sleep 1
@@ -164,14 +170,14 @@ sleep 4
 
 # ── 验证 ──────────────────────────────────────────────────
 ALL_OK=true
-if curl -s http://localhost:8765 > /dev/null 2>&1; then
+if local_curl -s http://localhost:8765 > /dev/null 2>&1; then
   echo "✓ 知识库服务器：http://localhost:8765"
 else
   echo "✗ 知识库服务器启动失败，查看日志：$LOG_DIR/server.log"
   ALL_OK=false
 fi
 
-if curl -s http://localhost:8766/health > /dev/null 2>&1; then
+if local_curl -s http://localhost:8766/health > /dev/null 2>&1; then
   echo "✓ Agent API：http://localhost:8766"
 else
   echo "✗ Agent API 启动失败，查看日志：$LOG_DIR/agent_api.log"

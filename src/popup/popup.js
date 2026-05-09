@@ -9,7 +9,7 @@ async function loadRuntimeStatus() {
   const backupStatus = $("backupStatus");
   const status = $("status");
   try {
-    const res = await fetch("http://127.0.0.1:8766/config");
+    const res = await fetch("http://localhost:8766/config");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     localStatus.textContent = "已连接。所有批注、对话和记忆会持续保存在本机主库。";

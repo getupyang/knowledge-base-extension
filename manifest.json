@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "知识库助手",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "description": "选中文字保存到Notion，AI对话自动采集",
   "permissions": [
     "contextMenus",
@@ -14,7 +14,8 @@
     "https://api.notion.com/*",
     "https://openrouter.ai/*",
     "https://claude.ai/*",
-    "http://localhost/*"
+    "http://localhost/*",
+    "http://127.0.0.1/*"
   ],
   "background": {
     "service_worker": "src/background/index.js"
