@@ -142,6 +142,7 @@ async function run() {
     }
 
     for (const c of comments) {
+      const beforeScrolls = await page.evaluate(() => window.__kbScrolls.length);
       await page.evaluate(id => {
         document.querySelector(`#kb-cmt-${id}`).dispatchEvent(new MouseEvent("click", { bubbles: true }));
       }, c.id);
@@ -150,6 +151,8 @@ async function run() {
         return Array.from(document.querySelectorAll(`mark.kb-comment-highlight[data-excerpt-id="${id}"]`))
           .some(mark => mark.classList.contains("kb-mark-pulse"));
       }, markId, { timeout: 3000 });
+      const afterScrolls = await page.evaluate(() => window.__kbScrolls.length);
+      if (afterScrolls <= beforeScrolls) throw new Error(`card click did not scroll for comment ${c.id}`);
     }
 
     console.log("PASS anchor overlap regression: all 4 real excerpts create marks and card clicks scroll");
