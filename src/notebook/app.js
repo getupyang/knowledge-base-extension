@@ -3,6 +3,7 @@
 // 设计：~/mem-ai/docs/memory-backend-design.md
 
 const API_BASE = "http://localhost:8766";
+const BETTER_QUESTION_ASK_AI = "kb_better_question_ask_ai";
 
 // ─── 工具 ───
 function $(id) { return document.getElementById(id); }
@@ -1032,6 +1033,7 @@ function questionTextForCluster(q) {
 }
 
 const _betterQuestionActions = new Map();
+const _betterQuestionPending = new Map();
 
 function clusterQuestions(questions) {
   const groups = [
@@ -1100,7 +1102,7 @@ function registerBetterQuestionAction(group, question, questionIndex) {
   return actionId;
 }
 
-function betterQuestionPrompt(action) {
+function betterQuestionAgentContext(action) {
   const surfaceLines = action.matches.map((q, idx) => {
     const refs = evidenceRefsForQuestion(q);
     const title = q.page_title ? ` · 来源：${q.page_title}` : "";
@@ -1166,7 +1168,6 @@ function renderBetterQuestions(memoryMap) {
                 </ul>
               </div>
             </div>
-            <aside class="kb-nb-thought-better-ask kb-nb-hidden" data-better-ask-panel="${escapeHtml(group.id)}"></aside>
           </div>
         </article>
       `).join("")}
@@ -1174,64 +1175,33 @@ function renderBetterQuestions(memoryMap) {
   `;
 }
 
-function renderBetterAskPanel(action, state, data = {}) {
-  const refs = action.matches.flatMap(q => q.evidence_comment_ids || []);
-  const refText = Array.from(new Set(refs)).slice(0, 8).map(id => `c#${id}`).join(" · ");
-  if (state === "loading") {
-    return `
-      <div class="kb-nb-better-ask-meta">问记忆 · ${escapeHtml(action.groupLabel)}</div>
-      <div class="kb-nb-better-ask-question">${escapeHtml(action.question)}</div>
-      <div class="kb-nb-better-ask-context">${refText ? `已带入 ${escapeHtml(refText)}` : "正在装载相关批注"}</div>
-      <div class="kb-nb-better-ask-loading">读取上下文中…</div>
-    `;
-  }
-  if (state === "error") {
-    return `
-      <div class="kb-nb-better-ask-meta">问记忆 · 调用失败</div>
-      <div class="kb-nb-better-ask-question">${escapeHtml(action.question)}</div>
-      <div class="kb-nb-better-ask-error">${escapeHtml(data.message || "这次没问出来")}</div>
-    `;
-  }
-  const answer = data.answer || "";
-  return `
-    <div class="kb-nb-better-ask-meta">问记忆 · ${escapeHtml(action.groupLabel)}</div>
-    <div class="kb-nb-better-ask-question">${escapeHtml(action.question)}</div>
-    <div class="kb-nb-better-ask-context">${refText ? `已带入 ${escapeHtml(refText)}` : "已带入相关记忆上下文"}</div>
-    <div class="kb-nb-better-ask-answer kb-nb-md">${md(answer)}</div>
-  `;
-}
-
 async function askBetterQuestion(actionId) {
   const action = _betterQuestionActions.get(actionId);
   if (!action) return;
   const article = document.querySelector(`[data-better-group="${CSS.escape(action.groupId)}"]`);
-  const panel = article?.querySelector(`[data-better-ask-panel="${CSS.escape(action.groupId)}"]`);
   const clicked = article?.querySelector(`[data-better-question="${CSS.escape(actionId)}"]`);
-  if (!article || !panel || !clicked) return;
-  article.classList.add("asking");
-  panel.classList.remove("kb-nb-hidden");
-  panel.innerHTML = renderBetterAskPanel(action, "loading");
+  if (!article || !clicked) return;
   article.querySelectorAll("[data-better-question]").forEach(btn => {
     btn.classList.toggle("active", btn === clicked);
   });
-  article.querySelectorAll("[data-better-question]").forEach(btn => { btn.disabled = true; });
-  try {
-    const resp = await api("/notebook/chat", {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({ message: betterQuestionPrompt(action) }),
-    });
-    panel.innerHTML = renderBetterAskPanel(action, resp.status === "success" ? "done" : "error", {
-      answer: resp.answer || "",
-      message: resp.answer || "记忆问答调用失败",
-    });
-    bindCommentRefInteractions(panel);
-    $("kb-nb-count-chat").textContent = "…";
-  } catch (e) {
-    panel.innerHTML = renderBetterAskPanel(action, "error", { message: (e && e.message) || "记忆问答失败" });
-  } finally {
-    article.querySelectorAll("[data-better-question]").forEach(btn => { btn.disabled = false; });
-  }
+  clicked.disabled = true;
+  _betterQuestionPending.set(actionId, clicked);
+  window.postMessage({
+    __kb_action: BETTER_QUESTION_ASK_AI,
+    actionId,
+    payload: {
+      excerpt: action.question,
+      comment: "请直接回答这句下一问。",
+      contextText: betterQuestionAgentContext(action),
+      source: "notebook_better_question",
+    },
+  }, "*");
+  setTimeout(() => {
+    if (!_betterQuestionPending.has(actionId)) return;
+    _betterQuestionPending.delete(actionId);
+    clicked.disabled = false;
+    toast("没有检测到评注插件，请刷新插件和当前页面");
+  }, 1200);
 }
 
 function bindBetterQuestionActions(root) {
@@ -1239,6 +1209,17 @@ function bindBetterQuestionActions(root) {
     btn.addEventListener("click", () => askBetterQuestion(btn.dataset.betterQuestion));
   });
 }
+
+window.addEventListener("message", e => {
+  if (e.source !== window || e.data?.__kb_action_result !== BETTER_QUESTION_ASK_AI) return;
+  const actionId = e.data.actionId;
+  const btn = _betterQuestionPending.get(actionId);
+  if (btn) {
+    btn.disabled = false;
+    _betterQuestionPending.delete(actionId);
+  }
+  toast(e.data.ok ? "已在右侧评注里召唤 AI" : "召唤 AI 失败");
+});
 
 function renderThoughtNode(node) {
   const refs = refsHtml(node.evidence_comment_ids || []);

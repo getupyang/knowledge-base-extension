@@ -2300,15 +2300,16 @@ const commentSystem = (() => {
         const rerunResp = await fetch(`http://localhost:8766/comments/${agentCommentId}/rerun`, { method: "POST" });
         if (!rerunResp.ok) throw new Error(`无法重新召唤 AI（HTTP ${rerunResp.status}）`);
       } else {
-        const surrounding = getSurroundingText(c.excerpt || "");
+        const surrounding = options.surroundingText || getSurroundingText(c.excerpt || "");
         const resp = await fetch("http://localhost:8766/comments", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            page_url: location.href,
-            page_title: document.title,
-            selected_text: c.excerpt || "",
+            page_url: options.pageUrl || location.href,
+            page_title: options.pageTitle || document.title,
+            selected_text: options.selectedText || c.excerpt || "",
             surrounding_text: surrounding,
+            page_content: options.pageContent || "",
             comment: conversationComment,
             no_agent: false,
           }),
@@ -2418,6 +2419,34 @@ const commentSystem = (() => {
     _lockReplyInput(commentId, false);
   }
 
+  function askAIForQuestionExcerpt(payload = {}) {
+    const excerpt = (payload.excerpt || payload.question || "").trim();
+    if (!excerpt) {
+      showToast("没有可提问的内容", "error");
+      return null;
+    }
+    const comment = (payload.comment || "请直接回答这句下一问。").trim();
+    buildPanel();
+    highlightByText(excerpt);
+    currentExcerpt = excerpt;
+    const c = addComment(excerpt, comment);
+    panelOpen = true;
+    panelEl.classList.remove("kb-btn-hidden");
+    document.body.style.marginRight = "360px";
+    render();
+    updateBadge();
+    setTimeout(() => _anchorCardForExcerpt(excerpt, { scroll: true, flash: true }), 120);
+    askAI(c.id, {
+      selectedText: excerpt,
+      surroundingText: payload.contextText || getSurroundingText(excerpt),
+      pageUrl: payload.pageUrl || location.href,
+      pageTitle: payload.pageTitle || document.title,
+      pageContent: payload.pageContent || "",
+    });
+    showToast("已在右侧评注里召唤 AI", "success");
+    return c.id;
+  }
+
   // ── 对外接口：打开评论面板（高亮由调用方处理）──
   // 划线后调用此函数：展开输入区，让用户写一条评论
   function open(excerpt, url, title) {
@@ -2511,6 +2540,15 @@ const commentSystem = (() => {
     if (e.data && e.data.__kb_test === 'simulate_unread_ai_reply') {
       debugMarkUnreadAiReply();
     }
+    if (e.source === window && e.data && e.data.__kb_action === 'kb_better_question_ask_ai') {
+      const localCommentId = askAIForQuestionExcerpt(e.data.payload || {});
+      window.postMessage({
+        __kb_action_result: 'kb_better_question_ask_ai',
+        actionId: e.data.actionId,
+        ok: Boolean(localCommentId),
+        localCommentId,
+      }, "*");
+    }
   });
 
   return {
@@ -2522,6 +2560,7 @@ const commentSystem = (() => {
     highlightByText,
     saveHighlightToVault,
     saveHighlightToNotion: saveHighlightToVault,
+    askAIForQuestionExcerpt,
     debugMarkUnreadAiReply,
     version: KB_CONTENT_VERSION,
   };
