@@ -1,4 +1,4 @@
-const KB_CONTENT_VERSION = "0.3.4-page-comment-restore";
+const KB_CONTENT_VERSION = "0.3.5-local-first-capture";
 console.info(`[KB] content script loaded: ${KB_CONTENT_VERSION}`);
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -12,7 +12,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "HIGHLIGHT_AND_SAVE") {
     // 右键菜单触发高亮：此时 selection 已消失，用文字内容匹配恢复
     commentSystem.highlightByText(msg.excerpt);
-    commentSystem.saveHighlightToNotion(msg.excerpt, msg.title, msg.url, msg.platform);
+    commentSystem.saveHighlightToVault(msg.excerpt, msg.title, msg.url, msg.platform);
     sendResponse({ ok: true });
     return;
   }
@@ -240,7 +240,7 @@ const selectionBar = (() => {
       hide();
       if (savedRange) _lastSelectionSurrounding = captureSurroundingFromRange(savedRange);
       commentSystem.doHighlight(savedExcerpt, savedRange);
-      commentSystem.saveHighlightToNotion(savedExcerpt, document.title, location.href, null);
+      commentSystem.saveHighlightToVault(savedExcerpt, document.title, location.href, null);
     });
     barEl.querySelector("#kb-bar-comment").addEventListener("click", (e) => {
       e.stopPropagation();
@@ -923,9 +923,20 @@ const commentSystem = (() => {
     });
   }
 
-  // ── 高亮后静默保存 Notion（直接走后端代理，不经过 Service Worker）──
-  function saveHighlightToNotion(excerpt, title, url, platform) {
-    fetch("http://localhost:8766/notion/save", {
+  function captureSavedToast(resp, baseText) {
+    const notionState = resp?.externalSync?.notion || resp?.notionStatus || "";
+    if (notionState === "synced" || notionState === "notion_synced") {
+      return `✓ ${baseText}，Notion 备份已同步`;
+    }
+    if (notionState === "failed" || notionState === "notion_failed") {
+      return `✓ ${baseText}（Notion 备份失败，可稍后重试）`;
+    }
+    return `✓ ${baseText}`;
+  }
+
+  // ── 高亮后静默保存到本地记忆库；外部备份由后端按配置处理 ──
+  function saveHighlightToVault(excerpt, title, url, platform) {
+    fetch("http://localhost:8766/captures/save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -938,21 +949,21 @@ const commentSystem = (() => {
       })
     }).then(r => {
       if (!r.ok) {
-        console.error("[KB] Notion save HTTP error:", r.status, r.statusText);
+        console.error("[KB] capture save HTTP error:", r.status, r.statusText);
         return r.text().then(t => { throw new Error(`HTTP ${r.status}: ${t.slice(0, 200)}`); });
       }
       return r.json();
     }).then(resp => {
       if (resp.success) {
-        if (resp.notionSynced === false && resp.notionError) console.warn("[KB] Notion not synced:", resp.notionError);
-        showToast(resp.notionSynced === false ? "✓ 已高亮并保存到本地（Notion 未同步）" : "✓ 已高亮并保存到 Notion", "success");
+        if (resp.notionSynced === false && resp.notionError) console.warn("[KB] optional Notion backup not synced:", resp.notionError);
+        showToast(captureSavedToast(resp, "已高亮并保存到本地记忆库"), "success");
       } else {
         const detail = resp.detail || "未知错误";
-        console.error("[KB] Notion save failed:", detail);
-        showToast("✗ Notion 保存失败：" + detail, "error");
+        console.error("[KB] capture save failed:", detail);
+        showToast("✗ 本地保存失败：" + detail, "error");
       }
     }).catch(err => {
-      console.error("[KB] Notion save error:", err.message || err);
+      console.error("[KB] capture save error:", err.message || err);
       const msg = err.message || String(err);
       const hint = msg.includes("Failed to fetch")
         ? "本地服务未连接；标注可能只保存在当前页面"
@@ -1854,14 +1865,14 @@ const commentSystem = (() => {
               </details>`;
           } else {
             const ctx = dm.context_layers || {};
-            const notionOk = ctx.notion_memory ? "✓" : "✗";
+            const memoryOk = (ctx.attention_memory ?? ctx.notion_memory) ? "✓" : "✗";
             const selOk = ctx.selected_text ? "✓" : "✗";
             debugHtml = `
               <details class="kb-debug">
                 <summary>▶ Debug</summary>
                 <div class="kb-debug-body">
                   [v1] @${dm.agent_type} · ${dm.elapsed_s}s · ~${dm.prompt_tokens_est} tokens<br>
-                  Context: project✓ notion${notionOk} selected_text${selOk}<br>
+                  Context: project✓ memory${memoryOk} selected_text${selOk}<br>
                   状态: ${dm.status}
                 </div>
               </details>`;
@@ -2061,8 +2072,8 @@ const commentSystem = (() => {
       } catch { /* 离线时静默 */ }
     }
 
-    // Notion 更新（追加对话内容）
-    updateNotionPage(c);
+    // 本地记忆库更新；外部备份由后端按配置处理
+    syncCaptureToVault(c);
 
     // 立即触发 AI 回复
     askAI(commentId);
@@ -2120,8 +2131,8 @@ const commentSystem = (() => {
       status.textContent = "✓ 已保存（agent 离线）";
     }
 
-    // 评论提交时立即写一次 Notion，AI 回复完成后再 upsert 同一条
-    updateNotionPage(c);
+    // 评论提交时立即确认本地保存；AI 回复完成后再同步同一条 capture
+    syncCaptureToVault(c);
 
     setTimeout(() => { status.textContent = ""; }, 3000);
     btn.disabled = false;
@@ -2137,9 +2148,8 @@ const commentSystem = (() => {
     collapseInputArea();
   }
 
-  // ── Notion upsert：每条划线/评论对应一个 Notion page，追加消息而非新建 ──
-  // 直接走后端代理，不经过 Service Worker，避免 SW 休眠导致静默失败
-  function updateNotionPage(comment) {
+  // ── Capture upsert：每条划线/评论对应一条本地记录；外部备份由后端处理 ──
+  function syncCaptureToVault(comment) {
     const platform = (() => {
       const h = location.hostname;
       if (h.includes('localhost')) return '知识库';
@@ -2158,7 +2168,7 @@ const commentSystem = (() => {
     ].join("\n\n") : "";
 
     const title = `[评论] ${document.title.slice(0, 60)}`;
-    fetch("http://localhost:8766/notion/upsert", {
+    fetch("http://localhost:8766/captures/upsert", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -2173,27 +2183,27 @@ const commentSystem = (() => {
       })
     }).then(r => {
       if (!r.ok) {
-        console.error("[KB] Notion upsert HTTP error:", r.status, r.statusText);
+        console.error("[KB] capture upsert HTTP error:", r.status, r.statusText);
         return r.text().then(t => { throw new Error(`HTTP ${r.status}: ${t.slice(0, 200)}`); });
       }
       return r.json();
     }).then(resp => {
       if (resp.success) {
-        if (resp.notionSynced === false && resp.notionError) console.warn("[KB] Notion not synced:", resp.notionError);
+        if (resp.notionSynced === false && resp.notionError) console.warn("[KB] optional Notion backup not synced:", resp.notionError);
         if (resp.pageId && !comment.notionPageId) {
           comment.notionPageId = resp.pageId;
           const comments = load();
           const match = comments.find(x => x.id === comment.id);
           if (match) { match.notionPageId = resp.pageId; save(comments); }
         }
-        showToast(resp.notionSynced === false ? "✓ 已保存到本地（Notion 未同步）" : "✓ 已保存到 Notion", "success");
+        showToast(captureSavedToast(resp, "已保存到本地记忆库"), "success");
       } else {
         const detail = resp.detail || resp.error || "未知错误";
-        console.error("[KB] Notion upsert failed:", detail);
-        showToast("✗ Notion 保存失败：" + detail, "error");
+        console.error("[KB] capture upsert failed:", detail);
+        showToast("✗ 本地保存失败：" + detail, "error");
       }
     }).catch(err => {
-      console.error("[KB] Notion upsert error:", err.message || err);
+      console.error("[KB] capture upsert error:", err.message || err);
       const msg = err.message || String(err);
       const hint = msg.includes("Failed to fetch")
         ? "本地服务未连接；评论可能只保存在当前页面"
@@ -2372,9 +2382,9 @@ const commentSystem = (() => {
         }
         clearAiPending(commentId);
         if (shouldNotify) _markAiReplyReady(commentId);
-        // 每次 AI 回复后更新 Notion（upsert：有 page 则追加，无则新建）
+        // 每次 AI 回复后同步 capture（本地为主，外部备份可选）
         const freshC = load().find(x => x.id === commentId);
-        if (freshC) updateNotionPage(freshC);
+        if (freshC) syncCaptureToVault(freshC);
       } else {
         const pendingText = "AI 仍在处理中，请稍候刷新页面查看结果。";
         if (options.replaceReplyId) {
@@ -2510,7 +2520,8 @@ const commentSystem = (() => {
     doHighlight,
     doHighlightAndOpenComment,
     highlightByText,
-    saveHighlightToNotion,
+    saveHighlightToVault,
+    saveHighlightToNotion: saveHighlightToVault,
     debugMarkUnreadAiReply,
     version: KB_CONTENT_VERSION,
   };

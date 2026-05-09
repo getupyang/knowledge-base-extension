@@ -1,6 +1,4 @@
 const OPENROUTER_KEY = "OPENROUTER_KEY_HERE";
-const NOTION_TOKEN = "NOTION_TOKEN_HERE";
-const DATABASE_ID = "32dae139524480ecbeb4fb76b0269245";
 const MODEL = "anthropic/claude-3.5-sonnet";
 
 let currentContext = null; // { excerpt, title, url, platform }
@@ -137,7 +135,7 @@ function appendMessage(role, text, isLoading = false) {
   return div;
 }
 
-// 保存到Notion
+// 保存到本地记忆库；外部备份由后端按配置处理
 saveBtn.addEventListener("click", async () => {
   if (!currentContext || messages.length === 0) return;
 
@@ -150,7 +148,7 @@ saveBtn.addEventListener("click", async () => {
   ).join("\n\n");
 
   try {
-    await saveToNotion({
+    await saveToVault({
       title: currentContext.title,
       url: currentContext.url,
       platform: currentContext.platform,
@@ -161,7 +159,7 @@ saveBtn.addEventListener("click", async () => {
 
     saveBtn.textContent = "✓ 已保存";
     setTimeout(() => {
-      saveBtn.textContent = "保存到Notion";
+      saveBtn.textContent = "保存到本地记忆库";
       saveBtn.disabled = false;
     }, 2000);
   } catch (err) {
@@ -171,45 +169,18 @@ saveBtn.addEventListener("click", async () => {
   }
 });
 
-async function saveToNotion({ title, url, platform, excerpt, thought, aiConversation }) {
-  const body = {
-    parent: { database_id: DATABASE_ID },
-    properties: {
-      标题: {
-        title: [{ text: { content: truncate(title, 100) } }]
-      },
-      来源平台: {
-        select: { name: platform }
-      },
-      来源URL: {
-        url: url
-      },
-      原文片段: {
-        rich_text: [{ text: { content: truncate(excerpt, 2000) } }]
-      },
-      我的想法: {
-        rich_text: [{ text: { content: truncate(thought, 2000) } }]
-      },
-      AI对话: {
-        rich_text: [{ text: { content: truncate(aiConversation, 2000) } }]
-      }
-    }
-  };
-
-  const res = await fetch("https://api.notion.com/v1/pages", {
+async function saveToVault({ title, url, platform, excerpt, thought, aiConversation }) {
+  const res = await fetch("http://localhost:8766/captures/save", {
     method: "POST",
-    headers: {
-      "Authorization": `Bearer ${NOTION_TOKEN}`,
-      "Content-Type": "application/json",
-      "Notion-Version": "2022-06-28"
-    },
-    body: JSON.stringify(body)
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({title, url, platform, excerpt, thought, aiConversation})
   });
 
   if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.message || "Notion API错误");
+    throw new Error(`本地 capture 保存失败：HTTP ${res.status}`);
   }
+  const data = await res.json();
+  if (!data.success) throw new Error(data.detail || data.error || "本地 capture 保存失败");
 }
 
 // 发送按钮

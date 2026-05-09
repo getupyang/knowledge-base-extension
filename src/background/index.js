@@ -9,16 +9,14 @@ async function getConfig() {
   });
 }
 
-// 启动时从 agent_api 拉取 Notion 配置写入 storage（后端 ~/.kb_config 为唯一配置源）
+// 启动时从 agent_api 拉取非敏感运行状态；密钥只留在后端 ~/.kb_config。
 async function autoLoadConfig() {
   try {
     const resp = await fetch("http://localhost:8766/config");
     if (!resp.ok) return;
-    const { notionToken, databaseId } = await resp.json();
-    if (notionToken && databaseId) {
-      await chrome.storage.local.set({ notionToken, databaseId });
-      console.log("[KB] 已从本地服务同步 Notion 配置");
-    }
+    const { storageMode, notionConfigured } = await resp.json();
+    await chrome.storage.local.set({ storageMode, notionConfigured: !!notionConfigured });
+    console.log("[KB] 已从本地服务同步运行状态");
   } catch { /* 后端未启动，静默跳过 */ }
 }
 
@@ -103,7 +101,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     saveToNotion(msg.data)
       .then(() => sendResponse({ success: true }))
       .catch(err => {
-        reportClientError("saveToNotion", err, { url: msg.data?.url, title: msg.data?.title });
+        reportClientError("saveCapture", err, { url: msg.data?.url, title: msg.data?.title });
         sendResponse({ success: false, error: err.message });
       });
     return true;
@@ -112,7 +110,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     upsertNotionPage(msg.data)
       .then(pageId => sendResponse({ success: true, pageId }))
       .catch(err => {
-        reportClientError("upsertNotionPage", err, {
+        reportClientError("upsertCapture", err, {
           url: msg.data?.url,
           notionPageId: msg.data?.notionPageId,
           hasAI: !!(msg.data?.aiConversation)
@@ -134,11 +132,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 });
 
-// 通过 localhost:8766 调 claude -p（质量更好，有 Notion 记忆注入）
+// 通过 localhost:8766 调本地 agent（质量更好，有本地记忆注入）
 async function callAIViaAgent(systemPrompt, msgs) {
   const AGENT_API = 'http://localhost:8766';
   const userMsg = msgs[msgs.length - 1]?.content || '';
-  // 把 systemPrompt 作为 comment 内容发过去（8766 会注入 Notion 记忆 + 项目上下文）
+  // 把 systemPrompt 作为 comment 内容发过去（8766 会注入本地记忆 + 项目上下文）
   const createRes = await fetch(`${AGENT_API}/comments`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -174,90 +172,28 @@ function splitRichText(str, max = 1990) {
   return chunks.slice(0, 100);
 }
 
-// 每条划线评论对应一个 Notion page：有 pageId 则更新，无则新建
+// 旧消息名保留兼容；真实写入统一走本地 capture endpoint，Notion 只是后端可选备份。
 async function upsertNotionPage({ notionPageId, title, url, platform, excerpt, thought, aiConversation }) {
-  const { NOTION_TOKEN, DATABASE_ID } = await getConfig();
-  if (!NOTION_TOKEN) throw new Error("请先在插件设置中配置 Notion Token");
-  if (!DATABASE_ID) throw new Error("请先在插件设置中配置 Notion Database ID");
-
-  const headers = {
-    "Authorization": `Bearer ${NOTION_TOKEN}`,
-    "Content-Type": "application/json",
-    "Notion-Version": "2022-06-28"
-  };
-
-  // 只有当存在 AI 回复时才写 评论区对话 字段（避免第一条纯用户评论重复存两份）
-  const hasAIContent = aiConversation && aiConversation.includes("AI:");
-  const conversationField = hasAIContent
-    ? { 评论区对话: { rich_text: splitRichText(aiConversation) } }
-    : {};
-
-  if (notionPageId) {
-    // 更新已有 page
-    const res = await fetch(`https://api.notion.com/v1/pages/${notionPageId}`, {
-      method: "PATCH",
-      headers,
-      body: JSON.stringify({
-        properties: {
-          我的想法: { rich_text: splitRichText(thought) },
-          ...conversationField
-        }
-      })
-    });
-    if (!res.ok) { const e = await res.json(); throw new Error(e.message || "Notion 更新失败"); }
-    return notionPageId;
-  } else {
-    // 新建 page（首次提交评论时创建，不含对话记录）
-    const body = {
-      parent: { database_id: DATABASE_ID },
-      properties: {
-        标题: { title: [{ text: { content: truncate(title, 100) } }] },
-        来源平台: { select: { name: platform } },
-        来源URL: { url },
-        原文片段: { rich_text: splitRichText(excerpt) },
-        我的想法: { rich_text: splitRichText(thought) },
-        ...conversationField
-      }
-    };
-    const res = await fetch("https://api.notion.com/v1/pages", {
-      method: "POST", headers, body: JSON.stringify(body)
-    });
-    if (!res.ok) { const e = await res.json(); throw new Error(e.message || "Notion API错误"); }
-    const data = await res.json();
-    return data.id;
-  }
+  const res = await fetch("http://localhost:8766/captures/upsert", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({notionPageId, title, url, platform, excerpt, thought, aiConversation})
+  });
+  if (!res.ok) throw new Error(`本地 capture 保存失败：HTTP ${res.status}`);
+  const data = await res.json();
+  if (!data.success) throw new Error(data.detail || data.error || "本地 capture 保存失败");
+  return data.pageId || data.localCommentId || null;
 }
 
 async function saveToNotion({ title, url, platform, excerpt, thought, aiConversation }) {
-  const { NOTION_TOKEN, DATABASE_ID } = await getConfig();
-  if (!NOTION_TOKEN) throw new Error("请先在插件设置中配置 Notion Token");
-  if (!DATABASE_ID) throw new Error("请先在插件设置中配置 Notion Database ID");
-  const body = {
-    parent: { database_id: DATABASE_ID },
-    properties: {
-      标题: { title: [{ text: { content: truncate(title, 100) } }] },
-      来源平台: { select: { name: platform } },
-      来源URL: { url: url },
-      原文片段: { rich_text: splitRichText(excerpt) },
-      我的想法: { rich_text: splitRichText(thought) },
-      评论区对话: { rich_text: splitRichText(aiConversation) }
-    }
-  };
-
-  const res = await fetch("https://api.notion.com/v1/pages", {
+  const res = await fetch("http://localhost:8766/captures/save", {
     method: "POST",
-    headers: {
-      "Authorization": `Bearer ${NOTION_TOKEN}`,
-      "Content-Type": "application/json",
-      "Notion-Version": "2022-06-28"
-    },
-    body: JSON.stringify(body)
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({title, url, platform, excerpt, thought, aiConversation})
   });
-
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.message || "Notion API错误");
-  }
+  if (!res.ok) throw new Error(`本地 capture 保存失败：HTTP ${res.status}`);
+  const data = await res.json();
+  if (!data.success) throw new Error(data.detail || data.error || "本地 capture 保存失败");
 }
 
 function detectPlatform(url) {

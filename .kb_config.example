@@ -2,8 +2,12 @@
 # 复制此文件为 ~/.kb_config，填入真实值后运行 setup.sh
 # chmod 600 ~/.kb_config
 
-NOTION_TOKEN=ntn_your_token_here
-NOTION_DATABASE_ID=your_32char_database_id_here
+# Optional. Leave blank to use local-only mode.
+NOTION_TOKEN=
+NOTION_DATABASE_ID=
+MEMAI_LOCAL_BACKUP_ENABLED=1
+# Recovery snapshots only. Primary data stays in comments.db and is not pruned by this count.
+MEMAI_BACKUP_KEEP=14
 CLAUDE_BIN=/Users/YOUR_USERNAME/.npm-global/bin/claude
 MEMAI_CLAUDE_BIN=/Users/YOUR_USERNAME/.npm-global/bin/claude
 # 如果 Claude Code 使用 Anthropic API Key，而不是账号登录，请填写：

@@ -254,6 +254,8 @@ class Regression:
             "_select_exposure_memory",
             "/exposures/seen",
             "_record_intake_notion",
+            "/captures/upsert",
+            "/backup/status",
             "/notion/upsert",
         ]
         missing = [term for term in backend_terms if term not in backend]
@@ -300,7 +302,9 @@ class Regression:
             "shouldAutoCaptureExposure",
             "/exposures/seen",
             "remoteReplyId",
-            "updateNotionPage",
+            "syncCaptureToVault",
+            "saveHighlightToVault",
+            "/captures/upsert",
             "askAI(commentId);",
             "请 AI 回复",
             "继续追问",
@@ -382,7 +386,7 @@ class Regression:
                 "python syntax ok",
                 f"node syntax ok: {len(js_files)} files",
                 "html inline script syntax ok",
-                "contracts present: ledger/events/growth/context/notion/exposure-memory/default-AI-followup/debug-console",
+                "contracts present: ledger/events/growth/context/local-first-capture/exposure-memory/default-AI-followup/debug-console",
             ]
         )
 
@@ -391,6 +395,10 @@ class Regression:
             env = {
                 "KB_DATA_DIR": temp_dir,
                 "KB_DISABLE_LEGACY_DB_MIGRATION": "1",
+                "NOTION_TOKEN": "",
+                "NOTION_DATABASE_ID": "",
+                "KB_NOTION_TOKEN": "",
+                "KB_NOTION_DATABASE_ID": "",
             }
             with patched_env(env):
                 sys.path.insert(0, str(BACKEND_DIR))
@@ -424,6 +432,34 @@ class Regression:
                     json={"page_url": "https://kb-regression.local/empty", "comment": "   ", "no_agent": True},
                 )
                 assert_true(empty_comment.status_code == 400, "empty comment should be rejected")
+
+                capture_response = client.post(
+                    "/captures/save",
+                    json={
+                        "title": "Local-first capture",
+                        "url": "https://kb-regression.local/local-first",
+                        "platform": "网页",
+                        "excerpt": "Local-only users should not need Notion.",
+                        "thought": "",
+                        "aiConversation": "",
+                    },
+                )
+                assert_true(capture_response.status_code == 200, capture_response.text)
+                capture_body = capture_response.json()
+                assert_true(capture_body["success"] is True and capture_body["localSaved"] is True, "capture save should be local-success")
+                assert_true(capture_body["notionStatus"] == "notion_skipped", "local-only capture should skip Notion without failing")
+                assert_true(capture_body["backup"]["status"] in ("created", "skipped_recent"), "capture save should report local backup state")
+                capture_id = int(capture_body["localCommentId"])
+                capture_row = qone("SELECT * FROM comments WHERE id=?", (capture_id,))
+                assert_true(capture_row and capture_row["page_url"] == "https://kb-regression.local/local-first", "capture row missing")
+                capture_ledger = qone("SELECT * FROM memory_intake_ledger WHERE comment_id=?", (capture_id,))
+                assert_true(capture_ledger and capture_ledger["notion_status"] == "notion_skipped", "capture ledger should mark optional backup skipped")
+                backup_status = client.get("/backup/status")
+                assert_true(backup_status.status_code == 200, backup_status.text)
+                backup_body = backup_status.json()
+                assert_true(backup_body["enabled"] is True, "local backup should be enabled by default")
+                assert_true(str(backup_body["backup_dir"]).startswith(temp_dir), "backup dir must stay inside temporary data dir")
+                assert_true(backup_body["integrity"]["ok"] is True, "temporary DB integrity check should pass")
 
                 response = client.post(
                     "/comments",
@@ -740,6 +776,7 @@ class Regression:
                     [
                         f"temp DB: {db_path}",
                         "covered: comment intake, page_cache, ledger, user events, growth job enqueue/dedupe",
+                        "covered: local-first capture save, optional Notion skip, local backup status",
                         "covered: exposure page cache, seen/commented evidence events, p# context retrieval",
                         "covered: follow-up records then triggers growth; PATCH does not duplicate behavior events",
                         "covered: context pack and growth artifacts visible in debug detail",

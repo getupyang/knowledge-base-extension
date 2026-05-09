@@ -1,48 +1,35 @@
 // MV3 popup 脚本：内容必须外置，不能 inline（CSP 默认禁）
-// 启动时回填配置 + 绑定按钮事件
+
+function $(id) {
+  return document.getElementById(id);
+}
+
+async function loadRuntimeStatus() {
+  const localStatus = $("localStatus");
+  const backupStatus = $("backupStatus");
+  const status = $("status");
+  try {
+    const res = await fetch("http://127.0.0.1:8766/config");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    localStatus.textContent = "已连接。所有批注、对话和记忆会持续保存在本机主库。";
+    backupStatus.textContent = data.notionConfigured
+      ? "Notion 外部备份已开启"
+      : "Notion 外部备份未开启";
+    status.style.color = "#1d7f5f";
+    status.textContent = "本地优先模式";
+  } catch (err) {
+    localStatus.textContent = "未连接。请先运行 bash start.sh。";
+    backupStatus.textContent = "后端离线时无法确认备份状态。";
+    status.style.color = "#ef4444";
+    status.textContent = "后端离线";
+  }
+}
 
 document.addEventListener("DOMContentLoaded", () => {
-  chrome.storage.local.get(["notionToken", "databaseId"], (result) => {
-    if (result.notionToken) document.getElementById("notionToken").value = result.notionToken;
-    if (result.databaseId) document.getElementById("databaseId").value = result.databaseId;
-  });
-
-  document.getElementById("notebookBtn").addEventListener("click", () => {
+  $("notebookBtn").addEventListener("click", () => {
     chrome.tabs.create({ url: chrome.runtime.getURL("src/notebook/index.html") });
     window.close();
   });
-
-  document.getElementById("saveBtn").addEventListener("click", () => {
-    const notionToken = document.getElementById("notionToken").value.trim();
-    const databaseId = document.getElementById("databaseId").value.trim();
-    const status = document.getElementById("status");
-
-    if (!notionToken || !databaseId) {
-      status.style.color = "#ef4444";
-      status.textContent = "请填写 Notion Token 和 Database ID";
-      return;
-    }
-
-    status.style.color = "#999";
-    status.textContent = "保存中...";
-
-    chrome.storage.local.set({ notionToken, databaseId }, () => {
-      if (chrome.runtime.lastError) {
-        status.style.color = "#ef4444";
-        status.textContent = "保存失败：" + chrome.runtime.lastError.message;
-        return;
-      }
-      chrome.storage.local.get(["notionToken", "databaseId"], (result) => {
-        if (result.notionToken && result.databaseId) {
-          chrome.runtime.sendMessage({ type: "RELOAD_CONFIG" });
-          status.style.color = "#10b981";
-          status.textContent = "✓ 已保存";
-          setTimeout(() => status.textContent = "", 2000);
-        } else {
-          status.style.color = "#ef4444";
-          status.textContent = "写入失败，请重试";
-        }
-      });
-    });
-  });
+  loadRuntimeStatus();
 });

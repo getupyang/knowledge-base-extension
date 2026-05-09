@@ -206,7 +206,7 @@ async function maybeImportFromNotion(data) {
   if (_notionImportStarted) return;
   if (!data || data.comment_count !== 0 || !data.notion_configured) return;
   _notionImportStarted = true;
-  toast("正在从 Notion 导入旧数据…");
+  toast("正在从 Notion 备份导入旧数据…");
   try {
     const result = await api("/notebook/import-notion", {
       method: "POST",
@@ -218,11 +218,11 @@ async function maybeImportFromNotion(data) {
       loadOverview();
       loadDiary();
     } else {
-      toast("Notion 没有可导入的旧数据");
+      toast("Notion 备份没有可导入的旧数据");
     }
   } catch (e) {
     console.warn("[notebook] import notion failed", e);
-    toast("Notion 旧数据导入失败");
+    toast("Notion 备份旧数据导入失败");
   }
 }
 
@@ -230,7 +230,7 @@ async function loadOverview() {
   try {
     const data = await api("/notebook/overview");
     const sync = $("kb-nb-overview-sync");
-    sync.textContent = `同步 ${fmtClock(data.latest_sync)} · ${data.comment_count} 条评注 · ${data.page_count} 篇文章`;
+    sync.textContent = `本地 ${fmtClock(data.latest_sync)} · ${data.comment_count} 条评注 · ${data.page_count} 篇文章`;
     $("kb-nb-overview-meta").textContent = `共 ${data.page_count} 篇 · 评注 ${data.comment_count} 条`;
     const diaryCount = $("kb-nb-count-diary");
     if (diaryCount) {

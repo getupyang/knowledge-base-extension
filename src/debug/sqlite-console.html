@@ -365,7 +365,7 @@
 
     function statusClass(value) {
       if (!value) return "";
-      if (["done", "local_saved", "notion_synced", "success", "open"].includes(value)) return "ok";
+      if (["done", "local_saved", "notion_synced", "notion_skipped", "success", "open"].includes(value)) return "ok";
       if (["pending", "running", "queued", "enqueued"].includes(value)) return "warn";
       if (["failed", "notion_failed"].includes(value)) return "bad";
       return "";
@@ -421,7 +421,7 @@
       });
 
       checks.push({
-        status: notionStatus === "notion_synced"
+        status: notionStatus === "notion_synced" || notionStatus === "notion_skipped"
           ? "complete"
           : notionStatus === "notion_failed"
             ? "failed"
@@ -499,7 +499,7 @@
             ${chip("events", item.memory_event_count)}
             ${chip("context", item.context_pack_count)}
             ${chip("local", item.local_status)}
-            ${chip("notion", item.notion_status)}
+            ${chip("backup", item.notion_status)}
             ${chip("growth", item.growth_status)}
           </div>
           <div class="meta">${esc(item.updated_at || "")}</div>
@@ -608,16 +608,20 @@
       ));
 
       checks.push(makeCheck(
-        "notion",
-        "Notion 同步",
-        ledger.notion_status === "notion_synced" && comment.notion_page_id
+        "backup",
+        "外部备份",
+        ledger.notion_status === "notion_skipped"
+          ? "complete"
+          : ledger.notion_status === "notion_synced" && comment.notion_page_id
           ? "complete"
           : isFailedStatus(ledger.notion_status) || ledger.notion_error
             ? "failed"
             : isPendingStatus(ledger.notion_status)
               ? "pending"
               : "gap",
-        ledger.notion_status === "notion_synced" && comment.notion_page_id
+        ledger.notion_status === "notion_skipped"
+          ? "Notion 备份未开启；本地入账仍是完整保存链路。"
+          : ledger.notion_status === "notion_synced" && comment.notion_page_id
           ? `notion_page_id=${comment.notion_page_id}`
           : ledger.notion_error || `notion_status=${ledger.notion_status || "missing"}，notion_page_id=${comment.notion_page_id || "missing"}`,
         ["notion_status", "notion_synced_at", "notion_page_id", "notion_error"],
@@ -757,7 +761,7 @@
           <div class="audit-head">
             <div>
               <h2 class="audit-title">验收状态 ${verdictBadge(audit.status)}</h2>
-              <p class="sub">这是开发者视角的流水线健康判定：批注是否入账、是否有前端可见 reply、是否有 context pack、growth 是否完成、Notion 是否同步。</p>
+              <p class="sub">这是开发者视角的流水线健康判定：批注是否入账、是否有前端可见 reply、是否有 context pack、growth 是否完成、外部备份是否按配置处理。</p>
             </div>
             <div class="audit-actions">
               <button data-copy-audit="${esc(data.comment.id)}">复制验收摘要</button>
@@ -861,7 +865,7 @@
         ${renderAcceptance(data, audit)}
         <section class="summary-grid">
           <div class="metric"><b>local</b><span class="${statusClass(ledger.local_status)}">${esc(ledger.local_status || "missing")}</span></div>
-          <div class="metric"><b>notion</b><span class="${statusClass(ledger.notion_status)}">${esc(ledger.notion_status || "missing")}</span></div>
+          <div class="metric"><b>backup</b><span class="${statusClass(ledger.notion_status)}">${esc(ledger.notion_status || "missing")}</span></div>
           <div class="metric"><b>growth</b><span class="${statusClass(ledger.growth_status)}">${esc(ledger.growth_status || "missing")}</span></div>
           <div class="metric"><b>memory events</b>${asArray(data.memory_events).length}</div>
           <div class="metric"><b>context packs</b>${data.context_packs.length}</div>
@@ -910,7 +914,7 @@
         ["replies.agent_type", "本次回复实际使用的 agent 角色，例如 researcher / sparring_partner。", "reply"],
         ["replies.debug_meta", "AI 回复的运行元信息：版本、意图、角色、耗时、context_pack_id、命中的规则等。", "reply"],
         ["memory_intake_ledger.local_status", "本地入账状态。local_saved 表示 comments.db 已保存批注并进入流水线。", "ledger"],
-        ["memory_intake_ledger.notion_status", "Notion 镜像状态。notion_synced 表示本地记录已同步到 Notion。", "ledger"],
+        ["memory_intake_ledger.notion_status", "外部备份状态。notion_skipped 表示未开启 Notion 备份，notion_synced 表示已同步到 Notion。", "ledger"],
         ["memory_intake_ledger.growth_status", "Memory Growth 状态。done 表示 growth worker 已处理；pending/running 表示还在队列或执行中。", "ledger"],
         ["memory_intake_ledger.growth_job_ids", "触发这条批注记忆增长的 job id 列表，用来追踪异步任务。", "ledger"],
         ["memory_intake_ledger.error_summary", "流水线级错误摘要。出现内容时，优先排查 failures 和 jobs.error。", "ledger"],

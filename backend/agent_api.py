@@ -39,6 +39,9 @@ DEFAULT_DATA_DIR = os.path.expanduser("~/.knowledge-base-extension")
 DATA_DIR = os.path.abspath(os.path.expanduser(os.environ.get("KB_DATA_DIR", DEFAULT_DATA_DIR)))
 LOG_DIR = os.path.join(DATA_DIR, ".logs")
 DB_PATH = os.path.join(DATA_DIR, "comments.db")
+LOCAL_BACKUP_DIR = os.path.abspath(os.path.expanduser(
+    os.environ.get("MEMAI_BACKUP_DIR", os.path.join(DATA_DIR, "backups"))
+))
 PROJECT_CONTEXT_PATH = os.path.join(DATA_DIR, "project_context.md")
 COMPANY_CULTURE_PATH = os.path.join(ROOT, "company_culture.md")
 # v2 新增路径
@@ -51,6 +54,7 @@ LEGACY_DB_PATH = os.path.join(ROOT, "comments.db")
 def _ensure_data_dir():
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(LOG_DIR, exist_ok=True)
+    os.makedirs(LOCAL_BACKUP_DIR, exist_ok=True)
 
     def _comment_count(path: str) -> int:
         if not os.path.exists(path):
@@ -293,7 +297,7 @@ def init_db():
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_revisions_kind_created ON memory_revisions(kind, created_at DESC)")
 
-    # ── Memory Intake Ledger V0：每条新增批注的本地/Notion/growth 状态留痕 ──
+    # ── Memory Intake Ledger V0：每条新增批注的本地/外部备份/growth 状态留痕 ──
     conn.execute("""
         CREATE TABLE IF NOT EXISTS memory_intake_ledger (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -516,7 +520,137 @@ def init_db():
     conn.commit()
     conn.close()
 
+
+def _local_backup_enabled() -> bool:
+    return os.environ.get("MEMAI_LOCAL_BACKUP_ENABLED", "1").lower() not in ("0", "false", "no", "off")
+
+
+def _local_backup_keep_count() -> int:
+    try:
+        return max(1, int(os.environ.get("MEMAI_BACKUP_KEEP", "14") or "14"))
+    except Exception:
+        return 14
+
+
+def _list_local_backups(limit: int = 20) -> list:
+    items = []
+    if not os.path.isdir(LOCAL_BACKUP_DIR):
+        return items
+    for name in os.listdir(LOCAL_BACKUP_DIR):
+        if not (name.startswith("comments-") and name.endswith(".db")):
+            continue
+        path = os.path.join(LOCAL_BACKUP_DIR, name)
+        try:
+            stat = os.stat(path)
+        except OSError:
+            continue
+        items.append({
+            "filename": name,
+            "path": path,
+            "size_bytes": stat.st_size,
+            "mtime": stat.st_mtime,
+            "created_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+        })
+    items.sort(key=lambda item: item["mtime"], reverse=True)
+    return items[:max(1, limit)]
+
+
+def _db_integrity_check() -> dict:
+    if not os.path.exists(DB_PATH):
+        return {"ok": False, "result": "missing_db"}
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        try:
+            conn.execute("PRAGMA wal_checkpoint(FULL)")
+        except sqlite3.DatabaseError:
+            pass
+        result = conn.execute("PRAGMA integrity_check").fetchone()[0]
+        return {"ok": result == "ok", "result": result}
+    finally:
+        conn.close()
+
+
+def _prune_local_backups():
+    keep = _local_backup_keep_count()
+    for item in _list_local_backups(limit=1000)[keep:]:
+        try:
+            os.remove(item["path"])
+        except OSError:
+            pass
+        manifest_path = item["path"] + ".json"
+        try:
+            os.remove(manifest_path)
+        except OSError:
+            pass
+
+
+def _ensure_local_backup(reason: str = "manual", min_interval_hours: int = 24, force: bool = False) -> dict:
+    if not _local_backup_enabled():
+        return {"enabled": False, "status": "disabled", "backup_dir": LOCAL_BACKUP_DIR}
+    if not os.path.exists(DB_PATH):
+        return {"enabled": True, "status": "missing_db", "backup_dir": LOCAL_BACKUP_DIR}
+
+    os.makedirs(LOCAL_BACKUP_DIR, exist_ok=True)
+    latest = (_list_local_backups(limit=1) or [None])[0]
+    if latest and not force and min_interval_hours:
+        age_hours = (datetime.now() - datetime.fromtimestamp(latest["mtime"])).total_seconds() / 3600
+        if age_hours < min_interval_hours:
+            return {
+                "enabled": True,
+                "status": "skipped_recent",
+                "backup_dir": LOCAL_BACKUP_DIR,
+                "latest_backup": latest,
+                "age_hours": round(age_hours, 2),
+            }
+
+    integrity = _db_integrity_check()
+    if not integrity.get("ok"):
+        return {
+            "enabled": True,
+            "status": "failed_integrity",
+            "backup_dir": LOCAL_BACKUP_DIR,
+            "integrity": integrity,
+        }
+
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    backup_path = os.path.join(LOCAL_BACKUP_DIR, f"comments-{stamp}.db")
+    shutil.copy2(DB_PATH, backup_path)
+    manifest = {
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "reason": reason,
+        "source_db": DB_PATH,
+        "backup_db": backup_path,
+        "integrity": integrity,
+    }
+    with open(backup_path + ".json", "w", encoding="utf-8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    _prune_local_backups()
+    latest = (_list_local_backups(limit=1) or [None])[0]
+    return {
+        "enabled": True,
+        "status": "created",
+        "backup_dir": LOCAL_BACKUP_DIR,
+        "latest_backup": latest,
+        "integrity": integrity,
+    }
+
+
+def _local_backup_status(check_integrity: bool = False) -> dict:
+    backups = _list_local_backups(limit=20)
+    payload = {
+        "enabled": _local_backup_enabled(),
+        "backup_dir": LOCAL_BACKUP_DIR,
+        "keep_count": _local_backup_keep_count(),
+        "backup_count": len(backups),
+        "latest_backup": backups[0] if backups else None,
+    }
+    if check_integrity:
+        payload["integrity"] = _db_integrity_check()
+    return payload
+
+
 init_db()
+_startup_backup_result = _ensure_local_backup("startup", min_interval_hours=24)
 
 # ──────────────────────────────────────────
 # 启动诊断日志（帮助新用户排查问题）
@@ -530,7 +664,8 @@ def _startup_check():
     print(f"[agent_api] LLM provider: {llm.get('selected_provider') or '✗ 未配置'} ({llm.get('provider_config')})")
     print(f"[agent_api] Claude Code: {llm['claude_code'].get('bin')} ({'✓' if llm['claude_code'].get('available') else 'optional: 未找到'})")
     print(f"[agent_api] Codex CLI: {llm['codex_cli'].get('bin')} ({'✓' if llm['codex_cli'].get('available') else 'optional: 未找到'})")
-    print(f"[agent_api] Notion Token: {'✓ 已配置' if notion_ok else '✗ 未配置'}")
+    print(f"[agent_api] Notion 备份: {'✓ 已配置' if notion_ok else 'optional: 未开启'}")
+    print(f"[agent_api] 本地备份: {_startup_backup_result.get('status')} ({LOCAL_BACKUP_DIR})")
     print(f"[agent_api] HOME: {os.environ.get('HOME', '未设置')}")
     if llm.get("error"):
         print(f"[agent_api] ⚠ LLM provider 不可用：{llm['error']}")
@@ -3916,6 +4051,7 @@ def runtime_status():
     return {
         "data_dir": DATA_DIR,
         "db_path": DB_PATH,
+        "backup": _local_backup_status(check_integrity=False),
         "llm": get_llm_status(),
         "jobs": {
             "counts": counts,
@@ -3927,11 +4063,24 @@ def runtime_status():
 
 @app.get("/config")
 def get_config():
-    """供插件 background 启动时自动拉取 Notion 配置，写入 chrome.storage"""
+    """供插件 background 启动时自动拉取可选 connector 配置。"""
+    token, db_id = _notion_credentials()
     return {
-        "notionToken": os.environ.get("NOTION_TOKEN", ""),
-        "databaseId": os.environ.get("NOTION_DATABASE_ID", ""),
+        "storageMode": "local_first",
+        "notionConfigured": bool(token and db_id),
+        "databaseIdSet": bool(db_id),
+        "backup": _local_backup_status(check_integrity=False),
     }
+
+
+@app.get("/backup/status")
+def backup_status():
+    return _local_backup_status(check_integrity=True)
+
+
+@app.post("/backup/run")
+def backup_run():
+    return _ensure_local_backup("manual", force=True)
 
 # ──────────────────────────────────────────
 # Notion 代理端点（绕过 Service Worker 休眠问题）
@@ -3999,21 +4148,9 @@ def _notion_request(endpoint: str, method: str = "GET", data: dict = None, timeo
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
         detail = e.read().decode() if e.fp else str(e)
-        return {
-            "success": True,
-            "localCommentId": local_comment_id,
-            "localCreated": local_created,
-            "notionSynced": False,
-            "notionError": detail,
-        }
+        raise HTTPException(status_code=502, detail=detail[:1000])
     except urllib.error.URLError as e:
-        return {
-            "success": True,
-            "localCommentId": local_comment_id,
-            "localCreated": local_created,
-            "notionSynced": False,
-            "notionError": str(e),
-        }
+        raise HTTPException(status_code=502, detail=str(e)[:1000])
 
 def _notion_text(prop: dict) -> str:
     if not prop:
@@ -4142,9 +4279,10 @@ def _link_comment_to_notion(local_comment_id: int, page_id: str):
     finally:
         conn.close()
 
+@app.post("/captures/save")
 @app.post("/notion/save")
-async def notion_save(req: NotionSaveRequest):
-    """高亮保存：先落本地 SQLite，Notion 只是可选外部副本。"""
+async def capture_save(req: NotionSaveRequest):
+    """高亮保存：先落本地 SQLite，Notion 只是可选外部备份。"""
     local_comment_id, local_created = _insert_local_comment_if_missing(
         page_url=req.url,
         page_title=req.title,
@@ -4152,15 +4290,21 @@ async def notion_save(req: NotionSaveRequest):
         comment=req.thought,
         agent_type="highlight",
     )
+    backup = _ensure_local_backup("capture_save", min_interval_hours=24)
 
     token, db_id = _notion_credentials()
     if not token or not db_id:
         _record_intake_notion(local_comment_id, "notion_skipped", "notion_not_configured")
         return {
             "success": True,
+            "storageMode": "local_first",
+            "localSaved": True,
             "localCommentId": local_comment_id,
             "localCreated": local_created,
             "notionSynced": False,
+            "notionStatus": "notion_skipped",
+            "externalSync": {"notion": "disabled"},
+            "backup": backup,
             "message": "已保存到本地 SQLite；Notion 未配置",
         }
     body = json.dumps({
@@ -4188,40 +4332,79 @@ async def notion_save(req: NotionSaveRequest):
         _record_intake_notion(local_comment_id, "notion_synced")
         return {
             "success": True,
+            "storageMode": "local_first",
+            "localSaved": True,
             "pageId": page_id,
             "localCommentId": local_comment_id,
             "localCreated": local_created,
             "notionSynced": True,
+            "notionStatus": "notion_synced",
+            "externalSync": {"notion": "synced"},
+            "backup": backup,
         }
     except urllib.error.HTTPError as e:
         detail = e.read().decode() if e.fp else str(e)
         _record_intake_notion(local_comment_id, "notion_failed", detail)
         return {
             "success": True,
+            "storageMode": "local_first",
+            "localSaved": True,
             "pageId": None,
             "localCommentId": local_comment_id,
             "notionSynced": False,
+            "notionStatus": "notion_failed",
+            "externalSync": {"notion": "failed"},
+            "backup": backup,
             "notionError": detail,
         }
     except urllib.error.URLError as e:
         _record_intake_notion(local_comment_id, "notion_failed", str(e))
         return {
             "success": True,
+            "storageMode": "local_first",
+            "localSaved": True,
             "pageId": None,
             "localCommentId": local_comment_id,
             "notionSynced": False,
+            "notionStatus": "notion_failed",
+            "externalSync": {"notion": "failed"},
+            "backup": backup,
             "notionError": str(e),
         }
 
+@app.post("/captures/upsert")
 @app.post("/notion/upsert")
-async def notion_upsert(req: NotionUpsertRequest):
-    """评论 upsert 到 Notion（代理，不经过 Service Worker）"""
+async def capture_upsert(req: NotionUpsertRequest):
+    """评论保存/更新：本地为主，Notion 仅作可选外部备份。"""
+    local_comment_id = req.localCommentId
+    local_created = False
+    if not local_comment_id:
+        local_comment_id, local_created = _insert_local_comment_if_missing(
+            notion_page_id=req.notionPageId,
+            page_url=req.url,
+            page_title=req.title,
+            selected_text=req.excerpt,
+            comment=req.thought,
+            agent_type="capture_upsert",
+            replies=_parse_notion_conversation(req.aiConversation, _now_iso()),
+        )
+    backup = _ensure_local_backup("capture_upsert", min_interval_hours=24)
     token, db_id = _notion_credentials()
     if not token or not db_id:
-        if req.localCommentId:
-            _record_intake_notion(req.localCommentId, "notion_skipped", "notion_not_configured")
-        return {"success": True, "pageId": req.notionPageId, "notionSynced": False,
-                "message": "本地评论已保存；Notion 未配置"}
+        _record_intake_notion(local_comment_id, "notion_skipped", "notion_not_configured")
+        return {
+            "success": True,
+            "storageMode": "local_first",
+            "localSaved": True,
+            "localCommentId": local_comment_id,
+            "localCreated": local_created,
+            "pageId": req.notionPageId,
+            "notionSynced": False,
+            "notionStatus": "notion_skipped",
+            "externalSync": {"notion": "disabled"},
+            "backup": backup,
+            "message": "本地评论已保存；Notion 未配置",
+        }
     headers = _notion_headers(token)
 
     has_ai = req.aiConversation and "AI:" in req.aiConversation
@@ -4272,24 +4455,47 @@ async def notion_upsert(req: NotionUpsertRequest):
                 replies=_parse_notion_conversation(req.aiConversation, _now_iso()),
             )
         _record_intake_notion(local_comment_id, "notion_synced")
-        return {"success": True, "pageId": page_id, "notionSynced": True}
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode() if e.fp else str(e)
-        if req.localCommentId:
-            _record_intake_notion(req.localCommentId, "notion_failed", detail)
         return {
             "success": True,
+            "storageMode": "local_first",
+            "localSaved": True,
+            "localCommentId": local_comment_id,
+            "localCreated": local_created,
+            "pageId": page_id,
+            "notionSynced": True,
+            "notionStatus": "notion_synced",
+            "externalSync": {"notion": "synced"},
+            "backup": backup,
+        }
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode() if e.fp else str(e)
+        _record_intake_notion(local_comment_id, "notion_failed", detail)
+        return {
+            "success": True,
+            "storageMode": "local_first",
+            "localSaved": True,
+            "localCommentId": local_comment_id,
+            "localCreated": local_created,
             "pageId": req.notionPageId,
             "notionSynced": False,
+            "notionStatus": "notion_failed",
+            "externalSync": {"notion": "failed"},
+            "backup": backup,
             "notionError": detail,
         }
     except urllib.error.URLError as e:
-        if req.localCommentId:
-            _record_intake_notion(req.localCommentId, "notion_failed", str(e))
+        _record_intake_notion(local_comment_id, "notion_failed", str(e))
         return {
             "success": True,
+            "storageMode": "local_first",
+            "localSaved": True,
+            "localCommentId": local_comment_id,
+            "localCreated": local_created,
             "pageId": req.notionPageId,
             "notionSynced": False,
+            "notionStatus": "notion_failed",
+            "externalSync": {"notion": "failed"},
+            "backup": backup,
             "notionError": str(e),
         }
 

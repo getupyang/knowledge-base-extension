@@ -22,13 +22,13 @@ npm run regression
   - Exposure Memory exists.
   - Context Packs exists.
   - Memory Growth result tables exist.
-  - Notion paths still exist.
+  - Local-first capture paths exist, with legacy Notion routes kept for compatibility.
   - Follow-up flow records to backend and then triggers AI by default.
   - Debug Console exposes events, context packs, field notes, and acceptance state.
 
 ## 2. Hermetic API/DB Regression
 
-Writes run only in a temporary `KB_DATA_DIR`. The user's real DB and Notion are not written.
+Writes run only in a temporary `KB_DATA_DIR`. The user's real DB and optional Notion backup are not written.
 
 - Create comment with `no_agent=true`.
 - Verify `comments` row.
@@ -119,7 +119,7 @@ For backend changes:
 These are intentionally not in the default gate yet because they would either call external services or need a curated eval set:
 
 - Live LLM answer quality golden tests.
-- Full Notion write regression.
+- Full optional Notion backup regression.
 - Cross-browser packaged-extension E2E with real Chrome UI.
 - Exposure-memory retrieval benchmark over stored full-text articles.
 - Longitudinal memory-quality benchmark across weeks of user behavior.

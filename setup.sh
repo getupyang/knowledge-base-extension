@@ -361,12 +361,14 @@ pip3 install -q -r "$REPO_DIR/requirements.txt" && echo "  ✓ fastapi uvicorn p
 
 # ── 3. 配置密钥 ───────────────────────────────────────────
 echo ""
-echo "→ 配置 Notion..."
+echo "→ 配置本地存储和可选 Notion 备份..."
 echo ""
-echo "  需要两样东西：Notion Token 和 Database ID"
-echo "  详细图文教程：https://github.com/getupyang/knowledge-base-extension#notion-setup"
+echo "  默认使用本地 SQLite：$DATA_DIR/comments.db"
+echo "  不配置 Notion 也可以完整使用高亮、评论、AI 回复和记忆笔记本。"
+echo "  如果你想额外同步一份云端备份，再填写 Notion Token 和 Database ID。"
+echo "  详细图文教程：https://github.com/getupyang/knowledge-base-extension#optional-notion-backup"
 echo ""
-echo "  简要步骤："
+echo "  可选 Notion 备份步骤："
 echo "  1. 打开 https://www.notion.so/my-integrations，创建 Integration，复制 Token"
 echo "  2. 在 Notion 新建页面 → 选 Database - Full page"
 echo "  3. 添加字段（名称必须一致）："
@@ -389,8 +391,12 @@ if [ -f "$CONFIG_FILE" ]; then
 fi
 
 if [ ! -f "$CONFIG_FILE" ]; then
-  read -p "  Notion Token (ntn_...): " NOTION_TOKEN
-  read -p "  Notion Database ID (32位): " DATABASE_ID
+  read -p "  可选 Notion Token (ntn_...，留空跳过): " NOTION_TOKEN
+  read -p "  可选 Notion Database ID (32位，留空跳过): " DATABASE_ID
+  if { [ -n "$NOTION_TOKEN" ] && [ -z "$DATABASE_ID" ]; } || { [ -z "$NOTION_TOKEN" ] && [ -n "$DATABASE_ID" ]; }; then
+    echo "  ✗ Notion 备份需要同时填写 Token 和 Database ID；都留空则关闭 Notion 备份。"
+    exit 1
+  fi
 
   echo ""
   echo "→ 配置 LLM..."
@@ -479,6 +485,9 @@ if [ ! -f "$CONFIG_FILE" ]; then
 
 NOTION_TOKEN=${NOTION_TOKEN}
 NOTION_DATABASE_ID=${DATABASE_ID}
+MEMAI_LOCAL_BACKUP_ENABLED=1
+# Recovery snapshots only. Primary data stays in comments.db and is not pruned by this count.
+MEMAI_BACKUP_KEEP=14
 MEMAI_LLM_PROVIDER=${LLM_PROVIDER}
 MEMAI_LOCAL_AGENT=${LOCAL_AGENT}
 MEMAI_LLM_FALLBACK=${LLM_FALLBACK}
@@ -558,9 +567,9 @@ if [ ! -f "$DATA_DIR/learned_rules.json" ]; then
   echo "→ 已生成空的 $DATA_DIR/learned_rules.json"
 fi
 
-# ── 6. 验证 Notion Token ──────────────────────────────────
+# ── 6. 验证可选 Notion 备份 ──────────────────────────────────
 echo ""
-echo "→ 验证 Notion 配置..."
+echo "→ 验证可选 Notion 备份..."
 source "$CONFIG_FILE" 2>/dev/null || true
 
 if [ -n "$NOTION_TOKEN" ] && [ "$NOTION_TOKEN" != "ntn_your_token_here" ]; then
@@ -574,7 +583,7 @@ if [ -n "$NOTION_TOKEN" ] && [ "$NOTION_TOKEN" != "ntn_your_token_here" ]; then
     echo "  ✗ Notion Token 无效（HTTP ${HTTP_CODE}），请检查 $CONFIG_FILE"
   fi
 else
-  echo "  ⚠ 未配置 Notion Token，Notion 写入功能不可用"
+  echo "  ✓ 未开启 Notion 备份；数据会保存到本地 SQLite，并使用本地备份目录"
 fi
 
 echo ""

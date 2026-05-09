@@ -150,7 +150,7 @@ This is an active prototype, not a finished product.
 | Python 3 | 3.9+ | `python3 --version` |
 | Node.js | 18+ | `node --version` |
 | Chrome | 最新 | 用于加载插件 |
-| Notion 账号 | — | 用于存储批注 |
+| Notion 账号 | — | 可选，用于外部备份和旧数据导入 |
 | LLM 后端 | — | 四选一：Claude Code、Codex CLI、千问 / Qwen API、OpenRouter API |
 
 可选本地后端：
@@ -206,7 +206,11 @@ claude --version
 
 选择 Claude Code 时，脚本会继续问「Claude 账号登录」还是「Anthropic API Key 模式」。账号登录不需要输入 key；API Key 模式会优先读取当前终端里的 `ANTHROPIC_API_KEY`，没有检测到时才让你粘贴。
 
-### 第三步：准备 Notion 数据库
+<a id="optional-notion-backup"></a>
+
+### 第三步：可选 Notion 备份
+
+这一步可以跳过。默认数据会保存到本机 `~/.knowledge-base-extension/comments.db`，并写入本地备份目录；Notion 只是一份可选外部副本。
 
 **3.1 创建 Integration（获取 Token）**
 
@@ -254,10 +258,10 @@ bash setup.sh
 脚本会：
 - 检查所有依赖是否就绪
 - 安装 Python 依赖（fastapi、uvicorn）
-- 引导你输入 Notion Token 和 Database ID，写入 `~/.kb_config`
+- 初始化本地 SQLite 数据库和本地备份目录
+- 可选引导你输入 Notion Token 和 Database ID，写入 `~/.kb_config`
 - 引导你固定选择一个模型服务：Claude Code / Codex / 千问 / OpenRouter
-- 初始化本地 SQLite 数据库
-- 验证 Notion Token 是否有效
+- 如果开启 Notion 备份，验证 Notion Token 是否有效
 
 ### 第五步：配置项目上下文（可选但推荐）
 
@@ -274,7 +278,7 @@ open ~/.knowledge-base-extension/project_context.md
 3. 点击「加载已解压的扩展程序」
 4. 选择下载解压后的 `knowledge-base-extension` 文件夹（即包含 `manifest.json` 的那个目录）
 
-插件图标出现在工具栏即为成功。点击插件图标，填入 Notion Token 和 Database ID（与 `~/.kb_config` 一致）。
+插件图标出现在工具栏即为成功。点击插件图标可打开记忆笔记本，也可以选择性填写 Notion Token 和 Database ID 开启外部备份；不填写也能正常使用。
 
 ---
 
@@ -364,12 +368,14 @@ bash start.sh
 然后：
 
 1. 在 Chrome 开发者模式加载本仓库根目录。
-2. 点击插件图标，填入这个用户自己的 Notion Token 和 Database ID。
+2. 点击插件图标确认本地保存可用；如果需要云端副本，再填入这个用户自己的 Notion Token 和 Database ID。
 3. 打开 http://localhost:8765/notebook/ 查看记忆笔记本。
 
 数据是本地优先、按用户隔离的：
 
 - `~/.knowledge-base-extension/comments.db` 是该用户的批注、对话、notebook generations。
+- 主数据不会因为超过某个条数或快照数而被自动清理；所有批注、对话和记忆都持续写在本机主库里。
+- `~/.knowledge-base-extension/backups/` 只保存用于回滚的本地 SQLite 恢复快照；默认保留最近 14 份快照，不影响主库里的完整数据。
 - `~/.knowledge-base-extension/learned_rules.json` 是该用户从反馈里学到的规则。
 - `~/.knowledge-base-extension/project_context.md` / `~/.knowledge-base-extension/user_profile.md` 是该用户自己的上下文。
 - Agent 回复只使用这台电脑的本地记忆目录、本地 SQLite 和当前页面内容；代码仓库不携带任何人的记忆。
@@ -390,9 +396,13 @@ curl http://localhost:8766/health
 ```
 如果失败，重新运行 `bash start.sh`，查看日志：`~/.knowledge-base-extension/.logs/agent_api.log`
 
-**Q: Notion 写入失败**
+**Q: Notion 备份失败**
 
-检查 Token 和 Database ID 是否正确，以及数据库是否已连接 Integration（步骤 3.3）。Notion 失败不影响本地 SQLite 的批注和共同日记。
+检查 Token 和 Database ID 是否正确，以及数据库是否已连接 Integration（步骤 3.3）。Notion 失败不影响本地 SQLite 的批注、AI 回复和共同日记。
+
+**Q: 不配置 Notion 会丢数据吗？**
+
+不会影响正常使用。主数据在 `~/.knowledge-base-extension/comments.db`，后端会维护 `~/.knowledge-base-extension/backups/` 本地滚动备份。换机器前停服务并拷贝 `~/.knowledge-base-extension/` 即可迁移完整本地状态。
 
 **Q: Notion 里有旧数据，但共同日记是空的**
 
@@ -450,4 +460,4 @@ sh choose_ai_service.sh
 - 所有批注和 AI 对话存储在本地 `~/.knowledge-base-extension/comments.db`（SQLite）
 - Notion 是可选外部副本和旧数据导入来源，不是主存储
 - `~/.kb_config` 存储你的密钥，`chmod 600` 权限，不会上传到 git
-- 你的 Notion 数据库完全独立，和其他用户的数据互不干扰
+- 如果开启 Notion 备份，你的 Notion 数据库完全独立，和其他用户的数据互不干扰
