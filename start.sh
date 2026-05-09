@@ -6,6 +6,11 @@ REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 BACKEND_DIR="$REPO_DIR/backend"
 CONFIG_FILE="$HOME/.kb_config"
 
+if [ "${1:-}" = "--install-login-item" ] || [ "${1:-}" = "--enable-auto-start" ]; then
+  "$REPO_DIR/scripts/install-launch-agent"
+  exit $?
+fi
+
 echo "=== 启动工作台 ==="
 
 # ── 加载配置 ──────────────────────────────────────────────

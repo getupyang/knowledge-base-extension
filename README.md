@@ -307,6 +307,12 @@ bash start.sh
 
 如果不想每次 Mac 重启后手动运行 `bash start.sh`，首次安装时运行 `bash setup.sh`，最后选择开启「开机自动恢复后端」即可。开启后，下次登录 macOS 时会自动运行本仓库里的 `start.sh`，让本地 SQLite、记忆笔记本、Agent API 和后台 worker 恢复可用。
 
+已经安装过、只想补上开机自动恢复的用户，也可以只运行一次：
+
+```bash
+bash start.sh --install-login-item
+```
+
 正常用户不需要理解下面的命令；它们只用于排查或手动管理。
 
 手动开启：
