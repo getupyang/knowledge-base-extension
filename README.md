@@ -303,6 +303,30 @@ bash start.sh
 
 `start.sh` 会同时启动三部分：知识库浏览器、Agent API、后台 worker。worker 负责执行 `jobs` 表里的异步整理任务，例如「最近在想什么」和 rules → skills 蒸馏。
 
+### 可选：开机自动启动
+
+如果不想每次 Mac 重启后手动运行 `bash start.sh`，可以显式安装本机开机启动项：
+
+```bash
+scripts/install-launch-agent
+```
+
+它会在 `~/Library/LaunchAgents/com.memai.knowledge-base.plist` 写入一个 macOS LaunchAgent。下次登录 macOS 后，它会自动运行本仓库里的 `start.sh`，让本地 SQLite、记忆笔记本、Agent API 和后台 worker 恢复可用。
+
+检查状态：
+
+```bash
+scripts/launch-agent-status
+```
+
+取消开机启动：
+
+```bash
+scripts/uninstall-launch-agent
+```
+
+这是一个用户主动开启的本机能力，不会把你的本地记忆上传到 GitHub，也不会改变数据目录。日志在 `~/.knowledge-base-extension/.logs/launch-agent.out.log` 和 `~/.knowledge-base-extension/.logs/launch-agent.err.log`。
+
 ---
 
 ## 使用方法

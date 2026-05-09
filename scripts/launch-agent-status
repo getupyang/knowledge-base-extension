@@ -1,0 +1,33 @@
+#!/bin/bash
+# Show the macOS LaunchAgent state and the local backend health snapshot.
+
+set -u
+
+LABEL="com.memai.knowledge-base"
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PLIST_PATH="$HOME/Library/LaunchAgents/$LABEL.plist"
+USER_DOMAIN="gui/$(id -u)"
+
+if [ "$(uname -s)" != "Darwin" ]; then
+  echo "✗ 当前状态脚本只支持 macOS。"
+  exit 1
+fi
+
+if [ -f "$PLIST_PATH" ]; then
+  echo "✓ 开机启动配置存在：$PLIST_PATH"
+else
+  echo "○ 未安装开机启动配置：$PLIST_PATH"
+fi
+
+if launchctl print "$USER_DOMAIN/$LABEL" >/dev/null 2>&1; then
+  echo "✓ LaunchAgent 已加载：$LABEL"
+else
+  echo "○ LaunchAgent 未加载：$LABEL"
+fi
+
+echo ""
+if [ -x "$REPO_DIR/scripts/kb-health" ]; then
+  "$REPO_DIR/scripts/kb-health"
+else
+  echo "○ 未找到健康检查脚本：$REPO_DIR/scripts/kb-health"
+fi
