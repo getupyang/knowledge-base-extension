@@ -735,7 +735,8 @@ const commentSystem = (() => {
     mark.dataset.excerptId = _excerptId(excerpt);
     // 兜底底色：即使 stylesheet 还没注入也能看到划线（页面 CSS 可能 reset mark 样式）
     // hover/active 由 stylesheet 接管（class 切换覆盖 inline）
-    mark.style.background = "oklch(0.92 0.065 80)";
+    mark.style.background = "oklch(0.90 0.07 145 / 0.62)";
+    mark.style.color = "oklch(0.18 0.012 145)";
     mark.style.borderRadius = "2px";
     mark.style.cursor = "pointer";
     mark.title = "点击查看评注 / hover 在右栏定位";
@@ -1028,6 +1029,8 @@ const commentSystem = (() => {
       :root {
         --kb-paper: oklch(0.985 0.006 125);
         --kb-paper-2: oklch(0.965 0.014 135);
+        --kb-paper-3: oklch(0.94 0.018 135);
+        --kb-surface: oklch(0.995 0.003 125);
         --kb-ink: oklch(0.18 0.012 145);
         --kb-ink-2: oklch(0.32 0.014 145);
         --kb-ink-mute: oklch(0.54 0.02 145);
@@ -1038,12 +1041,50 @@ const commentSystem = (() => {
         --kb-brand-strong: oklch(0.37 0.09 155);
         --kb-brand-soft: oklch(0.93 0.045 145);
         --kb-brand-faint: oklch(0.972 0.018 145);
+        --kb-panel-shadow: rgba(16,44,32,0.08);
+        --kb-card-shadow: rgba(60,40,20,0.04);
+        --kb-grid-dot: oklch(0.91 0.014 145);
+        --kb-reply-user-bg: oklch(0.972 0.018 145);
+        --kb-reply-user-border: oklch(0.86 0.04 145);
+        --kb-reply-ai-bg: oklch(0.985 0.004 145);
+        --kb-reply-ai-accent: oklch(0.62 0.08 155);
         --kb-terra: var(--kb-brand);
         --kb-terra-soft: var(--kb-brand-soft);
         --kb-blue: var(--kb-brand);
         --kb-blue-soft: var(--kb-brand-soft);
-        --kb-highlight: oklch(0.92 0.065 80);
-        --kb-highlight-strong: oklch(0.82 0.12 78);
+        --kb-highlight: oklch(0.90 0.07 145 / 0.62);
+        --kb-highlight-strong: oklch(0.82 0.10 145 / 0.78);
+        --kb-highlight-text: oklch(0.18 0.012 145);
+        --kb-highlight-ring: oklch(0.49 0.105 155 / 0.28);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --kb-paper: oklch(0.18 0.012 145);
+          --kb-paper-2: oklch(0.22 0.014 145);
+          --kb-paper-3: oklch(0.27 0.016 145);
+          --kb-surface: oklch(0.205 0.014 145);
+          --kb-ink: oklch(0.94 0.008 135);
+          --kb-ink-2: oklch(0.84 0.01 135);
+          --kb-ink-mute: oklch(0.68 0.014 135);
+          --kb-ink-faint: oklch(0.52 0.014 135);
+          --kb-line: oklch(0.36 0.018 145);
+          --kb-line-2: oklch(0.29 0.016 145);
+          --kb-brand: oklch(0.70 0.10 155);
+          --kb-brand-strong: oklch(0.55 0.10 155);
+          --kb-brand-soft: oklch(0.28 0.035 150);
+          --kb-brand-faint: oklch(0.235 0.024 150);
+          --kb-panel-shadow: rgba(0,0,0,0.34);
+          --kb-card-shadow: rgba(0,0,0,0.18);
+          --kb-grid-dot: oklch(0.30 0.014 145);
+          --kb-reply-user-bg: oklch(0.245 0.026 150);
+          --kb-reply-user-border: oklch(0.40 0.052 150);
+          --kb-reply-ai-bg: oklch(0.215 0.012 145);
+          --kb-reply-ai-accent: oklch(0.64 0.09 155);
+          --kb-highlight: oklch(0.48 0.09 145 / 0.64);
+          --kb-highlight-strong: oklch(0.58 0.12 145 / 0.78);
+          --kb-highlight-text: oklch(0.96 0.008 135);
+          --kb-highlight-ring: oklch(0.70 0.10 155 / 0.32);
+        }
       }
       @keyframes kb-card-flash {
         0%   { box-shadow: 0 1px 2px rgba(60,40,20,0.05); border-color: var(--kb-line); }
@@ -1052,11 +1093,12 @@ const commentSystem = (() => {
       }
       mark.kb-comment-highlight {
         background: var(--kb-highlight) !important;
-        color: inherit;
+        color: var(--kb-highlight-text) !important;
         border-radius: 2px;
         cursor: pointer;
         padding: 1px 1px;
-        transition: background 0.2s;
+        transition: background 0.2s, box-shadow 0.2s;
+        box-shadow: inset 0 -0.12em 0 var(--kb-highlight-ring);
         box-decoration-break: clone;
         -webkit-box-decoration-break: clone;
       }
@@ -1064,9 +1106,9 @@ const commentSystem = (() => {
         background: var(--kb-highlight-strong) !important;
       }
       @keyframes kb-mark-pulse-anim {
-        0%   { background: var(--kb-highlight) !important; box-shadow: 0 0 0 0 oklch(0.82 0.12 78 / 0.0); }
-        30%  { background: var(--kb-highlight-strong) !important; box-shadow: 0 0 0 4px oklch(0.82 0.12 78 / 0.35); }
-        100% { background: var(--kb-highlight) !important; box-shadow: 0 0 0 0 oklch(0.82 0.12 78 / 0.0); }
+        0%   { background: var(--kb-highlight) !important; box-shadow: 0 0 0 0 oklch(0.49 0.105 155 / 0.0); }
+        30%  { background: var(--kb-highlight-strong) !important; box-shadow: 0 0 0 4px var(--kb-highlight-ring); }
+        100% { background: var(--kb-highlight) !important; box-shadow: inset 0 -0.12em 0 var(--kb-highlight-ring), 0 0 0 0 oklch(0.49 0.105 155 / 0.0); }
       }
       mark.kb-comment-highlight.kb-mark-pulse {
         animation: kb-mark-pulse-anim 0.85s ease-in-out 1;
@@ -1085,11 +1127,11 @@ const commentSystem = (() => {
         display: flex; flex-direction: column; z-index: 2147483645;
         font-family: "Inter Tight", "Inter", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
         font-size: 14px; color: var(--kb-ink);
-        box-shadow: -8px 0 28px rgba(16,44,32,0.08);
+        box-shadow: -8px 0 28px var(--kb-panel-shadow);
         transform: translateX(0); transition: transform 0.28s ease;
         overflow: hidden;
         background-image:
-          radial-gradient(oklch(0.91 0.014 145) 0.5px, transparent 0.5px);
+          radial-gradient(var(--kb-grid-dot) 0.5px, transparent 0.5px);
         background-size: 20px 20px;
       }
       #kb-comment-panel.kb-btn-hidden { transform: translateX(100%); }
@@ -1119,11 +1161,11 @@ const commentSystem = (() => {
         position: relative;
       }
       .kb-cmt-card {
-        background: var(--kb-paper);
+        background: var(--kb-surface);
         border: 1px solid var(--kb-line-2);
         border-radius: 6px;
         padding: 12px 14px 10px;
-        box-shadow: 0 1px 2px rgba(60,40,20,0.04);
+        box-shadow: 0 1px 2px var(--kb-card-shadow);
         margin-bottom: 10px;
         transition: border-color 0.18s, box-shadow 0.18s;
       }
@@ -1140,7 +1182,7 @@ const commentSystem = (() => {
       .kb-cmt-content.overflowing:not(.expanded)::after {
         content: ''; position: absolute; bottom: 0; left: 0; right: 0;
         height: 36px;
-        background: linear-gradient(transparent, var(--kb-paper));
+        background: linear-gradient(transparent, var(--kb-surface));
       }
       .kb-cmt-expand {
         font-size: 11px; color: var(--kb-terra); cursor: pointer; margin-top: 4px;
@@ -1169,18 +1211,30 @@ const commentSystem = (() => {
         margin-bottom: 8px; letter-spacing: 0.04em;
       }
       .kb-reply {
-        border-radius: 4px;
+        position: relative;
+        border: 1px solid transparent;
+        border-radius: 5px;
         padding: 8px 10px; font-size: 13px;
         line-height: 1.55; margin-bottom: 6px;
       }
       .kb-reply.ai {
-        background: var(--kb-paper-2);
-        border-left: 2px solid var(--kb-blue);
+        background: var(--kb-reply-ai-bg);
+        border-color: var(--kb-line-2);
         color: var(--kb-ink);
       }
+      .kb-reply.ai::before {
+        content: '';
+        position: absolute;
+        top: -1px;
+        left: 10px;
+        width: 34px;
+        height: 2px;
+        border-radius: 999px;
+        background: var(--kb-reply-ai-accent);
+      }
       .kb-reply.user {
-        background: oklch(0.97 0.015 130);
-        border-left: 2px solid oklch(0.65 0.1 130);
+        background: var(--kb-reply-user-bg);
+        border-color: var(--kb-reply-user-border);
         color: var(--kb-ink);
       }
       .kb-reply-label {
@@ -1190,7 +1244,7 @@ const commentSystem = (() => {
       }
       .kb-reply-label .kb-reply-tag {
         display: inline-block;
-        background: var(--kb-ink); color: var(--kb-paper);
+        background: var(--kb-brand-strong); color: white;
         font-size: 9px; padding: 1px 5px; border-radius: 2px;
         margin-right: 6px; letter-spacing: 0.08em; font-weight: 600;
       }
@@ -1207,11 +1261,11 @@ const commentSystem = (() => {
       .kb-reply.ai .kb-reply-body em { font-style: italic; }
       .kb-reply.ai .kb-reply-body code {
         font-family: "JetBrains Mono", ui-monospace, monospace;
-        background: var(--kb-paper); border: 1px solid var(--kb-line-2);
+        background: var(--kb-paper-2); border: 1px solid var(--kb-line-2);
         padding: 1px 4px; border-radius: 2px; font-size: 11px;
       }
       .kb-reply.ai .kb-reply-body pre {
-        background: var(--kb-paper); border: 1px solid var(--kb-line-2);
+        background: var(--kb-paper-2); border: 1px solid var(--kb-line-2);
         padding: 8px 10px; border-radius: 4px; overflow-x: auto; margin: 5px 0;
         font-family: "JetBrains Mono", ui-monospace, monospace;
       }
@@ -1272,8 +1326,9 @@ const commentSystem = (() => {
       }
       .kb-thinking {
         font-size: 12px; color: var(--kb-ink-2); padding: 8px 10px;
-        background: var(--kb-paper-2); border-radius: 4px; margin-top: 6px;
-        line-height: 1.6; border-left: 2px solid var(--kb-blue);
+        background: var(--kb-reply-ai-bg); border-radius: 4px; margin-top: 6px;
+        line-height: 1.6; border: 1px solid var(--kb-line-2);
+        box-shadow: inset 0 2px 0 var(--kb-reply-ai-accent);
         font-family: "Source Han Serif SC", "Noto Serif SC", serif;
       }
       .kb-thinking::before {
@@ -2394,7 +2449,7 @@ const commentSystem = (() => {
   function init() {
     if (initialized) return;
     initialized = true;
-    // 关键：stylesheet 必须先注入，否则 restoreHighlights 重建出来的 mark 会失去 .kb-comment-highlight 的样式（淡橙底）
+    // 关键：stylesheet 必须先注入，否则 restoreHighlights 重建出来的 mark 会失去 .kb-comment-highlight 的样式（绿色高亮底）
     injectStyles();
     restoreHighlights();
     restoreCommentHighlights();

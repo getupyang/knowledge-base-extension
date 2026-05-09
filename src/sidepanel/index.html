@@ -13,6 +13,31 @@
       --kb-brand: #1d7f5f;
       --kb-brand-dark: #155f49;
       --kb-brand-soft: #dff3e6;
+      --kb-surface: #ffffff;
+      --kb-field: #ffffff;
+      --kb-user-bg: #e8f6ee;
+      --kb-user-border: #bfdccc;
+      --kb-ai-bg: #ffffff;
+      --kb-button-text: #ffffff;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --kb-paper: #141a17;
+        --kb-soft: #1d2721;
+        --kb-ink: #edf4ee;
+        --kb-muted: #a9b6ad;
+        --kb-faint: #77857c;
+        --kb-line: #2f3a34;
+        --kb-brand: #61b88f;
+        --kb-brand-dark: #3f8f6d;
+        --kb-brand-soft: #203a2d;
+        --kb-surface: #18201c;
+        --kb-field: #111713;
+        --kb-user-bg: #203a2d;
+        --kb-user-border: #3b684f;
+        --kb-ai-bg: #18201c;
+        --kb-button-text: #ffffff;
+      }
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -43,7 +68,7 @@
     #save-btn {
       padding: 5px 12px;
       background: var(--kb-brand);
-      color: white;
+      color: var(--kb-button-text);
       border: none;
       border-radius: 6px;
       cursor: pointer;
@@ -118,13 +143,13 @@
     }
 
     .msg.user .msg-bubble {
-      background: var(--kb-brand-soft);
-      border: 1px solid #bfdccc;
-      color: var(--kb-brand-dark);
+      background: var(--kb-user-bg);
+      border: 1px solid var(--kb-user-border);
+      color: var(--kb-ink);
     }
 
     .msg.assistant .msg-bubble {
-      background: white;
+      background: var(--kb-ai-bg);
       border: 1px solid var(--kb-line);
       color: var(--kb-ink);
     }
@@ -152,6 +177,8 @@
       height: 60px;
       outline: none;
       line-height: 1.5;
+      background: var(--kb-field);
+      color: var(--kb-ink);
     }
 
     #user-input:focus {
@@ -161,7 +188,7 @@
     #send-btn {
       padding: 8px 14px;
       background: var(--kb-brand-dark);
-      color: white;
+      color: var(--kb-button-text);
       border: none;
       border-radius: 8px;
       cursor: pointer;

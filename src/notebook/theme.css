@@ -21,9 +21,9 @@
   --kb-green:          var(--kb-brand);
   --kb-teal:           oklch(0.50 0.08 190);
   --kb-leaf:           oklch(0.54 0.09 128);
-  --kb-highlight:      oklch(0.92 0.065 80);
-  --kb-highlight-strong: oklch(0.82 0.12 78);
-  --kb-highlight-soft: oklch(0.96 0.04 80);
+  --kb-highlight:      oklch(0.90 0.07 145 / 0.62);
+  --kb-highlight-strong: oklch(0.82 0.10 145 / 0.78);
+  --kb-highlight-soft: oklch(0.965 0.026 145);
   --kb-danger:         oklch(0.55 0.12 28);
   --kb-danger-soft:    oklch(0.96 0.035 28);
   --kb-shell-max:  1360px;

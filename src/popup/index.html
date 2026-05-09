@@ -11,6 +11,21 @@
       --kb-line: #dce2d6;
       --kb-brand: #1d7f5f;
       --kb-brand-dark: #155f49;
+      --kb-field: #ffffff;
+      --kb-button-text: #ffffff;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --kb-paper: #141a17;
+        --kb-soft: #1d2721;
+        --kb-ink: #edf4ee;
+        --kb-muted: #a9b6ad;
+        --kb-line: #2f3a34;
+        --kb-brand: #61b88f;
+        --kb-brand-dark: #3f8f6d;
+        --kb-field: #111713;
+        --kb-button-text: #ffffff;
+      }
     }
     body { width: 280px; padding: 16px; font-family: -apple-system, sans-serif; font-size: 13px; color: var(--kb-ink); background: var(--kb-paper); }
     h3 { margin: 0 0 12px; font-size: 15px; }
@@ -19,11 +34,11 @@
       width: 100%; box-sizing: border-box;
       border: 1px solid var(--kb-line); border-radius: 6px;
       padding: 6px 8px; font-size: 12px; margin-bottom: 10px;
-      font-family: monospace; color: var(--kb-ink); background: white;
+      font-family: monospace; color: var(--kb-ink); background: var(--kb-field);
     }
     input:focus { outline: none; border-color: var(--kb-brand); }
     button {
-      width: 100%; padding: 8px; background: var(--kb-brand); color: white;
+      width: 100%; padding: 8px; background: var(--kb-brand); color: var(--kb-button-text);
       border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500;
     }
     button:hover { background: var(--kb-brand-dark); }
