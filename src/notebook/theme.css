@@ -1,20 +1,31 @@
-/* mem-ai 笔记本视觉系统：暖纸 + 衬线 + JetBrains Mono + oklch */
+/* mem-ai 笔记本视觉系统：青绿色品牌主色 + 浅纸面 + JetBrains Mono + oklch */
 
 :root {
-  --kb-paper:      oklch(0.985 0.008 75);
-  --kb-paper-2:    oklch(0.97 0.01 75);
-  --kb-paper-3:    oklch(0.945 0.012 75);
-  --kb-ink:        oklch(0.18 0.01 60);
-  --kb-ink-2:      oklch(0.32 0.01 60);
-  --kb-ink-mute:   oklch(0.55 0.02 60);
-  --kb-ink-faint:  oklch(0.72 0.015 60);
-  --kb-line:       oklch(0.86 0.01 60);
-  --kb-line-2:     oklch(0.92 0.008 60);
-  --kb-terra:      oklch(0.62 0.12 35);
-  --kb-terra-soft: oklch(0.93 0.04 35);
-  --kb-blue:       oklch(0.55 0.12 240);
-  --kb-blue-soft:  oklch(0.95 0.03 240);
-  --kb-green:      oklch(0.55 0.10 145);
+  --kb-paper:          oklch(0.985 0.006 125);
+  --kb-paper-2:        oklch(0.965 0.014 135);
+  --kb-paper-3:        oklch(0.935 0.022 135);
+  --kb-ink:            oklch(0.18 0.012 145);
+  --kb-ink-2:          oklch(0.32 0.014 145);
+  --kb-ink-mute:       oklch(0.54 0.02 145);
+  --kb-ink-faint:      oklch(0.72 0.016 145);
+  --kb-line:           oklch(0.85 0.016 135);
+  --kb-line-2:         oklch(0.91 0.012 135);
+  --kb-brand:          oklch(0.49 0.105 155);
+  --kb-brand-strong:   oklch(0.37 0.09 155);
+  --kb-brand-soft:     oklch(0.93 0.045 145);
+  --kb-brand-faint:    oklch(0.972 0.018 145);
+  --kb-terra:          var(--kb-brand);
+  --kb-terra-soft:     var(--kb-brand-soft);
+  --kb-blue:           var(--kb-brand);
+  --kb-blue-soft:      var(--kb-brand-soft);
+  --kb-green:          var(--kb-brand);
+  --kb-teal:           oklch(0.50 0.08 190);
+  --kb-leaf:           oklch(0.54 0.09 128);
+  --kb-highlight:      oklch(0.92 0.065 80);
+  --kb-highlight-strong: oklch(0.82 0.12 78);
+  --kb-highlight-soft: oklch(0.96 0.04 80);
+  --kb-danger:         oklch(0.55 0.12 28);
+  --kb-danger-soft:    oklch(0.96 0.035 28);
   --kb-shell-max:  1360px;
 }
 
@@ -22,7 +33,7 @@
 html, body { margin: 0; padding: 0; height: 100%; }
 body {
   background: var(--kb-paper);
-  background-image: radial-gradient(oklch(0.92 0.012 60) 0.5px, transparent 0.5px);
+  background-image: radial-gradient(oklch(0.91 0.014 145) 0.5px, transparent 0.5px);
   background-size: 22px 22px;
   color: var(--kb-ink);
   font-family: "Inter Tight", "Inter", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
@@ -156,7 +167,7 @@ a { color: inherit; }
 .kb-nb-ai-return-banner {
   margin-bottom: 18px;
   padding: 11px 14px;
-  border: 1px solid oklch(0.55 0.12 240 / 0.30);
+  border: 1px solid oklch(0.49 0.105 155 / 0.30);
   border-left: 3px solid var(--kb-blue);
   background: var(--kb-blue-soft);
   border-radius: 0 4px 4px 0;
@@ -179,7 +190,7 @@ a { color: inherit; }
   margin-left: 8px;
 }
 .kb-nb-ai-return-banner button {
-  border: 1px solid oklch(0.55 0.12 240 / 0.38);
+  border: 1px solid oklch(0.49 0.105 155 / 0.38);
   background: var(--kb-paper);
   color: var(--kb-blue);
   border-radius: 3px;
@@ -251,7 +262,7 @@ a { color: inherit; }
   margin: 0.5em 0; color: var(--kb-ink-2); font-style: italic;
 }
 .kb-nb-md hr { border: none; border-top: 1px solid var(--kb-line-2); margin: 1.4em 0; }
-.kb-nb-md a { color: var(--kb-blue); border-bottom: 1px solid oklch(0.55 0.12 240 / 0.4); text-decoration: none; }
+.kb-nb-md a { color: var(--kb-blue); border-bottom: 1px solid oklch(0.49 0.105 155 / 0.4); text-decoration: none; }
 .kb-nb-md a:hover { border-bottom-color: var(--kb-blue); }
 
 /* Stats（养成的习惯 顶部） */
@@ -516,7 +527,7 @@ a { color: inherit; }
 .kb-nb-cref-foot a {
   color: var(--kb-blue);
   text-decoration: none;
-  border-bottom: 1px solid oklch(0.55 0.12 240 / 0.4);
+  border-bottom: 1px solid oklch(0.49 0.105 155 / 0.4);
 }
 .kb-nb-cref-foot a:hover { border-bottom-color: var(--kb-blue); }
 .kb-nb-cref-loading {
@@ -552,11 +563,11 @@ a { color: inherit; }
   background: var(--kb-blue); animation: kb-nb-pulse 1.4s ease-in-out infinite;
 }
 .kb-nb-curated-failed {
-  background: oklch(0.97 0.04 35);
-  border: 1px solid var(--kb-terra);
+  background: var(--kb-danger-soft);
+  border: 1px solid var(--kb-danger);
   padding: 14px 18px;
   border-radius: 4px;
-  color: var(--kb-terra);
+  color: var(--kb-danger);
   font-size: 12px;
   font-family: "Source Han Serif SC", "Noto Serif SC", serif;
 }
@@ -838,7 +849,7 @@ a { color: inherit; }
 }
 .kb-nb-thought-row:hover,
 .kb-nb-thought-row.active {
-  background: oklch(0.955 0.026 64);
+  background: var(--kb-brand-faint);
 }
 .kb-nb-thought-row.active {
   box-shadow: inset 4px 0 0 var(--kb-terra);
@@ -901,9 +912,9 @@ a { color: inherit; }
   grid-template-columns: 1fr 124px;
   gap: 14px;
 }
-.kb-nb-thought-node.mainline { border-left: 3px solid var(--kb-terra); }
-.kb-nb-thought-node.merging { border-left: 3px solid var(--kb-blue); }
-.kb-nb-thought-node.branch { border-left: 3px solid var(--kb-green); }
+.kb-nb-thought-node.mainline { border-left: 3px solid var(--kb-brand); }
+.kb-nb-thought-node.merging { border-left: 3px solid var(--kb-teal); }
+.kb-nb-thought-node.branch { border-left: 3px solid var(--kb-leaf); }
 .kb-nb-thought-node.sprout { border-left: 3px solid oklch(0.64 0.11 90); }
 .kb-nb-thought-node.occasional { border-left: 3px solid oklch(0.68 0.03 260); }
 .kb-nb-thought-node.cooling { border-left: 3px solid var(--kb-ink-faint); }
@@ -948,7 +959,7 @@ a { color: inherit; }
   color: var(--kb-ink-faint);
 }
 .kb-nb-thought-pill.high {
-  border-color: oklch(0.58 0.11 35 / 0.38);
+  border-color: oklch(0.49 0.105 155 / 0.38);
   color: var(--kb-terra);
 }
 .kb-nb-thought-pill.mid {
@@ -1273,8 +1284,8 @@ a { color: inherit; }
 .kb-nb-diary-unread-notice {
   margin: 0 0 4px -12px;
   padding: 8px 10px;
-  border: 1px solid oklch(0.55 0.12 240 / 0.28);
-  background: oklch(0.97 0.02 240);
+  border: 1px solid oklch(0.49 0.105 155 / 0.28);
+  background: var(--kb-brand-faint);
   border-radius: 4px;
   display: flex;
   align-items: center;
@@ -1331,20 +1342,20 @@ a { color: inherit; }
 .kb-nb-diary-item.agent.unread {
   margin-left: -8px;
   padding: 10px 10px 12px;
-  border: 1px solid oklch(0.55 0.12 240 / 0.28);
+  border: 1px solid oklch(0.49 0.105 155 / 0.28);
   border-radius: 4px;
-  background: oklch(0.97 0.02 240);
+  background: var(--kb-brand-faint);
 }
 .kb-nb-diary-item.agent.unread::before {
   left: -17px;
-  box-shadow: 0 0 0 4px oklch(0.55 0.12 240 / 0.12);
+  box-shadow: 0 0 0 4px oklch(0.49 0.105 155 / 0.12);
 }
 .kb-nb-diary-item.agent.flash {
   animation: kb-nb-diary-flash 0.8s ease-in-out 1;
 }
 @keyframes kb-nb-diary-flash {
   0%, 100% { box-shadow: none; }
-  30% { box-shadow: 0 0 0 4px oklch(0.55 0.12 240 / 0.18); }
+  30% { box-shadow: 0 0 0 4px oklch(0.49 0.105 155 / 0.18); }
 }
 .kb-nb-diary-meta {
   font-family: "JetBrains Mono", ui-monospace, monospace;

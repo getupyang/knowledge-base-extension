@@ -3,28 +3,37 @@
 <head>
   <meta charset="UTF-8">
   <style>
-    body { width: 280px; padding: 16px; font-family: -apple-system, sans-serif; font-size: 13px; color: #333; }
+    :root {
+      --kb-paper: #fbfcf6;
+      --kb-soft: #f1f5ea;
+      --kb-ink: #11130f;
+      --kb-muted: #5d635a;
+      --kb-line: #dce2d6;
+      --kb-brand: #1d7f5f;
+      --kb-brand-dark: #155f49;
+    }
+    body { width: 280px; padding: 16px; font-family: -apple-system, sans-serif; font-size: 13px; color: var(--kb-ink); background: var(--kb-paper); }
     h3 { margin: 0 0 12px; font-size: 15px; }
-    label { display: block; margin-bottom: 4px; color: #666; font-size: 12px; }
+    label { display: block; margin-bottom: 4px; color: var(--kb-muted); font-size: 12px; }
     input {
       width: 100%; box-sizing: border-box;
-      border: 1px solid #e0e0e0; border-radius: 6px;
+      border: 1px solid var(--kb-line); border-radius: 6px;
       padding: 6px 8px; font-size: 12px; margin-bottom: 10px;
-      font-family: monospace; color: #333;
+      font-family: monospace; color: var(--kb-ink); background: white;
     }
-    input:focus { outline: none; border-color: #10b981; }
+    input:focus { outline: none; border-color: var(--kb-brand); }
     button {
-      width: 100%; padding: 8px; background: #10b981; color: white;
+      width: 100%; padding: 8px; background: var(--kb-brand); color: white;
       border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500;
     }
-    button:hover { background: #059669; }
+    button:hover { background: var(--kb-brand-dark); }
     button.kb-secondary {
-      background: #1f1f1f; margin-top: 6px;
+      background: var(--kb-ink); margin-top: 6px;
     }
     button.kb-secondary:hover { background: #000; }
     .status { margin-top: 8px; font-size: 13px; font-weight: 500; text-align: center; min-height: 20px; padding: 6px 0; border-radius: 6px; }
-    .tip { margin-top: 10px; padding: 8px 10px; background: #f5f5f5; border-radius: 6px; font-size: 11px; color: #999; line-height: 1.5; }
-    .help-link { display: block; margin-top: 8px; font-size: 11px; color: #10b981; text-decoration: none; }
+    .tip { margin-top: 10px; padding: 8px 10px; background: var(--kb-soft); border-radius: 6px; font-size: 11px; color: var(--kb-muted); line-height: 1.5; }
+    .help-link { display: block; margin-top: 8px; font-size: 11px; color: var(--kb-brand); text-decoration: none; }
     .help-link:hover { text-decoration: underline; }
   </style>
 </head>

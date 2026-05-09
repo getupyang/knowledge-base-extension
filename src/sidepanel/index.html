@@ -3,21 +3,32 @@
 <head>
   <meta charset="UTF-8">
   <style>
+    :root {
+      --kb-paper: #fbfcf6;
+      --kb-soft: #f1f5ea;
+      --kb-ink: #11130f;
+      --kb-muted: #5d635a;
+      --kb-faint: #9aa095;
+      --kb-line: #dce2d6;
+      --kb-brand: #1d7f5f;
+      --kb-brand-dark: #155f49;
+      --kb-brand-soft: #dff3e6;
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
       font-family: -apple-system, BlinkMacSystemFont, sans-serif;
       font-size: 14px;
-      color: #333;
+      color: var(--kb-ink);
       height: 100vh;
       display: flex;
       flex-direction: column;
-      background: #fff;
+      background: var(--kb-paper);
     }
 
     #header {
       padding: 12px 16px;
-      border-bottom: 1px solid #eee;
+      border-bottom: 1px solid var(--kb-line);
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -26,12 +37,12 @@
     #header h2 {
       font-size: 14px;
       font-weight: 600;
-      color: #333;
+      color: var(--kb-ink);
     }
 
     #save-btn {
       padding: 5px 12px;
-      background: #10b981;
+      background: var(--kb-brand);
       color: white;
       border: none;
       border-radius: 6px;
@@ -41,24 +52,27 @@
     }
 
     #save-btn:disabled {
-      background: #ccc;
+      background: var(--kb-line);
       cursor: not-allowed;
+    }
+    #save-btn:not(:disabled):hover {
+      background: var(--kb-brand-dark);
     }
 
     #excerpt-box {
       margin: 12px 16px 0;
       padding: 10px 12px;
-      background: #f8f8f8;
+      background: var(--kb-soft);
       border-radius: 8px;
       font-size: 12px;
-      color: #666;
+      color: var(--kb-muted);
       line-height: 1.6;
-      border-left: 3px solid #10b981;
+      border-left: 3px solid var(--kb-brand);
     }
 
     #excerpt-source {
       font-size: 11px;
-      color: #aaa;
+      color: var(--kb-faint);
       margin: 4px 16px 8px;
     }
 
@@ -67,7 +81,7 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      color: #bbb;
+      color: var(--kb-faint);
       font-size: 13px;
       text-align: center;
       padding: 24px;
@@ -91,7 +105,7 @@
 
     .msg-label {
       font-size: 11px;
-      color: #aaa;
+      color: var(--kb-faint);
       font-weight: 500;
     }
 
@@ -104,24 +118,24 @@
     }
 
     .msg.user .msg-bubble {
-      background: #f0fdf4;
-      border: 1px solid #d1fae5;
-      color: #065f46;
+      background: var(--kb-brand-soft);
+      border: 1px solid #bfdccc;
+      color: var(--kb-brand-dark);
     }
 
     .msg.assistant .msg-bubble {
-      background: #f8f9fa;
-      border: 1px solid #eee;
-      color: #333;
+      background: white;
+      border: 1px solid var(--kb-line);
+      color: var(--kb-ink);
     }
 
     .msg.assistant.loading .msg-bubble {
-      color: #aaa;
+      color: var(--kb-faint);
     }
 
     #input-area {
       padding: 12px 16px;
-      border-top: 1px solid #eee;
+      border-top: 1px solid var(--kb-line);
       display: flex;
       gap: 8px;
       align-items: flex-end;
@@ -129,7 +143,7 @@
 
     #user-input {
       flex: 1;
-      border: 1px solid #e0e0e0;
+      border: 1px solid var(--kb-line);
       border-radius: 8px;
       padding: 8px 12px;
       font-size: 13px;
@@ -141,12 +155,12 @@
     }
 
     #user-input:focus {
-      border-color: #10b981;
+      border-color: var(--kb-brand);
     }
 
     #send-btn {
       padding: 8px 14px;
-      background: #333;
+      background: var(--kb-brand-dark);
       color: white;
       border: none;
       border-radius: 8px;
@@ -157,8 +171,11 @@
     }
 
     #send-btn:disabled {
-      background: #ccc;
+      background: var(--kb-line);
       cursor: not-allowed;
+    }
+    #send-btn:not(:disabled):hover {
+      background: var(--kb-brand);
     }
   </style>
 </head>
