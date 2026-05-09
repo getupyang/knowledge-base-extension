@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "知识库助手",
-  "version": "0.3.4",
+  "version": "0.3.6",
   "description": "选中文字保存到Notion，AI对话自动采集",
   "permissions": [
     "contextMenus",
@@ -23,7 +23,9 @@
     {
       "matches": ["<all_urls>"],
       "js": ["src/content/marked.min.js", "src/content/index.js"],
-      "world": "ISOLATED"
+      "world": "ISOLATED",
+      "all_frames": true,
+      "match_about_blank": true
     },
     {
       "matches": ["https://claude.ai/*"],

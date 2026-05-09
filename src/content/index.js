@@ -1,4 +1,4 @@
-const KB_CONTENT_VERSION = "0.3.5-local-first-capture";
+const KB_CONTENT_VERSION = "0.3.6-pdf-selection-bar";
 console.info(`[KB] content script loaded: ${KB_CONTENT_VERSION}`);
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -163,6 +163,8 @@ function resolveXPath(xpath) {
 const selectionBar = (() => {
   let barEl = null;
   let hideTimer = null;
+  let selectionTimer = null;
+  let lastPointer = null;
   let savedExcerpt = "";
   let savedRange = null;
 
@@ -206,6 +208,95 @@ const selectionBar = (() => {
       }
     `;
     document.head.appendChild(s);
+  }
+
+  function _rememberPointer(e) {
+    if (!e || typeof e.clientX !== "number" || typeof e.clientY !== "number") return;
+    lastPointer = { clientX: e.clientX, clientY: e.clientY, ts: Date.now() };
+  }
+
+  function _isUsableRect(rect) {
+    if (!rect) return false;
+    const left = Number(rect.left);
+    const top = Number(rect.top);
+    if (!Number.isFinite(left) || !Number.isFinite(top)) return false;
+    return Math.max(Number(rect.width) || 0, Number(rect.right) - Number(rect.left) || 0) > 0 ||
+      Math.max(Number(rect.height) || 0, Number(rect.bottom) - Number(rect.top) || 0) > 0;
+  }
+
+  function _rectFromPoint(point) {
+    if (!point) return null;
+    return {
+      left: point.clientX - 1,
+      right: point.clientX + 1,
+      top: point.clientY - 1,
+      bottom: point.clientY + 1,
+      width: 2,
+      height: 2,
+    };
+  }
+
+  function _rectFromRange(range) {
+    if (!range) return null;
+    try {
+      const rects = Array.from(range.getClientRects ? range.getClientRects() : [])
+        .filter(_isUsableRect)
+        .sort((a, b) => (b.width * b.height) - (a.width * a.height));
+      if (rects[0]) return rects[0];
+      const rect = range.getBoundingClientRect ? range.getBoundingClientRect() : null;
+      if (_isUsableRect(rect)) return rect;
+    } catch {}
+    return null;
+  }
+
+  function _isPdfLikePage(target) {
+    const url = location.href.toLowerCase();
+    const path = location.pathname.toLowerCase();
+    if (document.contentType === "application/pdf") return true;
+    if (path.endsWith(".pdf") || url.includes(".pdf?") || url.includes(".pdf#")) return true;
+    if (target && target.closest?.("pdf-viewer, embed[type='application/pdf'], #viewerContainer, .textLayer, .page[data-page-number]")) return true;
+    return Boolean(document.querySelector("pdf-viewer, embed[type='application/pdf'], #viewerContainer, .textLayer, .page[data-page-number]"));
+  }
+
+  function _targetClosest(target, selector) {
+    return target && target.nodeType === Node.ELEMENT_NODE && target.closest?.(selector);
+  }
+
+  function _readSelection(e) {
+    const sel = window.getSelection?.();
+    const text = sel?.toString().trim() || "";
+    if (text.length < 3) return null;
+
+    let range = null;
+    try {
+      if (sel.rangeCount > 0) range = sel.getRangeAt(0);
+    } catch {
+      range = null;
+    }
+
+    let rect = _rectFromRange(range);
+    if (!_isUsableRect(rect)) rect = _rectFromPoint(e);
+    if (!_isUsableRect(rect) && lastPointer && Date.now() - lastPointer.ts < 5000) {
+      rect = _rectFromPoint(lastPointer);
+    }
+    if (!_isUsableRect(rect)) return null;
+    return { text, range, rect };
+  }
+
+  function _showFromSelection(e, { hideOnEmpty = true } = {}) {
+    const info = _readSelection(e);
+    if (!info) {
+      if (hideOnEmpty) hide();
+      return false;
+    }
+    show(info.rect, info.text, info.range);
+    return true;
+  }
+
+  function _scheduleShowFromSelection(e, options = {}) {
+    _rememberPointer(e);
+    clearTimeout(selectionTimer);
+    selectionTimer = setTimeout(() => _showFromSelection(e, options), options.delay ?? 160);
   }
 
   function show(rect, excerpt, range) {
@@ -258,8 +349,16 @@ const selectionBar = (() => {
 
   function hide() {
     clearTimeout(hideTimer);
+    clearTimeout(selectionTimer);
     if (barEl) { barEl.remove(); barEl = null; }
   }
+
+  document.addEventListener("pointerdown", _rememberPointer, true);
+  document.addEventListener("pointerup", (e) => {
+    if (barEl && barEl.contains(e.target)) return;
+    if (_targetClosest(e.target, "#kb-comment-panel")) return;
+    if (_isPdfLikePage(e.target)) _scheduleShowFromSelection(e, { hideOnEmpty: false, delay: 80 });
+  }, true);
 
   // mouseup 监听：有选中文字时显示 bar
   // 用 capture:true 在捕获阶段触发，避免 SPA（ChatGPT 等）在冒泡阶段 stopPropagation 导致事件丢失
@@ -267,17 +366,19 @@ const selectionBar = (() => {
     // 如果点击在 bar 自身上，不处理
     if (barEl && barEl.contains(e.target)) return;
     // 如果点击在评论面板上，不处理
-    if (e.target.closest("#kb-comment-panel")) return;
+    if (_targetClosest(e.target, "#kb-comment-panel")) return;
+    _scheduleShowFromSelection(e, { hideOnEmpty: true, delay: 200 }); // 延迟，避免与页面自带菜单冲突
 
-    setTimeout(() => {
-      const sel = window.getSelection();
-      const text = sel?.toString().trim() || "";
-      if (text.length < 3) { hide(); return; }
-      const range = sel.getRangeAt(0);
-      const rect = range.getBoundingClientRect();
-      show(rect, text, range);
-    }, 200); // 200ms 延迟，避免与页面自带菜单冲突
+  }, true);
 
+  document.addEventListener("selectionchange", () => {
+    if (!_isPdfLikePage(document.activeElement)) return;
+    _scheduleShowFromSelection(null, { hideOnEmpty: false, delay: 120 });
+  }, true);
+
+  document.addEventListener("keyup", (e) => {
+    if (!_isPdfLikePage(e.target)) return;
+    _scheduleShowFromSelection(e, { hideOnEmpty: false, delay: 80 });
   }, true);
 
   // 点击页面其他地方收起 bar
