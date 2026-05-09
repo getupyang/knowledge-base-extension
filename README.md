@@ -204,7 +204,7 @@ claude login
 claude --version
 ```
 
-如果你是通过 Anthropic API Key 使用 Claude Code，请在运行 `setup.sh` 或 `choose_ai_service.sh` 的同一个终端里先设置 `ANTHROPIC_API_KEY`；脚本会把它保存到本机 `~/.kb_config`，供后台 Agent API 和 worker 使用。
+选择 Claude Code 时，脚本会继续问「Claude 账号登录」还是「Anthropic API Key 模式」。账号登录不需要输入 key；API Key 模式会优先读取当前终端里的 `ANTHROPIC_API_KEY`，没有检测到时才让你粘贴。
 
 ### 第三步：准备 Notion 数据库
 

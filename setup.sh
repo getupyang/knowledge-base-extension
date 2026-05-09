@@ -223,20 +223,98 @@ configure_claude_auth_for_setup() {
   CLAUDE_CODE_OAUTH_TOKEN_FOR_CONFIG=""
 
   echo ""
-  echo "  Claude Code 可以用账号登录，也可以用 Anthropic API Key。"
-  if [ -n "$ANTHROPIC_API_KEY_FOR_CONFIG" ]; then
-    echo "  ✓ 已检测到当前终端里的 ANTHROPIC_API_KEY，会写入本机配置供后台服务使用。"
-    return 0
-  fi
+  echo "  请选择 Claude Code 的连接方式："
+  echo ""
+  echo "  1) Claude 账号登录 / Claude Code 本机配置  推荐；不需要输入 API Key"
+  echo "  2) Anthropic API Key 模式                 只有你平时用 ANTHROPIC_API_KEY 跑 claude 时选"
+  echo ""
+  read -p "  输入 1 / 2 后回车 [1]：" CLAUDE_AUTH_CHOICE
+  CLAUDE_AUTH_CHOICE="${CLAUDE_AUTH_CHOICE:-1}"
 
-  echo "  如果你是 Claude Code 账号登录，直接回车跳过。"
-  echo "  如果你是 API Key 模式，请粘贴 ANTHROPIC_API_KEY。"
-  read_optional_secret_for_setup "ANTHROPIC_API_KEY（可空，不会显示）：" ANTHROPIC_API_KEY_FOR_CONFIG
-  if [ -n "$ANTHROPIC_API_KEY_FOR_CONFIG" ]; then
-    echo "  ✓ 已收到 ANTHROPIC_API_KEY（长度 ${#ANTHROPIC_API_KEY_FOR_CONFIG} 位，已隐藏）"
-  else
-    echo "  已跳过 Claude API Key 保存。"
+  case "$CLAUDE_AUTH_CHOICE" in
+    1)
+      echo "  正在用账号登录模式测试 Claude Code..."
+      if ! run_claude_probe_for_setup account; then
+        print_claude_probe_failure_for_setup
+        echo "  ✗ 账号登录模式不可用，本次没有完成模型配置。"
+        echo "  请先确认这个命令在终端里能跑通，然后重新运行 setup："
+        echo "    claude -p \"Reply with exactly OK.\" --output-format json"
+        exit 1
+      fi
+      ANTHROPIC_API_KEY_FOR_CONFIG=""
+      echo "  ✓ Claude Code 账号登录/本机配置可用，不需要保存 API Key。"
+      ;;
+    2)
+      if [ -n "$ANTHROPIC_API_KEY_FOR_CONFIG" ]; then
+        echo "  已检测到当前终端的 ANTHROPIC_API_KEY（长度 ${#ANTHROPIC_API_KEY_FOR_CONFIG} 位，已隐藏）。"
+      else
+        echo "  请粘贴 ANTHROPIC_API_KEY。为安全起见，粘贴时屏幕不会显示字符。"
+        read_optional_secret_for_setup "ANTHROPIC_API_KEY：" ANTHROPIC_API_KEY_FOR_CONFIG
+      fi
+      if [ -z "$ANTHROPIC_API_KEY_FOR_CONFIG" ]; then
+        echo "  ✗ 没有收到 ANTHROPIC_API_KEY，本次没有完成模型配置。"
+        exit 1
+      fi
+      ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY_FOR_CONFIG"
+      export ANTHROPIC_API_KEY
+      echo "  正在用 API Key 模式测试 Claude Code..."
+      if ! run_claude_probe_for_setup api_key; then
+        print_claude_probe_failure_for_setup
+        echo "  ✗ API Key 模式不可用，本次没有保存 API Key。"
+        exit 1
+      fi
+      echo "  ✓ Claude Code API Key 模式可用，会保存 ANTHROPIC_API_KEY（长度 ${#ANTHROPIC_API_KEY_FOR_CONFIG} 位，已隐藏）。"
+      ;;
+    *)
+      echo "  ✗ 没看懂这个选择：$CLAUDE_AUTH_CHOICE"
+      exit 1
+      ;;
+  esac
+}
+
+run_claude_probe_for_setup() {
+  local probe_mode="${1:-current}"
+  CLAUDE_PROBE_DETAIL=""
+  local probe_out
+  probe_out="$(mktemp "${TMPDIR:-/tmp}/memai-claude-probe.XXXXXX")" || return 1
+  case "$probe_mode" in
+    account)
+      env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_BASE_URL -u CLAUDE_CODE_OAUTH_TOKEN \
+        "$CLAUDE_BIN" -p "Reply with exactly OK." --output-format json --dangerously-skip-permissions > "$probe_out" 2>&1
+      ;;
+    api_key)
+      env -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_BASE_URL -u CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+        "$CLAUDE_BIN" -p "Reply with exactly OK." --output-format json --dangerously-skip-permissions > "$probe_out" 2>&1
+      ;;
+    *)
+      "$CLAUDE_BIN" -p "Reply with exactly OK." --output-format json --dangerously-skip-permissions > "$probe_out" 2>&1
+      ;;
+  esac
+  local probe_status=$?
+  if [ "$probe_status" -ne 0 ]; then
+    CLAUDE_PROBE_DETAIL="$(sed -n '1,12p' "$probe_out" 2>/dev/null)"
+  elif grep -Eq '"is_error"[[:space:]]*:[[:space:]]*true|"api_error_status"[[:space:]]*:' "$probe_out" 2>/dev/null; then
+    CLAUDE_PROBE_DETAIL="$(sed -n '1,12p' "$probe_out" 2>/dev/null)"
+    probe_status=1
   fi
+  rm -f "$probe_out"
+  return "$probe_status"
+}
+
+print_claude_probe_failure_for_setup() {
+  echo "  Claude Code 非交互测试没有通过。"
+  case "$CLAUDE_PROBE_DETAIL" in
+    *401*|*Unauthorized*|*unauthorized*|*api_error_status*)
+      echo "  看起来是认证失败（401）。如果你平时用 API Key 跑 claude，请在下一步粘贴同一个 key。"
+      ;;
+    "")
+      echo "  没有拿到错误详情。"
+      ;;
+    *)
+      echo "  错误摘要："
+      printf '%s\n' "$CLAUDE_PROBE_DETAIL"
+      ;;
+  esac
 }
 
 read_with_default_for_setup() {

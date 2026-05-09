@@ -168,40 +168,115 @@ read_hidden_optional() {
   echo ""
 }
 
-persist_existing_env_if_set() {
-  key="$1"
-  label="$2"
-  eval "env_value=\${$key:-}"
-  if [ -n "$env_value" ]; then
-    upsert_config "$key" "$env_value"
-    echo "已保存 ${label}（长度 ${#env_value} 位，已隐藏）。"
-    return 0
+run_claude_probe() {
+  probe_mode="${1:-current}"
+  claude_probe_detail=""
+  probe_out="$(mktemp "${TMPDIR:-/tmp}/memai-claude-probe.XXXXXX")" || return 1
+  case "$probe_mode" in
+    account)
+      env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_BASE_URL -u CLAUDE_CODE_OAUTH_TOKEN \
+        "$claude_bin" -p "Reply with exactly OK." --output-format json --dangerously-skip-permissions > "$probe_out" 2>&1
+      ;;
+    api_key)
+      env -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_BASE_URL -u CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+        "$claude_bin" -p "Reply with exactly OK." --output-format json --dangerously-skip-permissions > "$probe_out" 2>&1
+      ;;
+    *)
+      "$claude_bin" -p "Reply with exactly OK." --output-format json --dangerously-skip-permissions > "$probe_out" 2>&1
+      ;;
+  esac
+  probe_status=$?
+  if [ "$probe_status" -ne 0 ]; then
+    claude_probe_detail="$(sed -n '1,12p' "$probe_out" 2>/dev/null)"
+  elif grep -Eq '"is_error"[[:space:]]*:[[:space:]]*true|"api_error_status"[[:space:]]*:' "$probe_out" 2>/dev/null; then
+    claude_probe_detail="$(sed -n '1,12p' "$probe_out" 2>/dev/null)"
+    probe_status=1
   fi
-  return 1
+  rm -f "$probe_out"
+  return "$probe_status"
+}
+
+print_claude_probe_failure() {
+  echo "Claude Code 非交互测试没有通过。"
+  case "$claude_probe_detail" in
+    *401*|*Unauthorized*|*unauthorized*|*api_error_status*)
+      echo "看起来是认证失败（401）。如果你平时用 API Key 跑 claude，请在下一步粘贴同一个 key。"
+      ;;
+    "")
+      echo "没有拿到错误详情。"
+      ;;
+    *)
+      echo "错误摘要："
+      printf '%s\n' "$claude_probe_detail"
+      ;;
+  esac
+}
+
+clear_claude_direct_auth_config() {
+  upsert_config "ANTHROPIC_API_KEY" ""
+  upsert_config "ANTHROPIC_AUTH_TOKEN" ""
+  upsert_config "ANTHROPIC_BASE_URL" ""
+  upsert_config "CLAUDE_CODE_OAUTH_TOKEN" ""
+}
+
+save_claude_api_key_config() {
+  api_key_value="$1"
+  clear_claude_direct_auth_config
+  upsert_config "ANTHROPIC_API_KEY" "$api_key_value"
 }
 
 configure_claude_code_auth() {
   echo ""
-  echo "Claude Code 可以用账号登录，也可以用 Anthropic API Key。"
-  echo "如果你平时是用 API Key 跑 claude，这里需要让后台服务也拿到同一个 key。"
+  echo "请选择 Claude Code 的连接方式："
+  echo ""
+  echo "1) Claude 账号登录 / Claude Code 本机配置  推荐；不需要输入 API Key"
+  echo "2) Anthropic API Key 模式                 只有你平时用 ANTHROPIC_API_KEY 跑 claude 时选"
+  echo ""
+  printf "输入 1 / 2 后回车 [1]："
+  read -r claude_auth_choice
+  claude_auth_choice="${claude_auth_choice:-1}"
 
-  saved_auth=0
-  persist_existing_env_if_set "ANTHROPIC_API_KEY" "ANTHROPIC_API_KEY" && saved_auth=1
-
-  if [ "$saved_auth" -eq 1 ]; then
-    return 0
-  fi
-
-  echo "未在当前终端环境里检测到 ANTHROPIC_API_KEY。"
-  echo "如果你是 Claude Code 账号登录，直接回车跳过；如果你是 API Key 模式，请粘贴 key。"
-  read_hidden_optional "ANTHROPIC_API_KEY（可空，不会显示）："
-  if [ -n "$hidden_value" ]; then
-    upsert_config "ANTHROPIC_API_KEY" "$hidden_value"
-    echo "已保存 ANTHROPIC_API_KEY（长度 ${#hidden_value} 位，已隐藏）。"
-  else
-    echo "已跳过 API Key 保存。后端会使用 Claude Code 自己的登录/配置。"
-    echo "如果你使用 ANTHROPIC_AUTH_TOKEN、ANTHROPIC_BASE_URL 或 CLAUDE_CODE_OAUTH_TOKEN，请手动写入 $CONFIG_FILE。"
-  fi
+  case "$claude_auth_choice" in
+    1)
+      echo "正在用账号登录模式测试 Claude Code..."
+      if ! run_claude_probe account; then
+        print_claude_probe_failure
+        echo "账号登录模式不可用，本次没有切换成功。"
+        echo "请先确认这个命令在终端里能跑通，然后再运行 sh choose_ai_service.sh claude："
+        echo "  claude -p \"Reply with exactly OK.\" --output-format json"
+        exit 1
+      fi
+      clear_claude_direct_auth_config
+      echo "✓ Claude Code 账号登录/本机配置可用，不需要保存 API Key。"
+      ;;
+    2)
+      if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+        hidden_value="$ANTHROPIC_API_KEY"
+        echo "已检测到当前终端的 ANTHROPIC_API_KEY（长度 ${#hidden_value} 位，已隐藏）。"
+      else
+        echo "请粘贴 ANTHROPIC_API_KEY。为安全起见，粘贴时屏幕不会显示字符。"
+        read_hidden_optional "ANTHROPIC_API_KEY："
+      fi
+      if [ -z "$hidden_value" ]; then
+        echo "没有收到 ANTHROPIC_API_KEY，本次没有切换成功。"
+        exit 1
+      fi
+      ANTHROPIC_API_KEY="$hidden_value"
+      export ANTHROPIC_API_KEY
+      echo "正在用 API Key 模式测试 Claude Code..."
+      if ! run_claude_probe api_key; then
+        print_claude_probe_failure
+        echo "API Key 模式不可用，本次没有保存 API Key。"
+        exit 1
+      fi
+      save_claude_api_key_config "$hidden_value"
+      echo "✓ Claude Code API Key 模式可用，已保存 ANTHROPIC_API_KEY（长度 ${#hidden_value} 位，已隐藏）。"
+      ;;
+    *)
+      echo "没看懂这个选择：$claude_auth_choice"
+      exit 1
+      ;;
+  esac
 }
 
 read_required() {
