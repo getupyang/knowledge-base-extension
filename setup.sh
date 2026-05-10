@@ -39,7 +39,7 @@ check_cmd python3 "请安装 Python 3：https://python.org" || DEPS_OK=false
 NODE_VERSION=""
 if command -v node &>/dev/null; then
   if NODE_VERSION="$(node --version 2>/dev/null)"; then
-    echo "  ✓ node $NODE_VERSION（可选）"
+    echo "  ✓ node 可用（可选）"
   else
     echo "  ○ node 已安装但当前不可运行（可选；不影响第一次使用）"
   fi
