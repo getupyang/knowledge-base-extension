@@ -698,9 +698,17 @@ fi
 AUTO_START_ENABLED=false
 STARTED_NOW=false
 START_OUTPUT=""
+SETUP_PREVIEW_MODE=false
+case "$HOME:$DATA_DIR" in
+  /tmp/kb-setup-home.*:*|*:*/tmp/kb-setup-data.*)
+    SETUP_PREVIEW_MODE=true
+    ;;
+esac
 echo ""
 echo "→ 开机后自动可用..."
-if [ "$(uname -s)" = "Darwin" ] && [ -x "$REPO_DIR/scripts/install-launch-agent" ]; then
+if [ "$SETUP_PREVIEW_MODE" = true ]; then
+  echo "  当前是临时测试环境，本次不会设置开机自动启动。"
+elif [ "$(uname -s)" = "Darwin" ] && [ -x "$REPO_DIR/scripts/install-launch-agent" ]; then
   echo "  开启开机自动启动，避免重启mac后手动运行bash start.sh来启动本产品。"
   read -p "  是否开启？[Y/n]：" ENABLE_AUTO_START
   ENABLE_AUTO_START="${ENABLE_AUTO_START:-Y}"
@@ -726,7 +734,11 @@ else
   echo "  ○ 当前系统不支持自动配置；重启后请手动运行：bash start.sh"
 fi
 
-if [ "$AUTO_START_ENABLED" != true ]; then
+if [ "$SETUP_PREVIEW_MODE" = true ]; then
+  echo ""
+  echo "→ 启动知识库助手..."
+  echo "  当前是临时测试环境，本次不会启动真实服务。"
+elif [ "$AUTO_START_ENABLED" != true ]; then
   echo ""
   echo "→ 启动知识库助手..."
   mkdir -p "$DATA_DIR/.logs"
@@ -744,7 +756,7 @@ echo ""
 echo "═══════════════════════════════════════════════════════"
 echo "${GREEN}安装完成！${RESET}"
 echo ""
-if [ "$AUTO_START_ENABLED" != true ] && [ "$STARTED_NOW" != true ]; then
+if [ "$SETUP_PREVIEW_MODE" != true ] && [ "$AUTO_START_ENABLED" != true ] && [ "$STARTED_NOW" != true ]; then
   echo "如果刚才没有启动成功，请运行："
   echo ""
   echo "  bash start.sh"
