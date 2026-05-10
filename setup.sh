@@ -526,7 +526,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
     LLM_MODEL=""
     echo "  已检测到这台电脑安装了 Claude Code / Codex。"
     echo "  你可以直接使用它；也可以额外填一个 API Key 作为备用方式。"
-    echo "  如果现在跳过，只会用 Claude Code / Codex，不会偷偷调用付费 API。"
+    echo "  如果现在跳过，只会用 Claude Code / Codex，不会调用付费 API。"
     read -p "  是否现在填写 API Key？[y/N] " CONFIGURE_API
     if [ "$CONFIGURE_API" = "y" ] || [ "$CONFIGURE_API" = "Y" ]; then
       configure_api_settings
@@ -683,19 +683,21 @@ if [ ! -f "$DATA_DIR/learned_rules.json" ]; then
   echo "→ 已准备学习记录文件：$DATA_DIR/learned_rules.json"
 fi
 
-# ── 6. 记录备份状态 ───────────────────────────────────────
+# ── 6. 记录数据存储状态 ───────────────────────────────────
 echo ""
-echo "→ 备份状态..."
+echo "→ 数据存储..."
 source "$CONFIG_FILE" 2>/dev/null || true
 
 if [ -n "$NOTION_TOKEN" ] && [ -n "$NOTION_DATABASE_ID" ]; then
   echo "  ✓ 已保留你之前的云端备份配置；本次安装不做云端验证"
 else
-  echo "  ✓ 当前只启用本机保存；不影响高亮、评论、召唤 AI 和记忆笔记本"
+  echo "  ✓ 当前只启用本机保存；"
 fi
 
 # ── 7. 可选：开机后自动可用 ────────────────────────────────
 AUTO_START_ENABLED=false
+STARTED_NOW=false
+START_OUTPUT=""
 echo ""
 echo "→ 开机后自动可用..."
 if [ "$(uname -s)" = "Darwin" ] && [ -x "$REPO_DIR/scripts/install-launch-agent" ]; then
@@ -724,12 +726,26 @@ else
   echo "  ○ 当前系统不支持自动配置；重启后请手动运行：bash start.sh"
 fi
 
+if [ "$AUTO_START_ENABLED" != true ]; then
+  echo ""
+  echo "→ 启动知识库助手..."
+  mkdir -p "$DATA_DIR/.logs"
+  START_OUTPUT="$DATA_DIR/.logs/setup-start.log"
+  if bash "$REPO_DIR/start.sh" > "$START_OUTPUT" 2>&1 && grep -q "工作台已就绪" "$START_OUTPUT"; then
+    STARTED_NOW=true
+    echo "  ✓ 知识库助手已启动"
+  else
+    echo "  ✗ 自动启动失败。"
+    echo "  请运行 bash start.sh 查看原因，或查看日志：$START_OUTPUT"
+  fi
+fi
+
 echo ""
 echo "═══════════════════════════════════════════════════════"
 echo "${GREEN}安装完成！${RESET}"
 echo ""
-if [ "$AUTO_START_ENABLED" != true ]; then
-  echo "运行以下命令启动知识库助手："
+if [ "$AUTO_START_ENABLED" != true ] && [ "$STARTED_NOW" != true ]; then
+  echo "如果刚才没有启动成功，请运行："
   echo ""
   echo "  bash start.sh"
   echo ""
