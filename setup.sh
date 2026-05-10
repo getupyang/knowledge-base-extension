@@ -34,10 +34,10 @@ if command -v node &>/dev/null; then
   if NODE_VERSION="$(node --version 2>/dev/null)"; then
     echo "  ✓ node $NODE_VERSION（可选）"
   else
-    echo "  ○ node 已安装但当前不可运行（可选；不影响 API 模式和本地 SQLite）"
+    echo "  ○ node 已安装但当前不可运行（可选；不影响第一次使用）"
   fi
 else
-  echo "  ○ node 未找到（可选；不影响 API 模式和本地 SQLite）"
+  echo "  ○ node 未找到（可选；不影响第一次使用）"
 fi
 
 CLAUDE_BIN=""
@@ -468,10 +468,10 @@ pip3 install -q -r "$REPO_DIR/requirements.txt" && echo "  ✓ fastapi uvicorn p
 
 # ── 3. 配置密钥 ───────────────────────────────────────────
 echo ""
-echo "→ 配置本地存储..."
+echo "→ 准备本机资料库..."
 echo ""
-echo "  默认使用本地 SQLite：$DATA_DIR/comments.db"
-echo "  Notion 只是后续可选备份，不影响第一次使用；本次安装不会询问 Notion。"
+echo "  你的划线、评论和 AI 回复会先保存在这台电脑上。"
+echo "  数据位置：$DATA_DIR/comments.db（通常不用手动打开）"
 echo ""
 
 EXISTING_NOTION_TOKEN=""
@@ -493,9 +493,9 @@ if [ ! -f "$CONFIG_FILE" ]; then
   NOTION_TOKEN="$EXISTING_NOTION_TOKEN"
   DATABASE_ID="$EXISTING_NOTION_DATABASE_ID"
   if [ -n "$NOTION_TOKEN" ] && [ -n "$DATABASE_ID" ]; then
-    echo "  ✓ 保留已有 Notion 备份配置；本次不重新询问。"
+    echo "  ✓ 已保留你之前的云端备份配置；本次不重新询问。"
   else
-    echo "  ✓ 首次安装只使用本地 SQLite；以后需要云端备份时再配置 Notion。"
+    echo "  ✓ 本次先启用本机保存，跑通核心功能。"
   fi
 
   echo ""
@@ -667,15 +667,15 @@ if [ ! -f "$DATA_DIR/learned_rules.json" ]; then
   echo "→ 已生成空的 $DATA_DIR/learned_rules.json"
 fi
 
-# ── 6. 记录可选 Notion 备份状态 ─────────────────────────────
+# ── 6. 记录备份状态 ───────────────────────────────────────
 echo ""
-echo "→ Notion 备份状态..."
+echo "→ 备份状态..."
 source "$CONFIG_FILE" 2>/dev/null || true
 
 if [ -n "$NOTION_TOKEN" ] && [ -n "$NOTION_DATABASE_ID" ]; then
-  echo "  ✓ 已保留 Notion 备份配置；本次安装不做云端验证"
+  echo "  ✓ 已保留你之前的云端备份配置；本次安装不做云端验证"
 else
-  echo "  ✓ 未开启 Notion 备份；数据会保存到本地 SQLite，并使用本地备份目录"
+  echo "  ✓ 当前只启用本机保存；不影响高亮、评论、AI 回复和记忆笔记本"
 fi
 
 # ── 7. 可选：开机自动恢复后端 ────────────────────────────────
