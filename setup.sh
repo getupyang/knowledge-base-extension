@@ -28,7 +28,17 @@ check_cmd() {
 
 DEPS_OK=true
 check_cmd python3 "请安装 Python 3：https://python.org" || DEPS_OK=false
-check_cmd node "请安装 Node.js：https://nodejs.org" || DEPS_OK=false
+
+NODE_VERSION=""
+if command -v node &>/dev/null; then
+  if NODE_VERSION="$(node --version 2>/dev/null)"; then
+    echo "  ✓ node $NODE_VERSION（可选）"
+  else
+    echo "  ○ node 已安装但当前不可运行（可选；不影响 API 模式和本地 SQLite）"
+  fi
+else
+  echo "  ○ node 未找到（可选；不影响 API 模式和本地 SQLite）"
+fi
 
 CLAUDE_BIN=""
 for p in \
@@ -344,14 +354,111 @@ configure_api_settings() {
 
   choose_api_preset
   read_api_key_for_setup
-  read_with_default_for_setup "LLM Base URL" "$API_BASE_URL_DEFAULT" LLM_BASE_URL
+  if [ -n "$API_BASE_URL_DEFAULT" ]; then
+    LLM_BASE_URL="$API_BASE_URL_DEFAULT"
+    echo "  ✓ 已选择服务地址：$LLM_BASE_URL"
+  else
+    read_with_default_for_setup "LLM Base URL" "" LLM_BASE_URL
+  fi
   LLM_BASE_URL="${LLM_BASE_URL%/}"
   if [ "$LLM_API_PROVIDER" = "qwen" ]; then
     choose_qwen_model_for_setup
   else
     choose_openrouter_model_for_setup
   fi
+  validate_api_settings_for_setup
   echo "  ✓ API 标准模式：$API_PROVIDER_LABEL / $LLM_MODEL"
+}
+
+validate_api_settings_for_setup() {
+  echo "  正在验证 API 连接（会发送一条极小测试请求）..."
+  API_PROBE_DETAIL=""
+  local probe_out
+  probe_out="$(mktemp "${TMPDIR:-/tmp}/memai-api-probe.XXXXXX")" || return 1
+
+  if MEMAI_LLM_API_PROVIDER="$LLM_API_PROVIDER" \
+    MEMAI_LLM_API_KEY="$LLM_API_KEY" \
+    MEMAI_LLM_BASE_URL="$LLM_BASE_URL" \
+    MEMAI_LLM_MODEL="$LLM_MODEL" \
+    python3 - <<'PY' > "$probe_out" 2>&1
+import json
+import os
+import ssl
+import sys
+import urllib.error
+import urllib.request
+
+base_url = os.environ["MEMAI_LLM_BASE_URL"].rstrip("/")
+api_key = os.environ["MEMAI_LLM_API_KEY"]
+model = os.environ["MEMAI_LLM_MODEL"]
+provider = os.environ.get("MEMAI_LLM_API_PROVIDER", "api")
+url = f"{base_url}/chat/completions"
+
+payload = {
+    "model": model,
+    "messages": [{"role": "user", "content": "Reply with exactly OK."}],
+    "temperature": 0,
+    "max_tokens": 8,
+}
+request = urllib.request.Request(
+    url,
+    data=json.dumps(payload).encode("utf-8"),
+    headers={
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "User-Agent": "knowledge-base-extension-setup/1.0",
+    },
+    method="POST",
+)
+
+try:
+    with urllib.request.urlopen(request, timeout=30) as response:
+        response.read(4096)
+except urllib.error.HTTPError as exc:
+    body = exc.read(800).decode("utf-8", errors="replace")
+    if exc.code == 401:
+        print("API 验证失败：401 认证失败。通常是 API Key、服务商或地区 endpoint 不匹配。")
+        if provider == "qwen":
+            print("请确认这个 key 属于你刚选择的百炼/Global/Coding Plan 类型，然后重新运行 setup。")
+        else:
+            print("请确认 API Key 属于刚选择的服务商，然后重新运行 setup。")
+    elif exc.code == 404:
+        print("API 验证失败：404。通常是 Base URL 或模型名不正确。")
+    elif exc.code == 429:
+        print("API 验证失败：429。服务商返回限流或额度不足。")
+    else:
+        print(f"API 验证失败：HTTP {exc.code}。")
+    if body:
+        print(body[:800])
+    sys.exit(1)
+except urllib.error.URLError as exc:
+    reason = exc.reason
+    text = str(reason)
+    if isinstance(reason, ssl.SSLCertVerificationError) or "CERTIFICATE_VERIFY_FAILED" in text:
+        print("API 验证失败：Python 无法验证 HTTPS 证书。")
+        print("macOS python.org 版本通常需要运行：/Applications/Python 3.x/Install Certificates.command")
+    else:
+        print(f"API 验证失败：网络连接失败：{text}")
+    sys.exit(1)
+except Exception as exc:
+    print(f"API 验证失败：{type(exc).__name__}: {exc}")
+    sys.exit(1)
+
+print("API 验证通过")
+PY
+  then
+    echo "  ✓ API 连接验证通过"
+    rm -f "$probe_out"
+    return 0
+  fi
+
+  API_PROBE_DETAIL="$(sed -n '1,12p' "$probe_out" 2>/dev/null)"
+  rm -f "$probe_out"
+  echo "  ✗ API 连接验证未通过，本次不会继续写入这组模型配置。"
+  if [ -n "$API_PROBE_DETAIL" ]; then
+    printf '%s\n' "$API_PROBE_DETAIL"
+  fi
+  exit 1
 }
 
 # ── 2. 安装 Python 依赖 ───────────────────────────────────
@@ -361,26 +468,18 @@ pip3 install -q -r "$REPO_DIR/requirements.txt" && echo "  ✓ fastapi uvicorn p
 
 # ── 3. 配置密钥 ───────────────────────────────────────────
 echo ""
-echo "→ 配置本地存储和可选 Notion 备份..."
+echo "→ 配置本地存储..."
 echo ""
 echo "  默认使用本地 SQLite：$DATA_DIR/comments.db"
-echo "  不配置 Notion 也可以完整使用高亮、评论、AI 回复和记忆笔记本。"
-echo "  如果你想额外同步一份云端备份，再填写 Notion Token 和 Database ID。"
-echo "  详细图文教程：https://github.com/getupyang/knowledge-base-extension#optional-notion-backup"
-echo ""
-echo "  可选 Notion 备份步骤："
-echo "  1. 打开 https://www.notion.so/my-integrations，创建 Integration，复制 Token"
-echo "  2. 在 Notion 新建页面 → 选 Database - Full page"
-echo "  3. 添加字段（名称必须一致）："
-echo "       标题(title)  来源平台(select)  来源URL(url)"
-echo "       原文片段(rich_text)  我的想法(rich_text)  评论区对话(rich_text)"
-echo "  4. ⚠️ 关键一步：打开数据库页面 → 右上角 ··· → Connections → 选你的 Integration"
-echo "     （不做这一步，插件写入 Notion 会报 'Could not find database' 错误）"
-echo "  5. 数据库 URL 中 notion.so/xxxxxxxx?v=... 里 ?v= 之前的 xxxxxxxx 就是 Database ID"
-echo "     （注意：?v= 后面的是 view ID，不要复制错）"
+echo "  Notion 只是后续可选备份，不影响第一次使用；本次安装不会询问 Notion。"
 echo ""
 
+EXISTING_NOTION_TOKEN=""
+EXISTING_NOTION_DATABASE_ID=""
 if [ -f "$CONFIG_FILE" ]; then
+  source "$CONFIG_FILE" 2>/dev/null || true
+  EXISTING_NOTION_TOKEN="${NOTION_TOKEN:-}"
+  EXISTING_NOTION_DATABASE_ID="${NOTION_DATABASE_ID:-}"
   echo "  已有配置文件 $CONFIG_FILE"
   read -p "  是否重新配置？[y/N] " RECONFIG
   if [ "$RECONFIG" != "y" ] && [ "$RECONFIG" != "Y" ]; then
@@ -391,11 +490,12 @@ if [ -f "$CONFIG_FILE" ]; then
 fi
 
 if [ ! -f "$CONFIG_FILE" ]; then
-  read -p "  可选 Notion Token (ntn_...，留空跳过): " NOTION_TOKEN
-  read -p "  可选 Notion Database ID (32位，留空跳过): " DATABASE_ID
-  if { [ -n "$NOTION_TOKEN" ] && [ -z "$DATABASE_ID" ]; } || { [ -z "$NOTION_TOKEN" ] && [ -n "$DATABASE_ID" ]; }; then
-    echo "  ✗ Notion 备份需要同时填写 Token 和 Database ID；都留空则关闭 Notion 备份。"
-    exit 1
+  NOTION_TOKEN="$EXISTING_NOTION_TOKEN"
+  DATABASE_ID="$EXISTING_NOTION_DATABASE_ID"
+  if [ -n "$NOTION_TOKEN" ] && [ -n "$DATABASE_ID" ]; then
+    echo "  ✓ 保留已有 Notion 备份配置；本次不重新询问。"
+  else
+    echo "  ✓ 首次安装只使用本地 SQLite；以后需要云端备份时再配置 Notion。"
   fi
 
   echo ""
@@ -567,21 +667,13 @@ if [ ! -f "$DATA_DIR/learned_rules.json" ]; then
   echo "→ 已生成空的 $DATA_DIR/learned_rules.json"
 fi
 
-# ── 6. 验证可选 Notion 备份 ──────────────────────────────────
+# ── 6. 记录可选 Notion 备份状态 ─────────────────────────────
 echo ""
-echo "→ 验证可选 Notion 备份..."
+echo "→ Notion 备份状态..."
 source "$CONFIG_FILE" 2>/dev/null || true
 
-if [ -n "$NOTION_TOKEN" ] && [ "$NOTION_TOKEN" != "ntn_your_token_here" ]; then
-  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-    -H "Authorization: Bearer $NOTION_TOKEN" \
-    -H "Notion-Version: 2022-06-28" \
-    "https://api.notion.com/v1/users/me" 2>/dev/null)
-  if [ "$HTTP_CODE" = "200" ]; then
-    echo "  ✓ Notion Token 有效"
-  else
-    echo "  ✗ Notion Token 无效（HTTP ${HTTP_CODE}），请检查 $CONFIG_FILE"
-  fi
+if [ -n "$NOTION_TOKEN" ] && [ -n "$NOTION_DATABASE_ID" ]; then
+  echo "  ✓ 已保留 Notion 备份配置；本次安装不做云端验证"
 else
   echo "  ✓ 未开启 Notion 备份；数据会保存到本地 SQLite，并使用本地备份目录"
 fi
