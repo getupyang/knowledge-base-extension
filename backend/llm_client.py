@@ -13,7 +13,9 @@ import json
 import os
 import re
 import shutil
+import ssl
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -37,6 +39,23 @@ class LLMTimeoutError(LLMError):
 
 class LLMCallError(LLMError):
     """Provider returned an execution/API error."""
+
+
+def _is_ssl_certificate_error(error: urllib.error.URLError) -> bool:
+    reason = getattr(error, "reason", None)
+    return isinstance(reason, ssl.SSLCertVerificationError) or "CERTIFICATE_VERIFY_FAILED" in str(error)
+
+
+def _ssl_certificate_hint(error: urllib.error.URLError) -> str:
+    py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+    return (
+        "api ssl certificate error: Python 无法验证模型 API 的 HTTPS 证书。"
+        f"如果你用的是 macOS python.org 安装的 Python {py_version}，请在这台电脑运行："
+        f" /Applications/Python\\ {py_version}/Install\\ Certificates.command"
+        "；然后重新执行 bash start.sh。"
+        "如果你开启了 HTTPS 代理，请关闭代理测试，或把代理根证书安装到这台 Mac/Python 信任链。"
+        f" 原始错误：{error}"
+    )
 
 
 def _env_truthy(name: str, default: bool = False) -> bool:
@@ -375,6 +394,8 @@ class OpenAICompatibleProvider(BaseProvider):
             detail = e.read().decode("utf-8", errors="replace")[:1000]
             raise LLMCallError(f"api http {e.code}: {detail}") from e
         except urllib.error.URLError as e:
+            if _is_ssl_certificate_error(e):
+                raise LLMCallError(_ssl_certificate_hint(e)) from e
             raise LLMCallError(f"api url error: {e}") from e
         try:
             payload = json.loads(raw)
