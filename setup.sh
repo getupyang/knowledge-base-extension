@@ -9,6 +9,13 @@ REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 BACKEND_DIR="$REPO_DIR/backend"
 DATA_DIR="${KB_DATA_DIR:-$HOME/.knowledge-base-extension}"
 CONFIG_FILE="$HOME/.kb_config"
+if [ -t 1 ]; then
+  GREEN="$(printf '\033[32m')"
+  RESET="$(printf '\033[0m')"
+else
+  GREEN=""
+  RESET=""
+fi
 
 echo "=== 知识库助手 首次安装 ==="
 echo ""
@@ -53,7 +60,7 @@ for p in \
 done
 
 if [ -z "$CLAUDE_BIN" ]; then
-  echo "  ○ Claude Code 未找到（可选；不影响用 API Key 配置 AI 回复）"
+  echo "  ○ Claude Code 未找到（可选；不影响用 API Key 配置 AI 服务）"
 else
   echo "  ✓ Claude Code 已安装 ($CLAUDE_BIN)"
 fi
@@ -71,7 +78,7 @@ for p in \
 done
 
 if [ -z "$CODEX_BIN" ]; then
-  echo "  ○ Codex CLI 未找到（可选；不影响用 API Key 配置 AI 回复）"
+  echo "  ○ Codex CLI 未找到（可选；不影响用 API Key 配置 AI 服务）"
 else
   echo "  ✓ Codex CLI 已安装 ($CODEX_BIN)"
 fi
@@ -477,7 +484,7 @@ fi
 echo ""
 echo "→ 准备本机资料库..."
 echo ""
-echo "  你的划线、评论和 AI 回复会先保存在这台电脑上。"
+echo "  你的划线、评论和 AI 生成的内容会先保存在这台电脑上。"
 echo "  数据位置：$DATA_DIR/comments.db（通常不用手动打开）"
 echo ""
 
@@ -502,12 +509,12 @@ if [ ! -f "$CONFIG_FILE" ]; then
   if [ -n "$NOTION_TOKEN" ] && [ -n "$DATABASE_ID" ]; then
     echo "  ✓ 已保留你之前的云端备份配置；本次不重新询问。"
   else
-    echo "  ✓ 本次先启用本机保存，跑通核心功能。"
+    echo "  ✓ 数据均存储在本地。如需云端数据，后续可点击插件配置你的notion云端数据库。"
   fi
 
   echo ""
-  echo "→ 配置 AI 回复..."
-  echo "  请选择 AI 回复使用哪个服务。"
+  echo "→ 配置 AI 服务..."
+  echo "  请选择你想用的 LLM 模型。"
   echo ""
   if [ -z "$CLAUDE_BIN" ] && [ -z "$CODEX_BIN" ]; then
     echo "  这台电脑还没安装 Claude Code / Codex，需要先填一个 API Key。"
@@ -518,8 +525,8 @@ if [ ! -f "$CONFIG_FILE" ]; then
     LLM_BASE_URL=""
     LLM_MODEL=""
     echo "  已检测到这台电脑安装了 Claude Code / Codex。"
-    echo "  你可以直接用它生成 AI 回复；也可以额外填一个 API Key 作为备用方式。"
-    echo "  如果现在跳过，AI 回复只会用 Claude Code / Codex，不会偷偷调用付费 API。"
+    echo "  你可以直接使用它；也可以额外填一个 API Key 作为备用方式。"
+    echo "  如果现在跳过，只会用 Claude Code / Codex，不会偷偷调用付费 API。"
     read -p "  是否现在填写 API Key？[y/N] " CONFIGURE_API
     if [ "$CONFIGURE_API" = "y" ] || [ "$CONFIGURE_API" = "Y" ]; then
       configure_api_settings
@@ -529,7 +536,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
   fi
 
   if [ -z "$LLM_API_KEY" ] && [ -z "$CLAUDE_BIN" ] && [ -z "$CODEX_BIN" ]; then
-    echo "  ✗ 还没有可用的 AI 回复服务。请填写 API Key，或先安装 Claude Code / Codex CLI。"
+    echo "  ✗ 还没有可用的 AI 服务。请填写 API Key，或先安装 Claude Code / Codex CLI。"
     exit 1
   fi
 
@@ -542,7 +549,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
     LLM_PROVIDER="${AVAILABLE_PROVIDERS[0]}"
   else
     echo ""
-    echo "  检测到多个可用于 AI 回复的服务，请选择默认使用哪一个。之后如需切换，运行 sh choose_ai_service.sh。"
+    echo "  检测到多个可用的 AI 服务，请选择默认使用哪一个。之后如需切换，运行 sh choose_ai_service.sh。"
     while true; do
       MODEL_OPTION_LABELS=()
       MODEL_OPTION_VALUES=()
@@ -684,7 +691,7 @@ source "$CONFIG_FILE" 2>/dev/null || true
 if [ -n "$NOTION_TOKEN" ] && [ -n "$NOTION_DATABASE_ID" ]; then
   echo "  ✓ 已保留你之前的云端备份配置；本次安装不做云端验证"
 else
-  echo "  ✓ 当前只启用本机保存；不影响高亮、评论、AI 回复和记忆笔记本"
+  echo "  ✓ 当前只启用本机保存；不影响高亮、评论、召唤 AI 和记忆笔记本"
 fi
 
 # ── 7. 可选：开机后自动可用 ────────────────────────────────
@@ -692,18 +699,22 @@ AUTO_START_ENABLED=false
 echo ""
 echo "→ 开机后自动可用..."
 if [ "$(uname -s)" = "Darwin" ] && [ -x "$REPO_DIR/scripts/install-launch-agent" ]; then
-  echo "  Chrome 插件会一直保留；这一步是为了让电脑重启后也能继续保存笔记、召唤 AI。"
-  echo "  开启后，以后登录 Mac 就能直接继续使用，不需要先运行 bash start.sh。"
+  echo "  开启开机自动启动，避免重启mac后手动运行bash start.sh来启动本产品。"
   read -p "  是否开启？[Y/n]：" ENABLE_AUTO_START
   ENABLE_AUTO_START="${ENABLE_AUTO_START:-Y}"
   case "$ENABLE_AUTO_START" in
     Y|y|yes|YES|Yes|是|好|开启)
-      if "$REPO_DIR/scripts/install-launch-agent"; then
+      LAUNCH_AGENT_OUTPUT="$(mktemp "${TMPDIR:-/tmp}/memai-launch-agent.XXXXXX")" || LAUNCH_AGENT_OUTPUT=""
+      if "$REPO_DIR/scripts/install-launch-agent" > "${LAUNCH_AGENT_OUTPUT:-/dev/null}" 2>&1; then
         AUTO_START_ENABLED=true
         echo "  ✓ 已开启：重启后可以直接继续使用"
       else
         echo "  ✗ 自动开启失败；本次仍可手动运行 bash start.sh。"
+        if [ -n "$LAUNCH_AGENT_OUTPUT" ] && [ -s "$LAUNCH_AGENT_OUTPUT" ]; then
+          sed -n '1,8p' "$LAUNCH_AGENT_OUTPUT"
+        fi
       fi
+      [ -n "$LAUNCH_AGENT_OUTPUT" ] && rm -f "$LAUNCH_AGENT_OUTPUT"
       ;;
     *)
       echo "  ○ 已跳过。之后如果重启 Mac，需要手动运行：bash start.sh"
@@ -715,17 +726,13 @@ fi
 
 echo ""
 echo "═══════════════════════════════════════════════════════"
-echo "安装完成！"
+echo "${GREEN}安装完成！${RESET}"
 echo ""
-if [ "$AUTO_START_ENABLED" = true ]; then
-  echo "已开启开机后自动可用；以后重启 Mac 不需要手动运行 bash start.sh。"
-else
+if [ "$AUTO_START_ENABLED" != true ]; then
   echo "运行以下命令启动知识库助手："
   echo ""
   echo "  bash start.sh"
   echo ""
 fi
-echo "然后在 Chrome 加载插件（开发者模式 → 加载已解压的扩展程序 → 选择本仓库根目录）"
-echo "打开本地知识库：http://localhost:8765"
-echo "打开记忆笔记本：http://localhost:8765/notebook/"
+echo "开始使用前，请在 Chrome 加载插件（开发者模式 → 加载已解压的扩展程序 → 选择本仓库根目录）"
 echo "═══════════════════════════════════════════════════════"
