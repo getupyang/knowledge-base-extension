@@ -27,7 +27,7 @@ fi
 
 if [ ! -f "$CONFIG_FILE" ]; then
   echo "✗ 未找到配置文件 $CONFIG_FILE"
-  echo "  请先运行：bash $REPO_DIR/setup.sh"
+  echo "  请先运行：bash $REPO_DIR/onboard.sh"
   exit 1
 fi
 

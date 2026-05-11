@@ -249,19 +249,18 @@ https://www.notion.so/你的名字/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx?v=yyyyyyyy
 ```
 注意：`?v=` 后面的是 view ID，**不要复制错**。
 
-### 第四步：运行安装脚本
+### 第四步：运行 Onboarding
 
 ```bash
-bash setup.sh
+bash onboard.sh
 ```
 
 脚本会：
-- 检查所有依赖是否就绪
-- 安装 Python 依赖（fastapi、uvicorn）
-- 初始化本地 SQLite 数据库和本地备份目录
-- 可选引导你输入 Notion Token 和 Database ID，写入 `~/.kb_config`
-- 引导你固定选择一个模型服务：Claude Code / Codex / 千问 / OpenRouter
-- 如果开启 Notion 备份，验证 Notion Token 是否有效
+- 检查这台电脑能否运行知识库助手
+- 准备本机资料库
+- 引导你选择 AI 服务：Claude Code / Codex / 千问 / OpenRouter
+- 询问是否开启开机自动启动
+- 安装完成后自动启动知识库助手
 
 ### 第五步：配置项目上下文（可选但推荐）
 
@@ -288,7 +287,7 @@ open ~/.knowledge-base-extension/project_context.md
 bash start.sh
 ```
 
-看到以下输出说明就绪：
+如果你在 onboarding 时开启了开机自动启动，重启 Mac 后通常不需要手动运行这一步。看到以下输出说明就绪：
 
 ```
 ✓ 知识库服务器：http://localhost:8765
@@ -301,11 +300,9 @@ bash start.sh
 - 浏览器直接打开：http://localhost:8765/notebook/
 - Chrome 插件弹窗 → 「打开记忆笔记本」
 
-`start.sh` 会同时启动三部分：知识库浏览器、Agent API、后台 worker。worker 负责执行 `jobs` 表里的异步整理任务，例如「最近在想什么」和 rules → skills 蒸馏。
-
 ### 可选：开机自动启动
 
-如果不想每次 Mac 重启后手动运行 `bash start.sh`，首次安装时运行 `bash setup.sh`，最后选择开启「开机自动恢复后端」即可。开启后，下次登录 macOS 时会自动运行本仓库里的 `start.sh`，让本地 SQLite、记忆笔记本、Agent API 和后台 worker 恢复可用。
+如果不想每次 Mac 重启后手动运行 `bash start.sh`，运行 `bash onboard.sh` 时选择开启「开机自动启动」即可。开启后，下次登录 macOS 时会自动启动知识库助手。
 
 已经安装过、只想补上开机自动恢复的用户，也可以只运行一次：
 
@@ -361,7 +358,7 @@ scripts/uninstall-launch-agent
 
 ```
 knowledge-base-extension/
-├── setup.sh                    # 首次安装
+├── onboard.sh                    # 首次安装
 ├── start.sh                    # 每次启动
 ├── requirements.txt            # Python 依赖
 ├── .kb_config.example          # 配置文件模板
@@ -393,7 +390,7 @@ knowledge-base-extension/
 ```bash
 git clone https://github.com/getupyang/knowledge-base-extension.git
 cd knowledge-base-extension
-bash setup.sh
+bash onboard.sh
 bash start.sh
 ```
 
@@ -458,11 +455,11 @@ cat ~/.knowledge-base-extension/learned_rules.json
 
 **Q: 没有 Claude Code / Codex 能用吗？**
 
-可以。运行 `bash setup.sh` 时选择千问 / Qwen API 或 OpenRouter API，即可使用标准模式。标准模式支持评论区回复、记忆笔记本、profile / skills / thinking 蒸馏；本地文件维护和长链路交付任务需要本地 agent 后端。
+可以。运行 `bash onboard.sh` 时选择千问 / Qwen API 或 OpenRouter API，即可使用标准模式。标准模式支持评论区回复、记忆笔记本、profile / skills / thinking 蒸馏；本地文件维护和长链路交付任务需要本地 agent 后端。
 
 **Q: 我有 Claude Code，能不额外花 API 钱吗？**
 
-可以。安装并登录后，`setup.sh` 会检测到 `claude`，默认优先走本地：
+可以。安装并登录后，`onboard.sh` 会检测到 `claude`，默认优先走本地：
 
 ```bash
 npm install -g @anthropic-ai/claude-code

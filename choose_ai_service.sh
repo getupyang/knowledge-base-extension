@@ -20,7 +20,7 @@ echo ""
 
 if [ ! -f "$CONFIG_FILE" ]; then
   echo "未找到配置文件：$CONFIG_FILE"
-  echo "请先在产品文件夹里运行首次安装：sh setup.sh"
+  echo "请先在产品文件夹里运行首次安装：sh onboard.sh"
   exit 1
 fi
 

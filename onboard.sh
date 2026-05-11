@@ -1,7 +1,7 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════
-# 知识库助手 — 首次安装脚本
-# 用法：bash setup.sh
+# 知识库助手 — 首次 onboarding 脚本
+# 用法：bash onboard.sh
 # ═══════════════════════════════════════════════════════
 
 set -e
@@ -17,7 +17,7 @@ else
   RESET=""
 fi
 
-echo "=== 知识库助手 首次安装 ==="
+echo "=== 知识库助手 Onboarding ==="
 echo ""
 
 # ── 1. 检查依赖 ──────────────────────────────────────────
@@ -476,7 +476,7 @@ if pip3 install -q -r "$REPO_DIR/requirements.txt"; then
 else
   echo "  ✗ 运行环境准备失败。"
   echo "  常见原因：网络不可用、代理无法连接，或者 Python 证书没有配置好。"
-  echo "  请解决上面的 pip 错误后，重新运行 bash setup.sh。"
+  echo "  请解决上面的 pip 错误后，重新运行 bash onboard.sh。"
   exit 1
 fi
 
@@ -704,41 +704,37 @@ case "$HOME:$DATA_DIR" in
     SETUP_PREVIEW_MODE=true
     ;;
 esac
-echo ""
-echo "→ 开机后自动可用..."
-if [ "$SETUP_PREVIEW_MODE" = true ]; then
-  echo "  当前是临时测试环境，本次不会设置开机自动启动。"
-elif [ "$(uname -s)" = "Darwin" ] && [ -x "$REPO_DIR/scripts/install-launch-agent" ]; then
-  echo "  开启开机自动启动，避免重启mac后手动运行bash start.sh来启动本产品。"
-  read -p "  是否开启？[Y/n]：" ENABLE_AUTO_START
-  ENABLE_AUTO_START="${ENABLE_AUTO_START:-Y}"
-  case "$ENABLE_AUTO_START" in
-    Y|y|yes|YES|Yes|是|好|开启)
-      LAUNCH_AGENT_OUTPUT="$(mktemp "${TMPDIR:-/tmp}/memai-launch-agent.XXXXXX")" || LAUNCH_AGENT_OUTPUT=""
-      if "$REPO_DIR/scripts/install-launch-agent" > "${LAUNCH_AGENT_OUTPUT:-/dev/null}" 2>&1; then
-        AUTO_START_ENABLED=true
-        echo "  ✓ 已开启：重启后可以直接继续使用"
-      else
-        echo "  ✗ 自动开启失败；本次仍可手动运行 bash start.sh。"
-        if [ -n "$LAUNCH_AGENT_OUTPUT" ] && [ -s "$LAUNCH_AGENT_OUTPUT" ]; then
-          sed -n '1,8p' "$LAUNCH_AGENT_OUTPUT"
+if [ "$SETUP_PREVIEW_MODE" != true ]; then
+  echo ""
+  echo "→ 开机后自动可用..."
+  if [ "$(uname -s)" = "Darwin" ] && [ -x "$REPO_DIR/scripts/install-launch-agent" ]; then
+    echo "  开启开机自动启动，避免重启mac后手动运行bash start.sh来启动本产品。"
+    read -p "  是否开启？[Y/n]：" ENABLE_AUTO_START
+    ENABLE_AUTO_START="${ENABLE_AUTO_START:-Y}"
+    case "$ENABLE_AUTO_START" in
+      Y|y|yes|YES|Yes|是|好|开启)
+        LAUNCH_AGENT_OUTPUT="$(mktemp "${TMPDIR:-/tmp}/memai-launch-agent.XXXXXX")" || LAUNCH_AGENT_OUTPUT=""
+        if "$REPO_DIR/scripts/install-launch-agent" > "${LAUNCH_AGENT_OUTPUT:-/dev/null}" 2>&1; then
+          AUTO_START_ENABLED=true
+          echo "  ✓ 已开启：重启后可以直接继续使用"
+        else
+          echo "  ✗ 自动开启失败；本次仍可手动运行 bash start.sh。"
+          if [ -n "$LAUNCH_AGENT_OUTPUT" ] && [ -s "$LAUNCH_AGENT_OUTPUT" ]; then
+            sed -n '1,8p' "$LAUNCH_AGENT_OUTPUT"
+          fi
         fi
-      fi
-      [ -n "$LAUNCH_AGENT_OUTPUT" ] && rm -f "$LAUNCH_AGENT_OUTPUT"
-      ;;
-    *)
-      echo "  ○ 已跳过。之后如果重启 Mac，需要手动运行：bash start.sh"
-      ;;
-  esac
-else
-  echo "  ○ 当前系统不支持自动配置；重启后请手动运行：bash start.sh"
+        [ -n "$LAUNCH_AGENT_OUTPUT" ] && rm -f "$LAUNCH_AGENT_OUTPUT"
+        ;;
+      *)
+        echo "  ○ 已跳过。之后如果重启 Mac，需要手动运行：bash start.sh"
+        ;;
+    esac
+  else
+    echo "  ○ 当前系统不支持自动配置；重启后请手动运行：bash start.sh"
+  fi
 fi
 
-if [ "$SETUP_PREVIEW_MODE" = true ]; then
-  echo ""
-  echo "→ 启动知识库助手..."
-  echo "  当前是临时测试环境，本次不会启动真实服务。"
-elif [ "$AUTO_START_ENABLED" != true ]; then
+if [ "$SETUP_PREVIEW_MODE" != true ] && [ "$AUTO_START_ENABLED" != true ]; then
   echo ""
   echo "→ 启动知识库助手..."
   mkdir -p "$DATA_DIR/.logs"
@@ -756,7 +752,10 @@ echo ""
 echo "═══════════════════════════════════════════════════════"
 echo "${GREEN}安装完成！${RESET}"
 echo ""
-if [ "$SETUP_PREVIEW_MODE" != true ] && [ "$AUTO_START_ENABLED" != true ] && [ "$STARTED_NOW" != true ]; then
+if [ "$SETUP_PREVIEW_MODE" != true ] && { [ "$AUTO_START_ENABLED" = true ] || [ "$STARTED_NOW" = true ]; }; then
+  echo "✓ 知识库助手已自动启动后端服务。"
+  echo ""
+elif [ "$SETUP_PREVIEW_MODE" != true ]; then
   echo "如果刚才没有启动成功，请运行："
   echo ""
   echo "  bash start.sh"
