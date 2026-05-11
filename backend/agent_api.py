@@ -678,7 +678,13 @@ _startup_backup_result = _ensure_local_backup("startup", min_interval_hours=24)
 
 def _startup_check():
     llm = get_llm_status()
-    notion_ok = bool(os.environ.get("KB_NOTION_TOKEN") or os.environ.get("NOTION_TOKEN"))
+    notion_enabled_raw = (
+        os.environ.get("MEMAI_NOTION_BACKUP_ENABLED")
+        or os.environ.get("KB_NOTION_BACKUP_ENABLED")
+        or "1"
+    )
+    notion_enabled = str(notion_enabled_raw).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+    notion_ok = notion_enabled and bool(os.environ.get("KB_NOTION_TOKEN") or os.environ.get("NOTION_TOKEN"))
     print(f"[agent_api] 数据目录: {DATA_DIR}")
     print(f"[agent_api] 数据库: {DB_PATH} ({'✓' if os.path.exists(DB_PATH) else '✗ 不存在'})")
     print(f"[agent_api] LLM provider: {llm.get('selected_provider') or '✗ 未配置'} ({llm.get('provider_config')})")
@@ -707,7 +713,7 @@ _PRIVATE_CONTEXT_LEAK_PATTERNS = [
     "Intention-Action Gap",
     "mem-ai 方向",
     "mem-ai 的产品定位",
-    "知识库助手产品迭代",
+    "Margin 产品迭代",
     "基于浏览器插件的 AI 知识管理产品",
     "正在构建一个基于浏览器插件",
     "记忆赛道",
@@ -3260,7 +3266,7 @@ def _review_user_profile(interaction_count: int):
                 "注意：只更新有证据支持的字段，不要猜测。\n"
             )
 
-        prompt = f"""你是知识库助手的学习系统。任务：{task}
+        prompt = f"""你是 Margin 的学习系统。任务：{task}
 
 {instruction}
 
@@ -3326,7 +3332,7 @@ def _review_project_context(agent_reply: str, user_comment: str):
         if not has_signal:
             return
 
-        prompt = f"""你是知识库助手的项目上下文维护系统。
+        prompt = f"""你是 Margin 的项目上下文维护系统。
 
 用户刚才的评论中可能包含项目状态变化的信号。请对比现有上下文和用户评论，判断是否需要更新。
 
@@ -3432,7 +3438,7 @@ def run_agent_v2(comment_id: int, intent: str, role: str, prompt: str,
         # 需要调 Step 2
         print(f"[agent_api] v2 Step 2: comment_id={comment_id} role={role} prompt_len={len(prompt)}")
         system_prompt = (
-            "你是知识库助手的评论区 agent。直接回答用户的问题，不要执行任何 session 初始化流程"
+            "你是 Margin 的评论区 agent。直接回答用户的问题，不要执行任何 session 初始化流程"
             "（不要同步 Notion、不要读 todo、不要确认 session 阶段）。只根据下面的 prompt 内容回复。"
             "默认写成简洁的评论区回复：先给结论，少铺垫；除非用户明确要求深度调研或长文，"
             "否则控制在 300-500 字以内，最多 5 个要点。不要为了显得全面而展开所有分支。"
@@ -3553,7 +3559,7 @@ def run_agent_v1_fallback(comment_id: int, agent_type: str,
     prompt, context_pack = _attach_context_to_prompt(comment_id, role, prompt)
 
     system_prompt = (
-        "你是知识库助手的评论区 agent。直接回答用户的问题，不要执行任何 session 初始化流程。"
+        "你是 Margin 的评论区 agent。直接回答用户的问题，不要执行任何 session 初始化流程。"
         "默认简洁：先给结论，控制在 300-500 字以内，最多 5 个要点。"
     )
     status = "error"
@@ -4500,12 +4506,239 @@ def runtime_status():
 @app.get("/config")
 def get_config():
     """供插件 background 启动时自动拉取可选 connector 配置。"""
-    token, db_id = _notion_credentials()
+    token, db_id = _notion_saved_credentials()
+    notion_enabled = _notion_backup_enabled()
+    notion_configured = bool(notion_enabled and token and db_id)
+    llm = get_llm_status()
     return {
         "storageMode": "local_first",
-        "notionConfigured": bool(token and db_id),
+        "notionConfigured": notion_configured,
         "databaseIdSet": bool(db_id),
+        "notion": {
+            "enabled": notion_enabled,
+            "configured": notion_configured,
+            "saved": bool(token and db_id),
+            "tokenSet": bool(token),
+            "databaseIdSet": bool(db_id),
+            "databaseId": db_id if db_id else "",
+        },
+        "ai": _public_ai_status(llm),
         "backup": _local_backup_status(check_integrity=False),
+    }
+
+
+def _public_ai_status(llm: dict) -> dict:
+    selected = llm.get("selected_provider") or ""
+    provider_config = llm.get("provider_config") or "auto"
+    api_provider = llm.get("api_provider") or ""
+    api_model = llm.get("api_model") or ""
+    error = llm.get("error") or ""
+
+    labels = {
+        "codex_cli": "Codex 直连",
+        "claude_code": "Claude Code 直连",
+        "api": "API 服务",
+        "auto": "自动选择",
+    }
+    api_labels = {
+        "qwen": "千问 / Qwen",
+        "openrouter": "OpenRouter",
+        "openai": "OpenAI",
+        "deepseek": "DeepSeek",
+        "kimi": "Kimi",
+        "moonshot": "Moonshot",
+    }
+
+    display = labels.get(selected or provider_config, selected or provider_config or "未配置")
+    detail = ""
+    if selected == "api" or provider_config == "api":
+        display = api_labels.get(api_provider, api_provider or "API 服务")
+        if api_model:
+            display = f"{display} · {api_model}"
+        detail = "使用本机保存的 API Key"
+    elif selected == "codex_cli":
+        detail = "使用这台电脑上的 Codex CLI"
+    elif selected == "claude_code":
+        detail = "使用这台电脑上的 Claude Code"
+    elif error:
+        display = "未配置"
+        detail = error
+
+    return {
+        "configured": bool(selected) and not bool(error),
+        "selectedProvider": selected,
+        "providerConfig": provider_config,
+        "displayName": display,
+        "detail": detail,
+        "error": error,
+        "apiProvider": api_provider,
+        "apiModel": api_model,
+        "apiKeySet": bool(llm.get("api_key_configured")),
+        "available": {
+            "codex_cli": bool((llm.get("codex_cli") or {}).get("available")),
+            "claude_code": bool((llm.get("claude_code") or {}).get("available")),
+        },
+    }
+
+
+def _require_extension_origin(request: Request):
+    origin = request.headers.get("origin", "")
+    if not origin.startswith("chrome-extension://"):
+        raise HTTPException(status_code=403, detail="Only the Chrome extension can change local config")
+
+
+def _write_config_values(updates: dict[str, str]):
+    path = os.path.expanduser(_config_file)
+    lines = []
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+    pending = dict(updates)
+    next_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            key = stripped.split("=", 1)[0].strip()
+            if key in pending:
+                next_lines.append(f"{key}={pending.pop(key)}\n")
+                continue
+        next_lines.append(line)
+
+    if next_lines and next_lines[-1].strip():
+        next_lines.append("\n")
+    for key, value in pending.items():
+        next_lines.append(f"{key}={value}\n")
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp_path = f"{path}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        f.writelines(next_lines)
+    os.replace(tmp_path, path)
+    try:
+        os.chmod(path, 0o600)
+    except Exception:
+        pass
+    for key, value in updates.items():
+        os.environ[key] = value
+
+
+class AiConfigUpdate(BaseModel):
+    provider: str
+    apiProvider: str = ""
+    apiKey: str = ""
+    model: str = ""
+    qwenEndpoint: str = "qwen_cn"
+
+
+@app.post("/config/ai")
+def update_ai_config(payload: AiConfigUpdate, request: Request):
+    _require_extension_origin(request)
+    provider = (payload.provider or "").strip()
+    llm = get_llm_status()
+    if provider == "api":
+        api_provider = (payload.apiProvider or "").strip()
+        api_key = (payload.apiKey or "").strip()
+        qwen_endpoint = (payload.qwenEndpoint or "qwen_cn").strip()
+        endpoint_map = {
+            "qwen_cn": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "qwen_global": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+            "qwen_coding_cn": "https://coding.dashscope.aliyuncs.com/v1",
+            "qwen_coding_global": "https://coding-intl.dashscope.aliyuncs.com/v1",
+        }
+        if api_provider not in ("qwen", "openrouter"):
+            raise HTTPException(status_code=400, detail="请选择千问或 OpenRouter")
+        if not api_key and not llm.get("api_key_configured"):
+            raise HTTPException(status_code=400, detail="请填写 API Key")
+
+        if api_provider == "qwen":
+            base_url = endpoint_map.get(qwen_endpoint)
+            if not base_url:
+                raise HTTPException(status_code=400, detail="请选择千问服务区域")
+            model = (payload.model or "qwen3.5-plus").strip()
+        else:
+            base_url = "https://openrouter.ai/api/v1"
+            model = (payload.model or "openai/gpt-4o-mini").strip()
+
+        updates = {
+            "MEMAI_LLM_PROVIDER": "api",
+            "MEMAI_LLM_API_PROVIDER": api_provider,
+            "MEMAI_LOCAL_AGENT": "none",
+            "MEMAI_LLM_FALLBACK": "fail",
+            "MEMAI_LLM_BASE_URL": base_url,
+            "MEMAI_LLM_MODEL": model,
+        }
+        if api_key:
+            updates["MEMAI_LLM_API_KEY"] = api_key
+        _write_config_values(updates)
+        return {"ok": True, "ai": _public_ai_status(get_llm_status())}
+
+    if provider not in ("codex_cli", "claude_code"):
+        raise HTTPException(status_code=400, detail="请选择 Codex、Claude Code 或 API 模型")
+
+    if not (llm.get(provider) or {}).get("available"):
+        label = "Codex CLI" if provider == "codex_cli" else "Claude Code"
+        raise HTTPException(status_code=400, detail=f"这台电脑还没有安装 {label}")
+
+    _write_config_values({
+        "MEMAI_LLM_PROVIDER": provider,
+        "MEMAI_LOCAL_AGENT": provider,
+        "MEMAI_LLM_FALLBACK": "fail",
+    })
+    return {"ok": True, "ai": _public_ai_status(get_llm_status())}
+
+
+class NotionConfigUpdate(BaseModel):
+    token: str = ""
+    databaseId: str = ""
+    enabled: bool = True
+
+
+@app.post("/config/notion")
+def update_notion_config(payload: NotionConfigUpdate, request: Request):
+    _require_extension_origin(request)
+    existing_token, existing_db_id = _notion_saved_credentials()
+    if not payload.enabled:
+        _write_config_values({
+            "MEMAI_NOTION_BACKUP_ENABLED": "0",
+            "KB_NOTION_BACKUP_ENABLED": "0",
+        })
+        token, db_id = _notion_saved_credentials()
+        return {
+            "ok": True,
+            "notion": {
+                "enabled": False,
+                "configured": False,
+                "saved": bool(token and db_id),
+                "tokenSet": bool(token),
+                "databaseIdSet": bool(db_id),
+                "databaseId": db_id if db_id else "",
+            },
+        }
+
+    token = (payload.token or "").strip() or existing_token
+    database_id = _extract_notion_database_id(payload.databaseId) or existing_db_id
+    if not token or not database_id:
+        raise HTTPException(status_code=400, detail="请同时填写 Notion Token 和 Database ID")
+
+    _write_config_values({
+        "MEMAI_NOTION_BACKUP_ENABLED": "1",
+        "KB_NOTION_BACKUP_ENABLED": "1",
+        "NOTION_TOKEN": token,
+        "NOTION_DATABASE_ID": database_id,
+        "KB_NOTION_TOKEN": token,
+        "KB_NOTION_DATABASE_ID": database_id,
+    })
+    return {
+        "ok": True,
+        "notion": {
+            "enabled": True,
+            "configured": bool(token and database_id),
+            "saved": bool(token and database_id),
+            "tokenSet": bool(token),
+            "databaseIdSet": bool(database_id),
+            "databaseId": database_id if database_id else "",
+        },
     }
 
 
@@ -4556,10 +4789,42 @@ class NotionUpsertRequest(BaseModel):
 class NotionImportRequest(BaseModel):
     limit: int = 500
 
-def _notion_credentials():
+def _extract_notion_database_id(raw: str) -> str:
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    uuid_match = re.search(
+        r"(?i)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
+        text,
+    )
+    if uuid_match:
+        return uuid_match.group(1).replace("-", "").lower()
+    compact_match = re.search(r"(?i)([0-9a-f]{32})", text)
+    if compact_match:
+        return compact_match.group(1).lower()
+    return ""
+
+
+def _notion_backup_enabled() -> bool:
+    raw = (
+        os.environ.get("MEMAI_NOTION_BACKUP_ENABLED")
+        or os.environ.get("KB_NOTION_BACKUP_ENABLED")
+        or "1"
+    )
+    return str(raw).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
+
+def _notion_saved_credentials():
     token = os.environ.get("NOTION_TOKEN") or os.environ.get("KB_NOTION_TOKEN", "")
     db_id = os.environ.get("NOTION_DATABASE_ID") or os.environ.get("KB_NOTION_DATABASE_ID", "")
+    db_id = _extract_notion_database_id(db_id) or db_id.strip().replace("-", "")
     return token, db_id
+
+
+def _notion_credentials():
+    if not _notion_backup_enabled():
+        return "", ""
+    return _notion_saved_credentials()
 
 def _notion_headers(token: str) -> dict:
     return {

@@ -34,7 +34,7 @@ function showToast(text, type) {
     position:fixed; bottom:24px; right:24px; z-index:2147483647;
     padding:12px 20px; border-radius:8px; font-size:14px;
     font-family:-apple-system,sans-serif; color:white;
-    background:${type === "success" ? "#1d7f5f" : "#ef4444"};
+    background:${type === "success" ? "oklch(0.55 0.14 150)" : "#ef4444"};
     box-shadow:0 4px 12px rgba(0,0,0,0.15); transition:opacity 0.3s;
   `;
   document.body.appendChild(toast);
@@ -178,7 +178,7 @@ const selectionBar = (() => {
         z-index: 2147483647;
         display: flex;
         gap: 2px;
-        background: oklch(0.37 0.09 155);
+        background: oklch(0.55 0.14 150);
         border-radius: 4px;
         padding: 4px 5px;
         box-shadow: 0 6px 20px rgba(40,30,20,0.22);
@@ -201,9 +201,9 @@ const selectionBar = (() => {
         transition: background 0.12s;
         letter-spacing: 0.04em;
       }
-      #kb-sel-bar button:hover { background: oklch(0.45 0.09 155); }
+      #kb-sel-bar button:hover { background: oklch(0.48 0.13 150); }
       #kb-sel-bar .kb-bar-divider {
-        width: 1px; background: oklch(0.55 0.06 155);
+        width: 1px; background: oklch(0.72 0.08 150);
         margin: 3px 1px; border-radius: 1px;
       }
     `;
@@ -836,7 +836,7 @@ const commentSystem = (() => {
     mark.dataset.excerptId = _excerptId(excerpt);
     // 兜底底色：即使 stylesheet 还没注入也能看到划线（页面 CSS 可能 reset mark 样式）
     // hover/active 由 stylesheet 接管（class 切换覆盖 inline）
-    mark.style.background = "oklch(0.90 0.07 145 / 0.62)";
+    mark.style.background = "oklch(0.90 0.07 150 / 0.62)";
     mark.style.color = "oklch(0.18 0.012 145)";
     mark.style.borderRadius = "2px";
     mark.style.cursor = "pointer";
@@ -1107,7 +1107,7 @@ const commentSystem = (() => {
     badgeEl.style.cssText = `
       position: fixed; right: 0; top: 50%; transform: translateY(-50%);
       z-index: 2147483646; width: 28px; padding: 10px 0;
-      background: oklch(0.37 0.09 155); color: oklch(0.985 0.006 125);
+      background: oklch(0.55 0.14 150); color: oklch(0.985 0.006 125);
       border: none;
       border-radius: 4px 0 0 4px; line-height: 1.3;
       cursor: pointer; display: flex; flex-direction: column; align-items: center;
@@ -1132,7 +1132,7 @@ const commentSystem = (() => {
     updateBadge();
   }
 
-  // ── 注入样式（v3 视觉系统：青绿色品牌主色 + 浅纸面 + JetBrains Mono + oklch）──
+  // ── 注入样式（v3 视觉系统：森林绿品牌主色 + 浅纸面 + JetBrains Mono + oklch）──
   function injectStyles() {
     if (document.getElementById("kb-comment-style")) return;
     const s = document.createElement("style");
@@ -1149,25 +1149,25 @@ const commentSystem = (() => {
         --kb-ink-faint: oklch(0.72 0.016 145);
         --kb-line: oklch(0.85 0.016 135);
         --kb-line-2: oklch(0.91 0.012 135);
-        --kb-brand: oklch(0.49 0.105 155);
-        --kb-brand-strong: oklch(0.37 0.09 155);
-        --kb-brand-soft: oklch(0.93 0.045 145);
-        --kb-brand-faint: oklch(0.972 0.018 145);
+        --kb-brand: oklch(0.55 0.14 150);
+        --kb-brand-strong: oklch(0.42 0.13 150);
+        --kb-brand-soft: oklch(0.96 0.02 150);
+        --kb-brand-faint: oklch(0.975 0.014 150);
         --kb-panel-shadow: rgba(16,44,32,0.08);
         --kb-card-shadow: rgba(60,40,20,0.04);
         --kb-grid-dot: oklch(0.91 0.014 145);
-        --kb-reply-user-bg: oklch(0.972 0.018 145);
-        --kb-reply-user-border: oklch(0.86 0.04 145);
+        --kb-reply-user-bg: oklch(0.96 0.02 150);
+        --kb-reply-user-border: oklch(0.86 0.045 150);
         --kb-reply-ai-bg: oklch(0.985 0.004 145);
-        --kb-reply-ai-accent: oklch(0.62 0.08 155);
+        --kb-reply-ai-accent: oklch(0.62 0.11 150);
         --kb-terra: var(--kb-brand);
         --kb-terra-soft: var(--kb-brand-soft);
         --kb-blue: var(--kb-brand);
         --kb-blue-soft: var(--kb-brand-soft);
-        --kb-highlight: oklch(0.90 0.07 145 / 0.62);
-        --kb-highlight-strong: oklch(0.82 0.10 145 / 0.78);
+        --kb-highlight: oklch(0.90 0.07 150 / 0.62);
+        --kb-highlight-strong: oklch(0.82 0.10 150 / 0.78);
         --kb-highlight-text: oklch(0.18 0.012 145);
-        --kb-highlight-ring: oklch(0.49 0.105 155 / 0.28);
+        --kb-highlight-ring: oklch(0.55 0.14 150 / 0.28);
       }
       @media (prefers-color-scheme: dark) {
         :root {
@@ -1181,8 +1181,8 @@ const commentSystem = (() => {
           --kb-ink-faint: oklch(0.52 0.014 135);
           --kb-line: oklch(0.36 0.018 145);
           --kb-line-2: oklch(0.29 0.016 145);
-          --kb-brand: oklch(0.70 0.10 155);
-          --kb-brand-strong: oklch(0.55 0.10 155);
+          --kb-brand: oklch(0.70 0.12 150);
+          --kb-brand-strong: oklch(0.55 0.14 150);
           --kb-brand-soft: oklch(0.28 0.035 150);
           --kb-brand-faint: oklch(0.235 0.024 150);
           --kb-panel-shadow: rgba(0,0,0,0.34);
@@ -1191,16 +1191,16 @@ const commentSystem = (() => {
           --kb-reply-user-bg: oklch(0.245 0.026 150);
           --kb-reply-user-border: oklch(0.40 0.052 150);
           --kb-reply-ai-bg: oklch(0.215 0.012 145);
-          --kb-reply-ai-accent: oklch(0.64 0.09 155);
-          --kb-highlight: oklch(0.48 0.09 145 / 0.64);
-          --kb-highlight-strong: oklch(0.58 0.12 145 / 0.78);
+          --kb-reply-ai-accent: oklch(0.64 0.11 150);
+          --kb-highlight: oklch(0.48 0.09 150 / 0.64);
+          --kb-highlight-strong: oklch(0.58 0.12 150 / 0.78);
           --kb-highlight-text: oklch(0.96 0.008 135);
-          --kb-highlight-ring: oklch(0.70 0.10 155 / 0.32);
+          --kb-highlight-ring: oklch(0.70 0.12 150 / 0.32);
         }
       }
       @keyframes kb-card-flash {
         0%   { box-shadow: 0 1px 2px rgba(60,40,20,0.05); border-color: var(--kb-line); }
-        25%  { box-shadow: 0 0 0 3px oklch(0.49 0.105 155 / 0.18); border-color: var(--kb-terra); }
+        25%  { box-shadow: 0 0 0 3px oklch(0.55 0.14 150 / 0.18); border-color: var(--kb-terra); }
         100% { box-shadow: 0 1px 2px rgba(60,40,20,0.05); border-color: var(--kb-line); }
       }
       mark.kb-comment-highlight {
@@ -1218,9 +1218,9 @@ const commentSystem = (() => {
         background: var(--kb-highlight-strong) !important;
       }
       @keyframes kb-mark-pulse-anim {
-        0%   { background: var(--kb-highlight) !important; box-shadow: 0 0 0 0 oklch(0.49 0.105 155 / 0.0); }
+        0%   { background: var(--kb-highlight) !important; box-shadow: 0 0 0 0 oklch(0.55 0.14 150 / 0.0); }
         30%  { background: var(--kb-highlight-strong) !important; box-shadow: 0 0 0 4px var(--kb-highlight-ring); }
-        100% { background: var(--kb-highlight) !important; box-shadow: inset 0 -0.12em 0 var(--kb-highlight-ring), 0 0 0 0 oklch(0.49 0.105 155 / 0.0); }
+        100% { background: var(--kb-highlight) !important; box-shadow: inset 0 -0.12em 0 var(--kb-highlight-ring), 0 0 0 0 oklch(0.55 0.14 150 / 0.0); }
       }
       mark.kb-comment-highlight.kb-mark-pulse {
         animation: kb-mark-pulse-anim 0.85s ease-in-out 1;
@@ -1230,7 +1230,7 @@ const commentSystem = (() => {
       }
       .kb-cmt-card.kb-anchor {
         border-color: var(--kb-terra) !important;
-        box-shadow: 0 0 0 3px oklch(0.49 0.105 155 / 0.14) !important;
+        box-shadow: 0 0 0 3px oklch(0.55 0.14 150 / 0.14) !important;
       }
       #kb-comment-panel {
         position: fixed; top: 0; right: 0; width: 360px; height: 100vh;
@@ -1284,7 +1284,7 @@ const commentSystem = (() => {
       .kb-cmt-card:hover { border-color: var(--kb-line); }
       .kb-cmt-card.kb-ai-unread {
         border-color: var(--kb-blue);
-        box-shadow: 0 0 0 2px oklch(0.49 0.105 155 / 0.10);
+        box-shadow: 0 0 0 2px oklch(0.55 0.14 150 / 0.10);
       }
       .kb-cmt-content {
         max-height: 320px; overflow: hidden; position: relative;
@@ -1385,7 +1385,7 @@ const commentSystem = (() => {
       .kb-reply.ai .kb-reply-body th, .kb-reply.ai .kb-reply-body td { border: 1px solid var(--kb-line); padding: 3px 6px; text-align: left; }
       .kb-reply.ai .kb-reply-body th { background: var(--kb-paper-2); font-weight: 600; }
       .kb-reply.ai .kb-reply-body blockquote { border-left: 2px solid var(--kb-line); padding-left: 8px; margin: 4px 0; color: var(--kb-ink-mute); }
-      .kb-reply.ai .kb-reply-body a { color: var(--kb-blue); text-decoration: none; border-bottom: 1px solid oklch(0.49 0.105 155 / 0.4); }
+      .kb-reply.ai .kb-reply-body a { color: var(--kb-blue); text-decoration: none; border-bottom: 1px solid oklch(0.55 0.14 150 / 0.4); }
       .kb-reply.ai .kb-reply-body a:hover { border-bottom-color: var(--kb-blue); }
       .kb-reply-actions { margin-top: 8px; }
       .kb-reply + .kb-reply { margin-top: 5px; }
@@ -1422,7 +1422,7 @@ const commentSystem = (() => {
       .kb-ai-btn:hover { background: var(--kb-brand); }
       .kb-ai-btn:disabled { background: var(--kb-ink-faint); cursor: not-allowed; }
       .kb-ai-ready-btn {
-        border: 1px solid oklch(0.49 0.105 155 / 0.42);
+        border: 1px solid oklch(0.55 0.14 150 / 0.42);
         background: var(--kb-blue-soft);
         color: var(--kb-blue);
         border-radius: 3px;
@@ -1507,7 +1507,7 @@ const commentSystem = (() => {
         justify-content: space-between;
         gap: 8px;
         padding: 8px 10px;
-        border: 1px solid oklch(0.49 0.105 155 / 0.28);
+        border: 1px solid oklch(0.55 0.14 150 / 0.28);
         border-radius: 6px;
         background: oklch(0.98 0.018 145 / 0.96);
         color: var(--kb-ink);

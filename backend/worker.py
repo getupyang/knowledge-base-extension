@@ -37,12 +37,32 @@ from llm_client import LLMError, LLMTimeoutError, get_llm_client, get_llm_status
 BACKEND_DIR = Path(__file__).resolve().parent
 
 _config_file = Path.home() / ".kb_config"
-if _config_file.exists():
+_CONFIG_MTIME = None
+
+
+def _reload_runtime_config(force: bool = False) -> bool:
+    """Reload ~/.kb_config between jobs so provider switches apply to new work."""
+    global _CONFIG_MTIME
+    try:
+        mtime = _config_file.stat().st_mtime
+    except FileNotFoundError:
+        return False
+    if not force and _CONFIG_MTIME == mtime:
+        return False
+
+    updates = {}
     for _line in _config_file.read_text(encoding="utf-8").splitlines():
         _line = _line.strip()
         if _line and not _line.startswith("#") and "=" in _line:
             _k, _v = _line.split("=", 1)
-            os.environ.setdefault(_k.strip(), _v.strip())
+            updates[_k.strip()] = _v.strip()
+    for _k, _v in updates.items():
+        os.environ[_k] = _v
+    _CONFIG_MTIME = mtime
+    return True
+
+
+_reload_runtime_config(force=True)
 
 DATA_DIR = Path(os.path.expanduser(os.environ.get("KB_DATA_DIR", "~/.knowledge-base-extension"))).resolve()
 LOG_DIR = DATA_DIR / ".logs"
@@ -88,7 +108,7 @@ _PRIVATE_CONTEXT_LEAK_PATTERNS = [
     "Intention-Action Gap",
     "mem-ai 方向",
     "mem-ai 的产品定位",
-    "知识库助手产品迭代",
+    "Margin 产品迭代",
     "基于浏览器插件的 AI 知识管理产品",
     "正在构建一个基于浏览器插件",
     "记忆赛道",
@@ -1137,6 +1157,9 @@ def main():
         try:
             conn = sqlite3.connect(DB_PATH)
             recover_stale_jobs(conn)
+            if _reload_runtime_config():
+                llm = get_llm_status()
+                log(f"runtime config reloaded: {llm.get('selected_provider') or 'MISSING'} ({llm.get('provider_config')})")
             job = lease_next_job(conn)
             conn.close()
             if job is None:

@@ -103,7 +103,7 @@ async function callAI(systemPrompt, msgs) {
       "Authorization": `Bearer ${OPENROUTER_KEY}`,
       "Content-Type": "application/json",
       "HTTP-Referer": "chrome-extension://knowledge-base",
-      "X-Title": "知识库助手"
+      "X-Title": "Margin"
     },
     body: JSON.stringify({
       model: MODEL,

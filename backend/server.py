@@ -219,7 +219,7 @@ def render_index():
 # ── CLAUDE.md 和 Skill 文档路径映射 ──
 CLAUDE_MD_PATHS = {
     "全局 CLAUDE.md": os.path.expanduser("~/.claude/CLAUDE.md"),
-    "知识库助手 CLAUDE.md": os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "CLAUDE.md"),
+    "Margin CLAUDE.md": os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "CLAUDE.md"),
     "Research CLAUDE.md": os.path.join(ROOT, "CLAUDE.md"),
 }
 SKILLS_DIR = os.path.expanduser("~/.claude/skills")

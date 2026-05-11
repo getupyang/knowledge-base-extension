@@ -1,4 +1,4 @@
-// mem-ai 笔记本 - 真实数据驱动，无 mock
+// Margin 笔记本 - 真实数据驱动，无 mock
 // 后端：~/Documents/ai/coding/knowledge-base-extension/backend/agent_api.py
 // 设计：~/mem-ai/docs/memory-backend-design.md
 

@@ -2,6 +2,7 @@
 <html lang="zh">
 <head>
   <meta charset="UTF-8">
+  <title>Margin</title>
   <style>
     :root {
       --kb-paper: #fbfcf6;
@@ -9,8 +10,8 @@
       --kb-ink: #11130f;
       --kb-muted: #5d635a;
       --kb-line: #dce2d6;
-      --kb-brand: #1d7f5f;
-      --kb-brand-dark: #155f49;
+      --kb-brand: oklch(0.55 0.14 150);
+      --kb-brand-dark: oklch(0.42 0.13 150);
       --kb-field: #ffffff;
       --kb-button-text: #ffffff;
     }
@@ -21,14 +22,29 @@
         --kb-ink: #edf4ee;
         --kb-muted: #a9b6ad;
         --kb-line: #2f3a34;
-        --kb-brand: #61b88f;
-        --kb-brand-dark: #3f8f6d;
+        --kb-brand: #62c97e;
+        --kb-brand-dark: #3ea65e;
         --kb-field: #111713;
         --kb-button-text: #ffffff;
       }
     }
-    body { width: 280px; padding: 16px; font-family: -apple-system, sans-serif; font-size: 13px; color: var(--kb-ink); background: var(--kb-paper); }
-    h3 { margin: 0 0 12px; font-size: 15px; }
+    body { width: 320px; padding: 16px; font-family: -apple-system, sans-serif; font-size: 13px; color: var(--kb-ink); background: var(--kb-paper); }
+    h3 { margin: 0; font-size: 18px; font-weight: 800; line-height: 1; letter-spacing: 0; }
+    .popup-head {
+      display: grid;
+      grid-template-columns: 36px minmax(0, 1fr);
+      column-gap: 12px;
+      align-items: center;
+      margin-bottom: 14px;
+    }
+    .popup-head img { display: block; width: 36px; height: 36px; flex: 0 0 auto; }
+    .popup-head > div {
+      display: grid;
+      min-width: 0;
+      gap: 3px;
+      align-content: center;
+    }
+    .popup-head span { display: block; margin: 0; color: var(--kb-muted); font-size: 12px; font-weight: 600; line-height: 1.18; letter-spacing: 0; }
     label { display: block; margin-bottom: 4px; color: var(--kb-muted); font-size: 12px; }
     input {
       width: 100%; box-sizing: border-box;
@@ -47,18 +63,127 @@
     }
     button.kb-secondary:hover { background: #000; }
     .status { margin-top: 8px; font-size: 12px; font-weight: 600; text-align: center; min-height: 18px; padding: 4px 0; border-radius: 6px; color: var(--kb-brand); }
-    .tip { margin-top: 10px; padding: 8px 10px; background: var(--kb-soft); border-radius: 6px; font-size: 11px; color: var(--kb-muted); line-height: 1.5; }
-    .tip b { display: block; color: var(--kb-ink); font-size: 12px; margin-bottom: 2px; }
+    .status.error { color: #ef4444; }
+    .status.neutral { color: var(--kb-muted); }
+    .status-grid { margin-top: 12px; display: grid; gap: 8px; }
+    .status-row {
+      display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center;
+      padding: 10px; background: var(--kb-soft); border-radius: 6px; border: 1px solid transparent;
+    }
+    .row-label { display: block; color: var(--kb-muted); font-size: 11px; margin-bottom: 3px; }
+    .row-value { display: block; color: var(--kb-ink); font-size: 13px; font-weight: 700; line-height: 1.35; }
+    .row-detail { display: block; color: var(--kb-muted); font-size: 11px; line-height: 1.35; margin-top: 2px; }
+    .row-action {
+      width: auto; min-width: 48px; padding: 5px 8px; border: 1px solid var(--kb-line);
+      background: var(--kb-field); color: var(--kb-ink); font-size: 12px; border-radius: 6px;
+    }
+    .row-action:hover { background: var(--kb-paper); }
+    .panel {
+      margin-top: 10px; padding: 10px; border: 1px solid var(--kb-line); border-radius: 6px;
+      background: color-mix(in srgb, var(--kb-field) 80%, var(--kb-soft));
+    }
+    .panel[hidden] { display: none; }
+    .panel-title { font-weight: 700; margin-bottom: 8px; }
+    .choice-grid { display: grid; gap: 6px; }
+    .choice-grid button { text-align: left; background: var(--kb-field); color: var(--kb-ink); border: 1px solid var(--kb-line); }
+    .choice-grid button:hover { border-color: var(--kb-brand); }
+    .choice-grid button.is-selected { border-color: var(--kb-brand); color: var(--kb-brand); box-shadow: inset 3px 0 0 var(--kb-brand); }
+    .choice-grid button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .api-box { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--kb-line); }
+    select {
+      width: 100%; box-sizing: border-box; margin-bottom: 8px; padding: 7px 8px;
+      border: 1px solid var(--kb-line); border-radius: 6px; background: var(--kb-field); color: var(--kb-ink);
+    }
+    .helper { margin-top: 8px; color: var(--kb-muted); font-size: 11px; line-height: 1.45; }
+    .helper strong { color: var(--kb-ink); font-weight: 700; }
+    .inline-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .danger { background: transparent; color: #c2410c; border: 1px solid color-mix(in srgb, #c2410c 45%, var(--kb-line)); }
+    .danger:hover { background: color-mix(in srgb, #c2410c 8%, var(--kb-field)); }
   </style>
 </head>
 <body>
-  <h3>知识库助手 ⚙️</h3>
+  <div class="popup-head">
+    <img src="../../assets/icons/icon32.png" alt="" aria-hidden="true">
+    <div>
+      <h3>Margin</h3>
+      <span>Keep your thinking in Margin</span>
+    </div>
+  </div>
 
   <button id="notebookBtn">打开记忆笔记本</button>
   <div class="status" id="status"></div>
 
-  <div class="tip"><b>本地记忆库</b><span id="localStatus">正在检查 localhost:8766…</span></div>
-  <div class="tip"><b>数据备份</b><span id="backupStatus">正在检查 Notion 外部备份状态…</span></div>
+  <div class="status-grid">
+    <div class="status-row">
+      <div>
+        <span class="row-label">本机资料库</span>
+        <span class="row-value" id="localStatus">正在检查...</span>
+        <span class="row-detail" id="localDetail"></span>
+      </div>
+    </div>
+    <div class="status-row">
+      <div>
+        <span class="row-label">AI 服务</span>
+        <span class="row-value" id="aiStatus">正在检查...</span>
+        <span class="row-detail" id="aiDetail"></span>
+      </div>
+      <button class="row-action" id="aiConfigBtn">切换</button>
+    </div>
+    <div class="status-row">
+      <div>
+        <span class="row-label">云端备份</span>
+        <span class="row-value" id="backupStatus">正在检查...</span>
+        <span class="row-detail" id="backupDetail"></span>
+      </div>
+      <button class="row-action" id="notionConfigBtn">配置</button>
+    </div>
+  </div>
+
+  <section class="panel" id="aiPanel" hidden>
+    <div class="panel-title">切换 AI 服务</div>
+    <div class="choice-grid">
+      <button data-provider="codex_cli" id="useCodexBtn">Codex 直连</button>
+      <button data-provider="claude_code" id="useClaudeBtn">Claude Code 直连</button>
+      <button data-provider="api" id="useApiBtn">千问 / OpenRouter API</button>
+    </div>
+    <div class="api-box" id="apiConfigFields">
+      <label for="apiProvider">API 模型</label>
+      <select id="apiProvider">
+        <option value="qwen">千问 / Qwen</option>
+        <option value="openrouter">OpenRouter</option>
+      </select>
+      <div id="qwenEndpointWrap">
+        <label for="qwenEndpoint">千问服务区域</label>
+        <select id="qwenEndpoint">
+          <option value="qwen_cn">阿里云百炼 / 中国内地</option>
+          <option value="qwen_global">Qwen Global / 新加坡</option>
+          <option value="qwen_coding_cn">Qwen Coding Plan / 中国内地</option>
+          <option value="qwen_coding_global">Qwen Coding Plan / Global</option>
+        </select>
+      </div>
+      <label for="apiModel">默认模型</label>
+      <input id="apiModel" type="text" value="qwen3.5-plus">
+      <label for="apiKey">API Key</label>
+      <input id="apiKey" type="password" placeholder="粘贴 API Key">
+    </div>
+    <button id="saveAiBtn">保存并切换</button>
+    <div class="helper" id="aiDraftHint">选择一个服务后再保存。</div>
+  </section>
+
+  <section class="panel" id="notionPanel" hidden>
+    <div class="panel-title">Notion 云端备份</div>
+    <label for="notionToken">Notion Token</label>
+    <input id="notionToken" type="password" placeholder="ntn_...">
+    <label for="notionDatabaseId">Database ID 或数据库链接</label>
+    <input id="notionDatabaseId" type="text" placeholder="可粘贴整段 Notion 数据库链接">
+    <div class="inline-actions">
+      <button id="saveNotionBtn">保存并开启</button>
+      <button class="danger" id="disableNotionBtn">关闭</button>
+    </div>
+    <div class="helper" id="notionHint">
+      <strong>第一次配置：</strong>在 Notion 的 My integrations 创建 integration，复制 Secret；再打开目标数据库，在 Connections 里授权这个 integration。Database ID 可直接粘贴数据库链接，Margin 会自动提取。
+    </div>
+  </section>
 
   <script src="popup.js"></script>
 </body>

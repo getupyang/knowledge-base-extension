@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "知识库助手",
-  "version": "0.3.7",
-  "description": "选中文字保存到Notion，AI对话自动采集",
+  "name": "Margin",
+  "version": "0.3.8",
+  "description": "划线评论，写下思考和疑问。Margin 在右侧回应，并记住项目、做事方式和想法变化。",
   "permissions": [
     "contextMenus",
     "storage",
@@ -35,7 +35,19 @@
   ],
   "action": {
     "default_popup": "src/popup/index.html",
-    "default_title": "知识库助手"
+    "default_title": "Margin",
+    "default_icon": {
+      "16": "assets/icons/icon16.png",
+      "32": "assets/icons/icon32.png",
+      "48": "assets/icons/icon48.png",
+      "128": "assets/icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "assets/icons/icon16.png",
+    "32": "assets/icons/icon32.png",
+    "48": "assets/icons/icon48.png",
+    "128": "assets/icons/icon128.png"
   },
   "web_accessible_resources": [
     {
