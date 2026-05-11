@@ -4,6 +4,16 @@ function $(id) {
   return document.getElementById(id);
 }
 
+function isWindowsPlatform() {
+  const platform = (
+    (navigator.userAgentData && navigator.userAgentData.platform) ||
+    navigator.platform ||
+    navigator.userAgent ||
+    ""
+  );
+  return /win/i.test(platform);
+}
+
 async function loadRuntimeStatus() {
   const localStatus = $("localStatus");
   const backupStatus = $("backupStatus");
@@ -19,7 +29,9 @@ async function loadRuntimeStatus() {
     status.style.color = "#1d7f5f";
     status.textContent = "本地优先模式";
   } catch (err) {
-    localStatus.textContent = "未连接。请先运行 bash start.sh。";
+    localStatus.textContent = isWindowsPlatform()
+      ? "未连接。请先运行 .\\start.ps1。"
+      : "未连接。请先运行 bash start.sh。";
     backupStatus.textContent = "后端离线时无法确认备份状态。";
     status.style.color = "#ef4444";
     status.textContent = "后端离线";
