@@ -74,9 +74,23 @@ def _find_executable(env_name: str, command: str, extra_paths: list[str]) -> Opt
         path = shutil.which(candidate) if os.path.basename(candidate) == candidate else None
         path = path or os.path.expanduser(candidate)
         if os.path.exists(path):
-            if os.access(path, os.X_OK):
+            if os.access(path, os.X_OK) or os.name == "nt":
                 return path
     return None
+
+
+def _windows_npm_bin(command: str) -> list[str]:
+    if os.name != "nt":
+        return []
+    appdata = os.environ.get("APPDATA")
+    if not appdata:
+        return []
+    npm_dir = Path(appdata) / "npm"
+    return [
+        str(npm_dir / f"{command}.cmd"),
+        str(npm_dir / f"{command}.exe"),
+        str(npm_dir / f"{command}.bat"),
+    ]
 
 
 def find_claude_bin() -> Optional[str]:
@@ -86,6 +100,7 @@ def find_claude_bin() -> Optional[str]:
         [
             os.environ.get("KB_CLAUDE_BIN") or "",
             os.environ.get("CLAUDE_BIN") or "",
+            *_windows_npm_bin("claude"),
             "~/.npm-global/bin/claude",
             "/opt/homebrew/bin/claude",
             "/usr/local/bin/claude",
@@ -98,6 +113,7 @@ def find_codex_bin() -> Optional[str]:
         "MEMAI_CODEX_BIN",
         "codex",
         [
+            *_windows_npm_bin("codex"),
             "~/.npm-global/bin/codex",
             "/opt/homebrew/bin/codex",
             "/usr/local/bin/codex",
@@ -174,9 +190,14 @@ def _child_env() -> dict[str, str]:
     env = os.environ.copy()
     env.setdefault("HOME", str(Path.home()))
     path = env.get("PATH", "")
-    for extra in ("/opt/homebrew/bin", "/usr/local/bin", str(Path.home() / ".npm-global/bin")):
-        if extra not in path:
-            path = f"{extra}:{path}"
+    extras = ["/opt/homebrew/bin", "/usr/local/bin", str(Path.home() / ".npm-global/bin")]
+    if os.name == "nt" and os.environ.get("APPDATA"):
+        extras.insert(0, str(Path(os.environ["APPDATA"]) / "npm"))
+    existing_parts = [part for part in path.split(os.pathsep) if part]
+    for extra in extras:
+        if extra and extra not in existing_parts:
+            existing_parts.insert(0, extra)
+    path = os.pathsep.join(existing_parts)
     env["PATH"] = path
     return env
 

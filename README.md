@@ -146,8 +146,9 @@ This is an active prototype, not a finished product.
 
 | 依赖 | 版本 | 说明 |
 |------|------|------|
-| macOS | 12+ | 目前仅支持 Mac |
-| Python 3 | 3.9+ | `python3 --version` |
+| macOS | 12+ | 继续使用 `bash onboard.sh` / `bash start.sh` |
+| Windows | Windows 10+ | PowerShell / CMD 使用 `.\onboard.ps1` / `.\start.ps1`；WSL 用户在 WSL 里继续走 bash |
+| Python 3 | 3.9+ | macOS: `python3 --version`；Windows: `py -3 --version` 或 `python --version` |
 | Node.js | 18+ | `node --version` |
 | Chrome | 最新 | 用于加载插件 |
 | Notion 账号 | — | 可选，用于外部备份和旧数据导入 |
@@ -157,6 +158,8 @@ This is an active prototype, not a finished product.
 
 - Claude Code：`npm install -g @anthropic-ai/claude-code`，适合已有 Claude 订阅的用户
 - Codex CLI：适合已有 Codex 本地环境的用户
+
+Windows 支持的是「当前终端环境」：如果你在 PowerShell/CMD 里启动知识库助手，就会复用同一个 PowerShell/CMD 里可用的 `claude` / `codex`；如果你在 WSL 里使用 Claude Code / Codex，就在 WSL 里运行本项目的 bash 脚本。不要混用「Windows 后端调用 WSL 里的 CLI」或「WSL 后端调用 Windows 里的 CLI」。
 
 没有本地后端也能使用标准模式，先支持千问 / Qwen API 和 OpenRouter API。
 
@@ -180,11 +183,13 @@ mem-ai 先支持 4 种模型服务：
 3. 千问 / Qwen API：有阿里云百炼或 Qwen API Key 的用户选这个。
 4. OpenRouter API：有 OpenRouter API Key 的用户选这个。
 
-之后想切换默认模型服务时，运行：
+之后想切换默认模型服务时，macOS 运行：
 
 ```bash
 sh choose_ai_service.sh
 ```
+
+Windows 当前先重新运行 `.\onboard.ps1` 并选择重新配置。
 
 菜单会先让你选择 Claude Code / Codex / 千问 / OpenRouter。千问用户选 `3) 千问 / Qwen API` 后，脚本会继续一步步选择 API 类型和默认模型：
 
@@ -251,23 +256,51 @@ https://www.notion.so/你的名字/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx?v=yyyyyyyy
 
 ### 第四步：运行 Onboarding
 
+macOS：
+
 ```bash
 bash onboard.sh
+```
+
+Windows PowerShell：
+
+```powershell
+.\onboard.ps1
+```
+
+如果 PowerShell 拦截本地脚本，可以改用：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\onboard.ps1
+```
+
+Windows CMD：
+
+```bat
+onboard.cmd
 ```
 
 脚本会：
 - 检查这台电脑能否运行知识库助手
 - 准备本机资料库
 - 引导你选择 AI 服务：Claude Code / Codex / 千问 / OpenRouter
-- 询问是否开启开机自动启动
-- 安装完成后自动启动知识库助手
+- macOS 会询问是否开启开机自动启动；Windows 当前不配置开机自启
+- macOS 安装完成后会自动启动；Windows 安装完成后运行 `.\start.ps1` 或 `start.cmd`
 
 ### 第五步：配置项目上下文（可选但推荐）
+
+macOS：
 
 ```bash
 # 编辑这台电脑的本地私有项目背景
 # 不填也可以，AI 会先基于本机 SQLite 里的批注逐步学习
 open ~/.knowledge-base-extension/project_context.md
+```
+
+Windows：
+
+```powershell
+notepad "$HOME\.knowledge-base-extension\project_context.md"
 ```
 
 ### 第六步：加载 Chrome 插件
@@ -283,11 +316,25 @@ open ~/.knowledge-base-extension/project_context.md
 
 ## 每次启动
 
+macOS：
+
 ```bash
 bash start.sh
 ```
 
-如果你在 onboarding 时开启了开机自动启动，重启 Mac 后通常不需要手动运行这一步。看到以下输出说明就绪：
+Windows PowerShell：
+
+```powershell
+.\start.ps1
+```
+
+Windows CMD：
+
+```bat
+start.cmd
+```
+
+如果你在 macOS onboarding 时开启了开机自动启动，重启 Mac 后通常不需要手动运行这一步。Windows 当前不配置开机自启，重启电脑后手动运行 `.\start.ps1` 即可。看到以下输出说明就绪：
 
 ```
 ✓ 知识库服务器：http://localhost:8765
@@ -301,6 +348,8 @@ bash start.sh
 - Chrome 插件弹窗 → 「打开记忆笔记本」
 
 ### 可选：开机自动启动
+
+当前只支持 macOS 自动启动。Windows 用户重启电脑后手动运行 `.\start.ps1` 或 `start.cmd`。
 
 如果不想每次 Mac 重启后手动运行 `bash start.sh`，运行 `bash onboard.sh` 时选择开启「开机自动启动」即可。开启后，下次登录 macOS 时会自动启动知识库助手。
 
@@ -358,8 +407,10 @@ scripts/uninstall-launch-agent
 
 ```
 knowledge-base-extension/
-├── onboard.sh                    # 首次安装
-├── start.sh                    # 每次启动
+├── onboard.sh                  # macOS / WSL 首次安装
+├── start.sh                    # macOS / WSL 每次启动
+├── onboard.ps1 / start.ps1     # Windows PowerShell 入口
+├── onboard.cmd / start.cmd     # Windows CMD 入口
 ├── requirements.txt            # Python 依赖
 ├── .kb_config.example          # 配置文件模板
 ├── manifest.json               # Chrome 插件入口
@@ -394,6 +445,15 @@ bash onboard.sh
 bash start.sh
 ```
 
+Windows PowerShell：
+
+```powershell
+git clone https://github.com/getupyang/knowledge-base-extension.git
+cd knowledge-base-extension
+.\onboard.ps1
+.\start.ps1
+```
+
 然后：
 
 1. 在 Chrome 开发者模式加载本仓库根目录。
@@ -425,6 +485,8 @@ curl http://localhost:8766/health
 ```
 如果失败，重新运行 `bash start.sh`，查看日志：`~/.knowledge-base-extension/.logs/agent_api.log`
 
+Windows 用户重新运行 `.\start.ps1`，日志在 `$HOME\.knowledge-base-extension\.logs\agent_api.log`。
+
 **Q: Notion 备份失败**
 
 检查 Token 和 Database ID 是否正确，以及数据库是否已连接 Integration（步骤 3.3）。Notion 失败不影响本地 SQLite 的批注、AI 回复和共同日记。
@@ -435,7 +497,7 @@ curl http://localhost:8766/health
 
 **Q: Notion 里有旧数据，但共同日记是空的**
 
-升级到最新版后重启 `bash start.sh`，打开记忆笔记本会自动导入一次旧 Notion 数据。也可以手动触发：
+升级到最新版后重启服务（macOS: `bash start.sh`；Windows: `.\start.ps1`），打开记忆笔记本会自动导入一次旧 Notion 数据。也可以手动触发：
 
 ```bash
 curl -X POST http://localhost:8766/notebook/import-notion \
@@ -445,7 +507,7 @@ curl -X POST http://localhost:8766/notebook/import-notion \
 
 **Q: AI 提到了不属于我的项目**
 
-这属于数据隔离问题。新版已经不会信任旧版本可能带来的 maintainer 默认上下文；先升级并重启 `bash start.sh`。如果仍出现，检查并清空这台电脑上的私有上下文文件：
+这属于数据隔离问题。新版已经不会信任旧版本可能带来的 maintainer 默认上下文；先升级并重启服务（macOS: `bash start.sh`；Windows: `.\start.ps1`）。如果仍出现，检查并清空这台电脑上的私有上下文文件：
 
 ```bash
 cat ~/.knowledge-base-extension/project_context.md
@@ -455,11 +517,11 @@ cat ~/.knowledge-base-extension/learned_rules.json
 
 **Q: 没有 Claude Code / Codex 能用吗？**
 
-可以。运行 `bash onboard.sh` 时选择千问 / Qwen API 或 OpenRouter API，即可使用标准模式。标准模式支持评论区回复、记忆笔记本、profile / skills / thinking 蒸馏；本地文件维护和长链路交付任务需要本地 agent 后端。
+可以。运行 `bash onboard.sh` 或 `.\onboard.ps1` 时选择千问 / Qwen API 或 OpenRouter API，即可使用标准模式。标准模式支持评论区回复、记忆笔记本、profile / skills / thinking 蒸馏；本地文件维护和长链路交付任务需要本地 agent 后端。
 
 **Q: 我有 Claude Code，能不额外花 API 钱吗？**
 
-可以。安装并登录后，`onboard.sh` 会检测到 `claude`，默认优先走本地：
+可以。安装并登录后，`onboard.sh` / `onboard.ps1` 会检测当前终端里的 `claude`，默认优先走本地：
 
 ```bash
 npm install -g @anthropic-ai/claude-code
