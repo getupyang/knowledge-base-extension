@@ -6,7 +6,7 @@ This intentionally supports the current terminal environment only:
 - PowerShell/CMD users run the backend in native Windows.
 - WSL users should keep using the Unix shell scripts inside WSL.
 
-The macOS bash onboarding/start path is left untouched.
+The macOS bash setup/start path is left untouched.
 """
 
 from __future__ import annotations
@@ -448,10 +448,10 @@ def configure_ai(existing_config: dict[str, str]) -> dict[str, str]:
     return result
 
 
-def onboard(_: argparse.Namespace) -> None:
+def setup(_: argparse.Namespace) -> None:
     if not is_windows():
-        say("提示：这个入口是给 Windows PowerShell/CMD 用的。macOS 请继续运行 bash onboard.sh。")
-    say("=== 知识库助手 Windows Onboarding ===")
+        say("提示：这个入口是给 Windows PowerShell/CMD 用的。macOS 请继续运行 bash setup.sh。")
+    say("=== 知识库助手 Windows Setup ===")
     say("")
     if sys.version_info < (3, 9):
         raise SystemExit("  ✗ 需要 Python 3.9 或更新版本。")
@@ -554,7 +554,7 @@ def start_process(name: str, cmd: list[str], cwd: Path, log_path: Path, env: dic
 
 def start(_: argparse.Namespace) -> None:
     if not CONFIG_PATH.exists():
-        raise SystemExit(f"✗ 未找到配置文件 {CONFIG_PATH}。请先运行 .\\onboard.ps1。")
+        raise SystemExit(f"✗ 未找到配置文件 {CONFIG_PATH}。请先运行 .\\setup.ps1。")
     config = load_config()
     env = apply_config_to_env(config)
     data_dir = data_dir_from_config(config)
@@ -666,7 +666,7 @@ def status(_: argparse.Namespace) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Knowledge Base Extension Windows launcher")
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("onboard").set_defaults(func=onboard)
+    sub.add_parser("setup").set_defaults(func=setup)
     sub.add_parser("start").set_defaults(func=start)
     sub.add_parser("stop").set_defaults(func=stop)
     sub.add_parser("status").set_defaults(func=status)

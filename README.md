@@ -146,8 +146,8 @@ This is an active prototype, not a finished product.
 
 | 依赖 | 版本 | 说明 |
 |------|------|------|
-| macOS | 12+ | 继续使用 `bash onboard.sh` / `bash start.sh` |
-| Windows | Windows 10+ | PowerShell / CMD 使用 `.\onboard.ps1` / `.\start.ps1`；WSL 用户在 WSL 里继续走 bash |
+| macOS | 12+ | 继续使用 `bash setup.sh` / `bash start.sh` |
+| Windows | Windows 10+ | PowerShell / CMD 使用 `.\setup.ps1` / `.\start.ps1`；WSL 用户在 WSL 里继续走 bash |
 | Python 3 | 3.9+ | macOS: `python3 --version`；Windows: `py -3 --version` 或 `python --version` |
 | Node.js | 18+ | `node --version` |
 | Chrome | 最新 | 用于加载插件 |
@@ -189,7 +189,7 @@ mem-ai 先支持 4 种模型服务：
 sh choose_ai_service.sh
 ```
 
-Windows 当前先重新运行 `.\onboard.ps1` 并选择重新配置。
+Windows 当前先重新运行 `.\setup.ps1` 并选择重新配置。
 
 菜单会先让你选择 Claude Code / Codex / 千问 / OpenRouter。千问用户选 `3) 千问 / Qwen API` 后，脚本会继续一步步选择 API 类型和默认模型：
 
@@ -254,30 +254,30 @@ https://www.notion.so/你的名字/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx?v=yyyyyyyy
 ```
 注意：`?v=` 后面的是 view ID，**不要复制错**。
 
-### 第四步：运行 Onboarding
+### 第四步：运行 Setup
 
 macOS：
 
 ```bash
-bash onboard.sh
+bash setup.sh
 ```
 
 Windows PowerShell：
 
 ```powershell
-.\onboard.ps1
+.\setup.ps1
 ```
 
 如果 PowerShell 拦截本地脚本，可以改用：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\onboard.ps1
+powershell -ExecutionPolicy Bypass -File .\setup.ps1
 ```
 
 Windows CMD：
 
 ```bat
-onboard.cmd
+setup.cmd
 ```
 
 脚本会：
@@ -334,7 +334,7 @@ Windows CMD：
 start.cmd
 ```
 
-如果你在 macOS onboarding 时开启了开机自动启动，重启 Mac 后通常不需要手动运行这一步。Windows 当前不配置开机自启，重启电脑后手动运行 `.\start.ps1` 即可。看到以下输出说明就绪：
+如果你在 macOS 首次安装时开启了开机自动启动，重启 Mac 后通常不需要手动运行这一步。Windows 当前不配置开机自启，重启电脑后手动运行 `.\start.ps1` 即可。看到以下输出说明就绪：
 
 ```
 ✓ 知识库服务器：http://localhost:8765
@@ -351,7 +351,7 @@ start.cmd
 
 当前只支持 macOS 自动启动。Windows 用户重启电脑后手动运行 `.\start.ps1` 或 `start.cmd`。
 
-如果不想每次 Mac 重启后手动运行 `bash start.sh`，运行 `bash onboard.sh` 时选择开启「开机自动启动」即可。开启后，下次登录 macOS 时会自动启动知识库助手。
+如果不想每次 Mac 重启后手动运行 `bash start.sh`，运行 `bash setup.sh` 时选择开启「开机自动启动」即可。开启后，下次登录 macOS 时会自动启动知识库助手。
 
 已经安装过、只想补上开机自动恢复的用户，也可以只运行一次：
 
@@ -407,10 +407,10 @@ scripts/uninstall-launch-agent
 
 ```
 knowledge-base-extension/
-├── onboard.sh                  # macOS / WSL 首次安装
+├── setup.sh                  # macOS / WSL 首次安装
 ├── start.sh                    # macOS / WSL 每次启动
-├── onboard.ps1 / start.ps1     # Windows PowerShell 入口
-├── onboard.cmd / start.cmd     # Windows CMD 入口
+├── setup.ps1 / start.ps1     # Windows PowerShell 入口
+├── setup.cmd / start.cmd     # Windows CMD 入口
 ├── requirements.txt            # Python 依赖
 ├── .kb_config.example          # 配置文件模板
 ├── manifest.json               # Chrome 插件入口
@@ -428,8 +428,7 @@ knowledge-base-extension/
 │   ├── company_culture.md      # AI 输出行为规范（所有 agent 共用）
 │   └── project_context.template.md  # 项目上下文模板（复制后自己填）
 ├── src/notebook/               # 记忆笔记本前端
-└── docs/
-    └── decisions/              # 设计决策记录
+└── WINDOWS.md                  # Windows 终端支持说明
 ```
 
 ---
@@ -441,7 +440,7 @@ knowledge-base-extension/
 ```bash
 git clone https://github.com/getupyang/knowledge-base-extension.git
 cd knowledge-base-extension
-bash onboard.sh
+bash setup.sh
 bash start.sh
 ```
 
@@ -450,7 +449,7 @@ Windows PowerShell：
 ```powershell
 git clone https://github.com/getupyang/knowledge-base-extension.git
 cd knowledge-base-extension
-.\onboard.ps1
+.\setup.ps1
 .\start.ps1
 ```
 
@@ -517,11 +516,11 @@ cat ~/.knowledge-base-extension/learned_rules.json
 
 **Q: 没有 Claude Code / Codex 能用吗？**
 
-可以。运行 `bash onboard.sh` 或 `.\onboard.ps1` 时选择千问 / Qwen API 或 OpenRouter API，即可使用标准模式。标准模式支持评论区回复、记忆笔记本、profile / skills / thinking 蒸馏；本地文件维护和长链路交付任务需要本地 agent 后端。
+可以。运行 `bash setup.sh` 或 `.\setup.ps1` 时选择千问 / Qwen API 或 OpenRouter API，即可使用标准模式。标准模式支持评论区回复、记忆笔记本、profile / skills / thinking 蒸馏；本地文件维护和长链路交付任务需要本地 agent 后端。
 
 **Q: 我有 Claude Code，能不额外花 API 钱吗？**
 
-可以。安装并登录后，`onboard.sh` / `onboard.ps1` 会检测当前终端里的 `claude`，默认优先走本地：
+可以。安装并登录后，`setup.sh` / `setup.ps1` 会检测当前终端里的 `claude`，默认优先走本地：
 
 ```bash
 npm install -g @anthropic-ai/claude-code

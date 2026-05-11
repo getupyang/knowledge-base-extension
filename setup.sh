@@ -1,7 +1,7 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════
-# 知识库助手 — 首次 onboarding 脚本
-# 用法：bash onboard.sh
+# 知识库助手 — 首次安装脚本
+# 用法：bash setup.sh
 # ═══════════════════════════════════════════════════════
 
 set -e
@@ -17,7 +17,7 @@ else
   RESET=""
 fi
 
-echo "=== 知识库助手 Onboarding ==="
+echo "=== 知识库助手 Setup ==="
 echo ""
 
 # ── 1. 检查依赖 ──────────────────────────────────────────
@@ -476,7 +476,7 @@ if pip3 install -q -r "$REPO_DIR/requirements.txt"; then
 else
   echo "  ✗ 运行环境准备失败。"
   echo "  常见原因：网络不可用、代理无法连接，或者 Python 证书没有配置好。"
-  echo "  请解决上面的 pip 错误后，重新运行 bash onboard.sh。"
+  echo "  请解决上面的 pip 错误后，重新运行 bash setup.sh。"
   exit 1
 fi
 
