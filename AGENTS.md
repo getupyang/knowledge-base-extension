@@ -20,6 +20,32 @@
 
 如果遇到 Notion、SQLite、旧路径冲突，优先确认当前运行版本和数据路径，不要凭旧文档猜。
 
+## 私有记忆与代码仓库边界
+
+这个仓库可以开源运行时代码，但不能携带任何真实用户的私有记忆。开发时按下面边界处理：
+
+必须留在本机、默认不进 Git：
+
+- SQLite 数据库、Notion 缓存、评论、AI 回复、划线原文、highlight anchors、context_packs、jobs、memory_events。
+- `backend/user_profile.md`、`backend/project_context.md`、`backend/learned_rules.json`、thinking snapshots、任何从真实用户行为蒸馏出的记忆文件。
+- gold set、真实 replay case、朋友/用户 DB 导出、含真实评论或页面内容的截图。
+- API key、Notion token/database id、本地 provider/agent 私有配置。
+
+可以进入 Git：
+
+- 源代码、schema、migration、prompt 模板、validator、UI、回归脚本。
+- 假数据 fixtures 和脱敏样例。
+- 机制文档，但不能把第零号用户或任何真实用户的项目/评论/记忆写成默认内容。
+
+个性化回复和 notebook 生成规则：
+
+- 只能从当前设备的本地 SQLite、当前设备私有上下文文件、当前页面内容、或用户显式授权的 connector 装载私有记忆。
+- 不允许在空库、导入失败、Notion 不通、SQLite 为空时 fallback 到 maintainer / user0 / 仓库默认记忆。
+- 公开外部知识可以用于研究、解释和补充背景；但外部资料不能自动变成“用户自己的项目/关注点/记忆”，除非本机证据明确支持。
+- “对你项目的关联”“你 & 项目”“思考地图”等结论必须可追溯到本机证据；没有证据时展示空状态、低置信候选或外部背景，不要硬编。
+
+提交前必须检查 `.gitignore` 和 `git status --short`。只 stage 本次相关文件；发现私有数据进入 Git 时，先停下并清理，不继续叠加提交。
+
 ## 动手前健康检查
 
 凡是改后端、worker、provider、DB、notebook 数据接口、Chrome extension 与后端交互前，先跑：
@@ -60,6 +86,34 @@ scripts/kb-regression
 
 最终回复要说明：本次跑了 smoke、局部回归还是 full regression；没跑 full 时说明原因和残余风险。
 
+## GitHub 提交必须补短文档
+
+每次有代码、配置、产品体验、部署流程或回归脚本变更推到 GitHub，都必须补一份短文档或更新现有文档。不要只依赖 commit message、聊天记录或代码 diff。
+
+文档要求：
+
+- 文档必须写明记录日期，例如 `记录时间：2026-05-11`；如果是排查/发布过程，还要写明发生时间或验证时间。
+- 文档必须关联 commit hash、分支、涉及文件、用户可见行为变化和验证命令。
+- 文档必须说明适用范围和过时风险；凡是依赖当前 UI、当前数据库状态、当前运行进程、当前 provider、当前浏览器插件加载方式的内容，都要明确“这是当时状态，可能随实现变化过时”。
+- 文档优先放在 `docs/`、`REGRESSION.md`、`README.md` 或对应功能的近邻文档；如果只是一次小修，可以在同一功能文档追加一个 dated note。
+- 如果这次提交本身就是本地 AGENTS / 协作规则变更，可以只更新 AGENTS；如果是产品/运行时代码变更，不能只更新 AGENTS。
+- commit 前检查文档里不要写入真实用户私有记忆、真实评论全文、API key、Notion token、SQLite 路径外的私有数据或不可公开截图。
+
+推荐最小短文档结构：
+
+```md
+## YYYY-MM-DD · <改动标题>
+
+- 记录时间：
+- 关联 commit：
+- 改了什么：
+- 为什么改：
+- 用户如何验收：
+- 已验证：
+- 适用范围：
+- 可能过时的地方：
+```
+
 ## Chrome Extension / Notebook 刷新规则
 
 如果改了这些内容：
@@ -93,19 +147,23 @@ final 必须提醒用户：
 
 ## 多 Codex 窗口协作
 
-这个仓库可能同时被多个 Codex 窗口修改。开始 coding 前先跑：
+这个仓库可能同时被多个 Codex 窗口修改。开始任何 coding 前，必须先隔离工作区：
 
 ```bash
-git fetch
+git fetch origin
 git status --short --branch
+git worktree add ../knowledge-base-extension-<task> -b feat/<task> origin/main
 ```
 
 执行规则：
 
+- 每个 Codex 窗口必须拥有自己的 git 分支；多人/多窗口或已有脏工作区时，必须使用独立 `git worktree`。
+- 不允许直接在共享 `main` 工作区里开发。`main` 只用于同步、最终合并和用户明确要求的推送。
+- 如果已经在 `main` 上准备改代码，先停下，新建 branch/worktree 后再动手。
 - 明确本窗口负责哪些文件。
 - 不碰未分配文件，不回滚他人改动。
 - commit 前只 stage 本次相关文件。
-- push 前确认当前分支、最近 commit、远端 main。
+- push 前确认当前分支、最近 commit、远端 main；默认推 feature branch，只有用户明确要求并完成检查后才推 main。
 - final 中列出仍存在的未提交差异，并说明是否与本次无关。
 
 ## 最终回复必须可验收
