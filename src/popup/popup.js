@@ -238,6 +238,7 @@ async function saveNotionConfig() {
     });
     renderRuntime({ ...(runtimeState || {}), notion: data.notion, notionConfigured: data.notion?.configured });
     $("notionToken").value = "";
+    $("notionPanel").hidden = true;
     setStatus("Notion 已开启", "");
   } catch (err) {
     setStatus(err.message || "Notion 配置失败", "error");
@@ -245,16 +246,40 @@ async function saveNotionConfig() {
 }
 
 async function disableNotionConfig() {
-  setStatus("正在关闭 Notion 备份...", "neutral");
+  setStatus("正在暂停 Notion 备份...", "neutral");
   try {
     const data = await api("/config/notion", {
       method: "POST",
       body: JSON.stringify({ enabled: false }),
     });
     renderRuntime({ ...(runtimeState || {}), notion: data.notion, notionConfigured: false });
-    setStatus("Notion 备份已关闭", "");
+    $("notionPanel").hidden = true;
+    setStatus("Notion 备份已暂停", "");
   } catch (err) {
     setStatus(err.message || "关闭失败", "error");
+  }
+}
+
+async function createNotionDatabase() {
+  const token = $("notionToken").value.trim();
+  const parentPage = $("notionParentPage").value.trim();
+  setStatus("正在创建 Notion 数据库...", "neutral");
+  $("createNotionDatabaseBtn").disabled = true;
+  try {
+    const data = await api("/config/notion/create-database", {
+      method: "POST",
+      body: JSON.stringify({ token, parentPage }),
+    });
+    renderRuntime({ ...(runtimeState || {}), notion: data.notion, notionConfigured: data.notion?.configured });
+    $("notionDatabaseId").value = data.databaseId || "";
+    $("notionToken").value = "";
+    $("notionParentPage").value = "";
+    $("notionPanel").hidden = true;
+    setStatus("Notion 数据库已创建", "");
+  } catch (err) {
+    setStatus(err.message || "创建失败", "error");
+  } finally {
+    $("createNotionDatabaseBtn").disabled = false;
   }
 }
 
@@ -263,11 +288,11 @@ function syncNotionForm(notion) {
   if (notion.databaseId && !$("notionDatabaseId").value.trim()) {
     $("notionDatabaseId").value = notion.databaseId;
   }
-  $("saveNotionBtn").textContent = notion.saved && !notion.enabled ? "重新开启" : "保存并开启";
-  $("disableNotionBtn").disabled = !notion.configured && !notion.saved;
+  $("saveNotionBtn").textContent = notion.saved && !notion.enabled ? "重新开启云端备份" : "保存并开启";
+  $("disableNotionBtn").disabled = !notion.configured;
   $("notionHint").innerHTML = notion.saved
-    ? "已保存过 Notion 配置。关闭只会暂停云端备份，不会删除 Token 和 Database ID。"
-    : "<strong>第一次配置：</strong>在 Notion 的 My integrations 创建 integration，复制 Secret；再打开目标数据库，在 Connections 里授权这个 integration。Database ID 可直接粘贴数据库链接，Margin 会自动提取。";
+    ? "已保存过 Notion 配置。暂停云端备份不会删除 Token 和 Database ID。"
+    : "<strong>第一次配置：</strong>先打开 Notion integrations 创建 integration 并复制 Secret；再新建一个空白 Notion 页面，在 Share / Connections 里授权这个 integration，把这个页面链接粘贴到上面，点自动创建数据库。";
 }
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -301,5 +326,17 @@ document.addEventListener("DOMContentLoaded", () => {
   $("saveAiBtn").addEventListener("click", saveAiConfig);
   $("saveNotionBtn").addEventListener("click", saveNotionConfig);
   $("disableNotionBtn").addEventListener("click", disableNotionConfig);
+  $("createNotionDatabaseBtn").addEventListener("click", createNotionDatabase);
+  $("openNotionIntegrationsBtn").addEventListener("click", () => {
+    chrome.tabs.create({ url: "https://www.notion.so/my-integrations" });
+  });
+  $("closeAiPanelBtn").addEventListener("click", () => {
+    $("aiPanel").hidden = true;
+    setStatus("");
+  });
+  $("closeNotionPanelBtn").addEventListener("click", () => {
+    $("notionPanel").hidden = true;
+    setStatus("");
+  });
   loadRuntimeStatus();
 });

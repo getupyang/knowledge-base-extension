@@ -83,7 +83,13 @@
       background: color-mix(in srgb, var(--kb-field) 80%, var(--kb-soft));
     }
     .panel[hidden] { display: none; }
-    .panel-title { font-weight: 700; margin-bottom: 8px; }
+    .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+    .panel-title { font-weight: 700; }
+    .panel-close {
+      width: auto; min-width: 44px; padding: 4px 8px; border: 1px solid var(--kb-line);
+      background: var(--kb-field); color: var(--kb-muted); font-size: 12px; border-radius: 6px;
+    }
+    .panel-close:hover { background: var(--kb-paper); color: var(--kb-ink); }
     .choice-grid { display: grid; gap: 6px; }
     .choice-grid button { text-align: left; background: var(--kb-field); color: var(--kb-ink); border: 1px solid var(--kb-line); }
     .choice-grid button:hover { border-color: var(--kb-brand); }
@@ -96,8 +102,17 @@
     }
     .helper { margin-top: 8px; color: var(--kb-muted); font-size: 11px; line-height: 1.45; }
     .helper strong { color: var(--kb-ink); font-weight: 700; }
-    .inline-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-    .danger { background: transparent; color: #c2410c; border: 1px solid color-mix(in srgb, #c2410c 45%, var(--kb-line)); }
+    .text-action {
+      width: auto; padding: 0; border: 0; background: transparent; color: var(--kb-brand);
+      font-size: 11px; font-weight: 700; text-align: left;
+    }
+    .text-action:hover { background: transparent; color: var(--kb-brand-dark); }
+    .secondary-action {
+      margin-bottom: 10px; background: var(--kb-field); color: var(--kb-ink);
+      border: 1px solid var(--kb-line);
+    }
+    .secondary-action:hover { background: var(--kb-paper); }
+    .danger { margin-top: 8px; background: transparent; color: #c2410c; border: 1px solid color-mix(in srgb, #c2410c 45%, var(--kb-line)); }
     .danger:hover { background: color-mix(in srgb, #c2410c 8%, var(--kb-field)); }
   </style>
 </head>
@@ -140,7 +155,10 @@
   </div>
 
   <section class="panel" id="aiPanel" hidden>
-    <div class="panel-title">切换 AI 服务</div>
+    <div class="panel-head">
+      <div class="panel-title">切换 AI 服务</div>
+      <button class="panel-close" id="closeAiPanelBtn">收起</button>
+    </div>
     <div class="choice-grid">
       <button data-provider="codex_cli" id="useCodexBtn">Codex 直连</button>
       <button data-provider="claude_code" id="useClaudeBtn">Claude Code 直连</button>
@@ -171,15 +189,20 @@
   </section>
 
   <section class="panel" id="notionPanel" hidden>
-    <div class="panel-title">Notion 云端备份</div>
+    <div class="panel-head">
+      <div class="panel-title">Notion 云端备份</div>
+      <button class="panel-close" id="closeNotionPanelBtn">收起</button>
+    </div>
     <label for="notionToken">Notion Token</label>
     <input id="notionToken" type="password" placeholder="ntn_...">
+    <button class="text-action" id="openNotionIntegrationsBtn">打开 Notion integrations 页面</button>
+    <label for="notionParentPage">放数据库的 Notion 页面链接</label>
+    <input id="notionParentPage" type="text" placeholder="新建一个空白页，授权 integration 后粘贴页面链接">
+    <button class="secondary-action" id="createNotionDatabaseBtn">自动创建数据库</button>
     <label for="notionDatabaseId">Database ID 或数据库链接</label>
     <input id="notionDatabaseId" type="text" placeholder="可粘贴整段 Notion 数据库链接">
-    <div class="inline-actions">
-      <button id="saveNotionBtn">保存并开启</button>
-      <button class="danger" id="disableNotionBtn">关闭</button>
-    </div>
+    <button id="saveNotionBtn">保存并开启</button>
+    <button class="danger" id="disableNotionBtn">暂停云端备份</button>
     <div class="helper" id="notionHint">
       <strong>第一次配置：</strong>在 Notion 的 My integrations 创建 integration，复制 Secret；再打开目标数据库，在 Connections 里授权这个 integration。Database ID 可直接粘贴数据库链接，Margin 会自动提取。
     </div>

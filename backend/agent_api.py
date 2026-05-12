@@ -4694,6 +4694,12 @@ class NotionConfigUpdate(BaseModel):
     enabled: bool = True
 
 
+class NotionCreateDatabaseRequest(BaseModel):
+    token: str = ""
+    parentPage: str = ""
+    title: str = "Margin 批注备份"
+
+
 @app.post("/config/notion")
 def update_notion_config(payload: NotionConfigUpdate, request: Request):
     _require_extension_origin(request)
@@ -4739,6 +4745,97 @@ def update_notion_config(payload: NotionConfigUpdate, request: Request):
             "databaseIdSet": bool(database_id),
             "databaseId": database_id if database_id else "",
         },
+    }
+
+
+def _public_notion_status(enabled: bool, token: str, database_id: str) -> dict:
+    configured = bool(enabled and token and database_id)
+    return {
+        "enabled": bool(enabled),
+        "configured": configured,
+        "saved": bool(token and database_id),
+        "tokenSet": bool(token),
+        "databaseIdSet": bool(database_id),
+        "databaseId": database_id if database_id else "",
+    }
+
+
+def _notion_create_database_payload(parent_page_id: str, title: str) -> dict:
+    return {
+        "parent": {"type": "page_id", "page_id": parent_page_id},
+        "title": [{"type": "text", "text": {"content": title or "Margin 批注备份"}}],
+        "properties": {
+            "标题": {"title": {}},
+            "来源平台": {"select": {"options": [
+                {"name": "网页", "color": "green"},
+                {"name": "PDF", "color": "blue"},
+                {"name": "Notion", "color": "purple"},
+            ]}},
+            "来源URL": {"url": {}},
+            "原文片段": {"rich_text": {}},
+            "我的想法": {"rich_text": {}},
+            "评论区对话": {"rich_text": {}},
+        },
+    }
+
+
+@app.post("/config/notion/create-database")
+def create_notion_database(payload: NotionCreateDatabaseRequest, request: Request):
+    _require_extension_origin(request)
+    existing_token, _ = _notion_saved_credentials()
+    token = (payload.token or "").strip() or existing_token
+    parent_page_id = _extract_notion_database_id(payload.parentPage)
+    if not token:
+        raise HTTPException(status_code=400, detail="请先填写 Notion Token")
+    if not parent_page_id:
+        raise HTTPException(status_code=400, detail="请粘贴放置数据库的 Notion 页面链接")
+
+    body = json.dumps(
+        _notion_create_database_payload(parent_page_id, payload.title),
+        ensure_ascii=False,
+    ).encode()
+    req = urllib.request.Request(
+        "https://api.notion.com/v1/databases",
+        data=body,
+        headers=_notion_headers(token),
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode() if e.fp else str(e)
+        try:
+            parsed = json.loads(detail)
+            message = parsed.get("message") or detail
+        except Exception:
+            message = detail
+        if e.code in (403, 404):
+            message = (
+                "Notion 没有权限在这个页面下创建数据库。请打开目标页面，"
+                "在 Share / Connections 里添加你的 Margin integration 后再试。"
+            )
+        raise HTTPException(status_code=502, detail=message[:1000])
+    except urllib.error.URLError as e:
+        raise HTTPException(status_code=502, detail=str(e)[:1000])
+
+    database_id = _extract_notion_database_id(data.get("id") or "")
+    if not database_id:
+        raise HTTPException(status_code=502, detail="Notion 创建成功但没有返回 database id")
+
+    _write_config_values({
+        "MEMAI_NOTION_BACKUP_ENABLED": "1",
+        "KB_NOTION_BACKUP_ENABLED": "1",
+        "NOTION_TOKEN": token,
+        "NOTION_DATABASE_ID": database_id,
+        "KB_NOTION_TOKEN": token,
+        "KB_NOTION_DATABASE_ID": database_id,
+    })
+    return {
+        "ok": True,
+        "databaseId": database_id,
+        "url": data.get("url") or "",
+        "notion": _public_notion_status(True, token, database_id),
     }
 
 
