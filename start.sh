@@ -17,7 +17,7 @@ echo "=== 启动工作台 ==="
 if [ ! -f "$CONFIG_FILE" ]; then
   echo "✗ 未找到配置文件 $CONFIG_FILE"
   echo "  还没有完成首次安装和 AI 服务配置。"
-  echo "  请先运行：bash $REPO_DIR/onboard.sh"
+  echo "  请先运行：bash $REPO_DIR/setup.sh"
   exit 1
 fi
 set -a

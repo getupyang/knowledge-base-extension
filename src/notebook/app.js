@@ -8,6 +8,23 @@ const BETTER_QUESTION_ASK_AI = "kb_better_question_ask_ai";
 // ─── 工具 ───
 function $(id) { return document.getElementById(id); }
 
+function isWindowsPlatform() {
+  const platform = (
+    (navigator.userAgentData && navigator.userAgentData.platform) ||
+    navigator.platform ||
+    navigator.userAgent ||
+    ""
+  );
+  return /win/i.test(platform);
+}
+
+function offlineBackendCalloutHtml() {
+  if (isWindowsPlatform()) {
+    return `<em>知识库助手还没启动？</em><br><span class="kb-nb-mono-soft">.\\start.ps1</span>`;
+  }
+  return `<em>后端 agent_api.py 没启动？</em><br><span class="kb-nb-mono-soft">cd backend && python3 agent_api.py</span>`;
+}
+
 function escapeHtml(s) {
   return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
 }
@@ -253,7 +270,7 @@ async function loadOverview() {
     maybeImportFromNotion(data);
   } catch (e) {
     $("kb-nb-overview-sync").textContent = "后端离线（localhost:8766）";
-    $("kb-nb-callout-body").innerHTML = `<em>后端 agent_api.py 没启动？</em><br><span class="kb-nb-mono-soft">cd backend && python3 agent_api.py</span>`;
+    $("kb-nb-callout-body").innerHTML = offlineBackendCalloutHtml();
   }
 }
 

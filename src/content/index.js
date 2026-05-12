@@ -41,6 +41,16 @@ function showToast(text, type) {
   setTimeout(() => { toast.style.opacity = "0"; setTimeout(() => toast.remove(), 300); }, 3000);
 }
 
+function isWindowsPlatform() {
+  const platform = (
+    (navigator.userAgentData && navigator.userAgentData.platform) ||
+    navigator.platform ||
+    navigator.userAgent ||
+    ""
+  );
+  return /win/i.test(platform);
+}
+
 function truncate(str, max) {
   if (!str) return "";
   return str.length > max ? str.slice(0, max) + "..." : str;
@@ -2502,7 +2512,9 @@ const commentSystem = (() => {
       if (msg.includes("Extension context invalidated")) {
         failureText = "AI 回复失败：插件已失效，请刷新页面后重试。";
       } else if (msg.includes("Failed to fetch") || msg.includes("NetworkError")) {
-        failureText = "AI 回复失败：无法连接本地服务。请检查是否已运行 start.sh 启动后端（终端执行：bash start.sh）";
+        failureText = isWindowsPlatform()
+          ? "AI 回复失败：无法连接本地服务。请检查是否已运行 .\\start.ps1 启动后端"
+          : "AI 回复失败：无法连接本地服务。请检查是否已运行 start.sh 启动后端（终端执行：bash start.sh）";
       } else {
         failureText = "AI 回复失败：" + msg;
       }

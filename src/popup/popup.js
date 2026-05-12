@@ -14,6 +14,16 @@ function $(id) {
   return document.getElementById(id);
 }
 
+function isWindowsPlatform() {
+  const platform = (
+    (navigator.userAgentData && navigator.userAgentData.platform) ||
+    navigator.platform ||
+    navigator.userAgent ||
+    ""
+  );
+  return /win/i.test(platform);
+}
+
 function setStatus(text, kind = "") {
   const el = $("status");
   el.textContent = text || "";
@@ -34,7 +44,7 @@ function togglePanel(id) {
 
 function renderOffline() {
   setText("localStatus", "未连接");
-  setText("localDetail", "请先运行 bash start.sh");
+  setText("localDetail", isWindowsPlatform() ? "请先运行 .\\start.ps1" : "请先运行 bash start.sh");
   setText("aiStatus", "无法确认");
   setText("aiDetail", "");
   setText("backupStatus", "无法确认");
