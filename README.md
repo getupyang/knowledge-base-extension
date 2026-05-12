@@ -142,6 +142,19 @@ This is an active prototype, not a finished product.
 
 ---
 
+## 支持系统
+
+当前主分支支持：
+
+- macOS：使用 `bash setup.sh` / `bash start.sh`
+- Windows PowerShell：使用 `.\setup.ps1` / `.\start.ps1`
+- Windows CMD：使用 `setup.cmd` / `start.cmd`
+- WSL：在 WSL 内使用 bash 脚本，不和 Windows 终端混用
+
+Windows 支持已经有真实用户在 Windows 上完成安装并跑通。当前不支持 Windows 开机自动启动、GUI 安装器、Windows 后端调用 WSL 里的 CLI，或 WSL 后端调用 Windows 里的 CLI。
+
+---
+
 ## 前置要求
 
 | 依赖 | 版本 | 说明 |
