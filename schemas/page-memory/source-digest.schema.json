@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mem-ai.local/schemas/page-memory/source-digest.schema.json",
+  "title": "SourceDigest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "source_id",
+    "page_url_hash",
+    "page_title",
+    "content_hash",
+    "cleaned_content_hash",
+    "normalized_text_hash",
+    "cleaned_text_chars",
+    "extractor",
+    "digest_version",
+    "document_type",
+    "sections",
+    "claims",
+    "entities",
+    "retrieval_hints",
+    "limitations",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": { "type": "string", "const": "source_digest.v0" },
+    "source_id": { "type": "string", "minLength": 1 },
+    "page_url_hash": { "type": "string", "pattern": "^[a-f0-9]{16}$" },
+    "page_title": { "type": "string" },
+    "content_hash": { "type": "string", "pattern": "^[a-f0-9]{16}$" },
+    "cleaned_content_hash": { "type": "string", "pattern": "^[a-f0-9]{16}$" },
+    "normalized_text_hash": { "type": "string", "pattern": "^[a-f0-9]{16}$" },
+    "cleaned_text_chars": { "type": "integer", "minimum": 0 },
+    "extractor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "span_base"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "span_base": { "type": "string", "const": "normalized_text" }
+      }
+    },
+    "digest_version": { "type": "string" },
+    "document_type": {
+      "type": "string",
+      "enum": ["article", "paper", "product_page", "docs", "github", "social_discussion", "news_digest", "unknown"]
+    },
+    "sections": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/section" }
+    },
+    "claims": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/claim" }
+    },
+    "entities": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/entity" }
+    },
+    "retrieval_hints": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/retrieval_hint" }
+    },
+    "limitations": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "created_at": { "type": "string" }
+  },
+  "$defs": {
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end", "span_base"],
+      "properties": {
+        "start": { "type": "integer", "minimum": 0 },
+        "end": { "type": "integer", "minimum": 0 },
+        "span_base": { "type": "string", "const": "normalized_text" }
+      }
+    },
+    "section": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["section_id", "heading", "summary", "source_span", "quote_hash"],
+      "properties": {
+        "section_id": { "type": "string", "minLength": 1 },
+        "heading": { "type": "string" },
+        "summary": { "type": "string" },
+        "source_span": { "$ref": "#/$defs/span" },
+        "quote_hash": { "type": "string", "pattern": "^[a-f0-9]{16}$" }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claim", "source_section_id", "source_span", "quote_hash", "confidence"],
+      "properties": {
+        "claim": { "type": "string", "minLength": 1 },
+        "source_section_id": { "type": "string" },
+        "source_span": { "$ref": "#/$defs/span" },
+        "quote_hash": { "type": "string", "pattern": "^[a-f0-9]{16}$" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "entity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type", "source_section_ids"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "type": { "type": "string" },
+        "source_section_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "retrieval_hint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hint", "reason", "source_section_ids", "must_match_terms"],
+      "properties": {
+        "hint": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string" },
+        "source_section_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        },
+        "must_match_terms": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}

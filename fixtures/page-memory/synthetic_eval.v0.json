@@ -1,0 +1,523 @@
+{
+  "fixture_version": "page_memory_eval.synthetic.v0",
+  "created_at": "2026-05-14",
+  "privacy": "synthetic only; no real user page, URL, comment, selected text, or memory data",
+  "pages": [
+    {
+      "source_id": "syn-page-1",
+      "page_url": "https://example.local/margin-evidence",
+      "page_url_hash": "70d3143c77995de4",
+      "title": "Margin Evidence Boundaries",
+      "normalized_text": "Margin captures article reading in place. The product records highlights, comments, and weak seen exposure separately. Seen exposure means the system has evidence that a page was opened, not that the reader agrees with it. The roadmap says memory retrieval should cite the evidence used for an answer.",
+      "normalized_text_hash": "8235b80fe9e53f40"
+    },
+    {
+      "source_id": "syn-page-2",
+      "page_url": "https://example.local/recallpad-launch",
+      "page_url_hash": "0735c719a01fb592",
+      "title": "RecallPad Launch",
+      "normalized_text": "A launch article describes RecallPad, a product that stores meeting notes and builds AI summaries. The product page emphasizes automatic summaries, team sharing, and quick onboarding. It does not discuss correction workflows or evidence levels.",
+      "normalized_text_hash": "0f07308e3b3b7122"
+    },
+    {
+      "source_id": "syn-page-3",
+      "page_url": "https://example.local/memory-benchmark-note",
+      "page_url_hash": "d4a14b29f747146a",
+      "title": "Memory Benchmark Note",
+      "normalized_text": "A research note compares memory benchmarks. It argues that personalized memory should be evaluated by gist, attention, objection, and next move rather than by the number of stored memories. The note warns that summaries can hide wrong-scope memory.",
+      "normalized_text_hash": "d62d529818214a30"
+    }
+  ],
+  "source_digests": [
+    {
+      "schema_version": "source_digest.v0",
+      "source_id": "syn-page-1",
+      "page_url_hash": "70d3143c77995de4",
+      "page_title": "Margin Evidence Boundaries",
+      "content_hash": "8235b80fe9e53f40",
+      "cleaned_content_hash": "8235b80fe9e53f40",
+      "normalized_text_hash": "8235b80fe9e53f40",
+      "cleaned_text_chars": 301,
+      "extractor": { "name": "synthetic", "version": "0", "span_base": "normalized_text" },
+      "digest_version": "source_digest_prompt.v0",
+      "document_type": "article",
+      "sections": [
+        {
+          "section_id": "s1",
+          "heading": "Evidence boundaries",
+          "summary": "Margin separates highlights, comments, and weak seen exposure, and requires cited evidence for memory retrieval.",
+          "source_span": { "start": 42, "end": 301, "span_base": "normalized_text" },
+          "quote_hash": "dc05c5d2fcb06e0f"
+        }
+      ],
+      "claims": [
+        {
+          "claim": "Seen exposure is evidence that a page was opened, not evidence of agreement.",
+          "source_section_id": "s1",
+          "source_span": { "start": 119, "end": 222, "span_base": "normalized_text" },
+          "quote_hash": "27c8b946bbe80972",
+          "confidence": 0.95
+        },
+        {
+          "claim": "Memory retrieval should cite the evidence used for an answer.",
+          "source_section_id": "s1",
+          "source_span": { "start": 223, "end": 301, "span_base": "normalized_text" },
+          "quote_hash": "31a70a3018c1d67e",
+          "confidence": 0.9
+        }
+      ],
+      "entities": [
+        { "name": "Margin", "type": "product", "source_section_ids": ["s1"] }
+      ],
+      "retrieval_hints": [
+        {
+          "hint": "weak seen exposure is not agreement",
+          "reason": "Evidence-boundary retrieval",
+          "source_section_ids": ["s1"],
+          "must_match_terms": ["seen", "exposure", "agreement"]
+        },
+        {
+          "hint": "memory retrieval cite evidence",
+          "reason": "Context Loader evidence citation",
+          "source_section_ids": ["s1"],
+          "must_match_terms": ["memory", "retrieval", "evidence"]
+        }
+      ],
+      "limitations": [],
+      "created_at": "2026-05-14T00:00:00+08:00"
+    },
+    {
+      "schema_version": "source_digest.v0",
+      "source_id": "syn-page-2",
+      "page_url_hash": "0735c719a01fb592",
+      "page_title": "RecallPad Launch",
+      "content_hash": "0f07308e3b3b7122",
+      "cleaned_content_hash": "0f07308e3b3b7122",
+      "normalized_text_hash": "0f07308e3b3b7122",
+      "cleaned_text_chars": 244,
+      "extractor": { "name": "synthetic", "version": "0", "span_base": "normalized_text" },
+      "digest_version": "source_digest_prompt.v0",
+      "document_type": "product_page",
+      "sections": [
+        {
+          "section_id": "s1",
+          "heading": "Launch positioning",
+          "summary": "RecallPad stores meeting notes, builds AI summaries, and emphasizes team sharing and onboarding.",
+          "source_span": { "start": 0, "end": 183, "span_base": "normalized_text" },
+          "quote_hash": "4ff53cec9240092e"
+        },
+        {
+          "section_id": "s2",
+          "heading": "Missing trust surface",
+          "summary": "The product page does not discuss correction workflows or evidence levels.",
+          "source_span": { "start": 184, "end": 244, "span_base": "normalized_text" },
+          "quote_hash": "e79177063d6a0bd0"
+        }
+      ],
+      "claims": [
+        {
+          "claim": "RecallPad emphasizes automatic summaries, team sharing, and quick onboarding.",
+          "source_section_id": "s1",
+          "source_span": { "start": 99, "end": 183, "span_base": "normalized_text" },
+          "quote_hash": "6f29a899d079e84a",
+          "confidence": 0.9
+        },
+        {
+          "claim": "The page does not discuss correction workflows or evidence levels.",
+          "source_section_id": "s2",
+          "source_span": { "start": 184, "end": 244, "span_base": "normalized_text" },
+          "quote_hash": "e79177063d6a0bd0",
+          "confidence": 0.9
+        }
+      ],
+      "entities": [
+        { "name": "RecallPad", "type": "product", "source_section_ids": ["s1"] }
+      ],
+      "retrieval_hints": [
+        {
+          "hint": "automatic summaries team sharing onboarding",
+          "reason": "Product positioning retrieval",
+          "source_section_ids": ["s1"],
+          "must_match_terms": ["summaries", "team", "onboarding"]
+        },
+        {
+          "hint": "missing correction workflows evidence levels",
+          "reason": "Trust-surface gap retrieval",
+          "source_section_ids": ["s2"],
+          "must_match_terms": ["correction", "evidence"]
+        }
+      ],
+      "limitations": [],
+      "created_at": "2026-05-14T00:00:00+08:00"
+    },
+    {
+      "schema_version": "source_digest.v0",
+      "source_id": "syn-page-3",
+      "page_url_hash": "d4a14b29f747146a",
+      "page_title": "Memory Benchmark Note",
+      "content_hash": "d62d529818214a30",
+      "cleaned_content_hash": "d62d529818214a30",
+      "normalized_text_hash": "d62d529818214a30",
+      "cleaned_text_chars": 248,
+      "extractor": { "name": "synthetic", "version": "0", "span_base": "normalized_text" },
+      "digest_version": "source_digest_prompt.v0",
+      "document_type": "article",
+      "sections": [
+        {
+          "section_id": "s1",
+          "heading": "Personalized memory evaluation",
+          "summary": "Personalized memory should be evaluated by gist, attention, objection, and next move rather than stored memory count.",
+          "source_span": { "start": 44, "end": 189, "span_base": "normalized_text" },
+          "quote_hash": "4831ca99d48f16d2"
+        },
+        {
+          "section_id": "s2",
+          "heading": "Wrong-scope risk",
+          "summary": "Summaries can hide wrong-scope memory.",
+          "source_span": { "start": 190, "end": 248, "span_base": "normalized_text" },
+          "quote_hash": "6ad5b4da19d0ded4"
+        }
+      ],
+      "claims": [
+        {
+          "claim": "Personalized memory should be evaluated by gist, attention, objection, and next move.",
+          "source_section_id": "s1",
+          "source_span": { "start": 44, "end": 189, "span_base": "normalized_text" },
+          "quote_hash": "4831ca99d48f16d2",
+          "confidence": 0.95
+        },
+        {
+          "claim": "Summaries can hide wrong-scope memory.",
+          "source_section_id": "s2",
+          "source_span": { "start": 190, "end": 248, "span_base": "normalized_text" },
+          "quote_hash": "6ad5b4da19d0ded4",
+          "confidence": 0.9
+        }
+      ],
+      "entities": [],
+      "retrieval_hints": [
+        {
+          "hint": "personalized memory gist attention objection next move",
+          "reason": "Personal Gist benchmark retrieval",
+          "source_section_ids": ["s1"],
+          "must_match_terms": ["gist", "attention", "objection", "next"]
+        },
+        {
+          "hint": "summaries hide wrong-scope memory",
+          "reason": "Guardrail retrieval",
+          "source_section_ids": ["s2"],
+          "must_match_terms": ["summaries", "wrong-scope", "memory"]
+        }
+      ],
+      "limitations": [],
+      "created_at": "2026-05-14T00:00:00+08:00"
+    }
+  ],
+  "exposure_digests": [
+    {
+      "schema_version": "exposure_digest.v0",
+      "exposure_id": "syn-exp-1-seen",
+      "page_cache_id": "syn-page-1",
+      "source_id": "syn-page-1",
+      "evidence_level": "seen",
+      "observed_behavior": [
+        { "type": "seen", "created_at": "2026-05-14T00:00:00+08:00", "source_id": "seen-1" }
+      ],
+      "user_authored_text": [],
+      "selected_text_refs": [],
+      "inferred_attention": [],
+      "possible_interest": [],
+      "stance_if_any": { "stance": "unknown", "evidence_refs": [], "confidence": 0 },
+      "active_question_candidates": [],
+      "must_not_infer": [
+        "Do not infer user agreement from seen-only exposure.",
+        "Do not infer user project or stance from seen-only exposure."
+      ],
+      "temporal_boundary": {
+        "generated_at": "2026-05-14T00:00:00+08:00",
+        "evidence_window_start": "2026-05-14T00:00:00+08:00",
+        "evidence_window_end": "2026-05-14T00:00:00+08:00",
+        "recency_policy": "single event; no durable user inference"
+      },
+      "promotion_rules": ["seen_only_exposure"],
+      "created_at": "2026-05-14T00:00:00+08:00"
+    },
+    {
+      "schema_version": "exposure_digest.v0",
+      "exposure_id": "syn-exp-2-highlighted",
+      "page_cache_id": "syn-page-1",
+      "source_id": "syn-page-1",
+      "evidence_level": "highlighted",
+      "observed_behavior": [
+        { "type": "highlighted", "created_at": "2026-05-14T00:05:00+08:00", "source_id": "highlight-1" }
+      ],
+      "user_authored_text": [],
+      "selected_text_refs": [
+        {
+          "source_id": "highlight-1",
+          "quote_hash": "27c8b946bbe80972",
+          "source_span": { "start": 119, "end": 222, "span_base": "normalized_text" }
+        }
+      ],
+      "inferred_attention": [
+        {
+          "value": "Attention is on the boundary between seen exposure and user agreement.",
+          "evidence_refs": [
+            { "source_type": "highlight", "source_id": "highlight-1", "evidence_level": "highlighted", "created_at": "2026-05-14T00:05:00+08:00", "weight": 0.7 }
+          ],
+          "confidence": 0.72
+        }
+      ],
+      "possible_interest": [
+        {
+          "value": "Candidate interest in evidence-boundary design.",
+          "evidence_refs": [
+            { "source_type": "highlight", "source_id": "highlight-1", "evidence_level": "highlighted", "created_at": "2026-05-14T00:05:00+08:00", "weight": 0.7 }
+          ],
+          "confidence": 0.62,
+          "status": "candidate"
+        }
+      ],
+      "stance_if_any": { "stance": "unknown", "evidence_refs": [], "confidence": 0 },
+      "active_question_candidates": [],
+      "must_not_infer": ["Do not infer stance from highlight-only evidence."],
+      "temporal_boundary": {
+        "generated_at": "2026-05-14T00:05:00+08:00",
+        "evidence_window_start": "2026-05-14T00:05:00+08:00",
+        "evidence_window_end": "2026-05-14T00:05:00+08:00",
+        "recency_policy": "highlight creates attention signal, not stance"
+      },
+      "promotion_rules": ["highlight_attention_only"],
+      "created_at": "2026-05-14T00:05:00+08:00"
+    },
+    {
+      "schema_version": "exposure_digest.v0",
+      "exposure_id": "syn-exp-3-commented",
+      "page_cache_id": "syn-page-3",
+      "source_id": "syn-page-3",
+      "evidence_level": "commented",
+      "observed_behavior": [
+        { "type": "commented", "created_at": "2026-05-14T00:10:00+08:00", "source_id": "comment-1" }
+      ],
+      "user_authored_text": [
+        { "kind": "comment", "text_ref": "synthetic://comment/comment-1", "source_id": "comment-1" }
+      ],
+      "selected_text_refs": [
+        {
+          "source_id": "selected-1",
+          "quote_hash": "4831ca99d48f16d2",
+          "source_span": { "start": 44, "end": 189, "span_base": "normalized_text" }
+        }
+      ],
+      "inferred_attention": [
+        {
+          "value": "Attention is on evaluating personalized memory by user-specific prediction tasks.",
+          "evidence_refs": [
+            { "source_type": "comment", "source_id": "comment-1", "evidence_level": "commented", "created_at": "2026-05-14T00:10:00+08:00", "weight": 0.9 }
+          ],
+          "confidence": 0.84
+        }
+      ],
+      "possible_interest": [
+        {
+          "value": "Candidate interest in using gist, attention, objection, and next move as memory eval tasks.",
+          "evidence_refs": [
+            { "source_type": "comment", "source_id": "comment-1", "evidence_level": "commented", "created_at": "2026-05-14T00:10:00+08:00", "weight": 0.9 }
+          ],
+          "confidence": 0.82,
+          "status": "candidate"
+        }
+      ],
+      "stance_if_any": {
+        "stance": "positive",
+        "evidence_refs": [
+          { "source_type": "comment", "source_id": "comment-1", "evidence_level": "commented", "created_at": "2026-05-14T00:10:00+08:00", "weight": 0.9 }
+        ],
+        "confidence": 0.72
+      },
+      "active_question_candidates": [
+        {
+          "question": "How should page-memory digests improve Personal Gist prediction without hiding wrong-scope memory?",
+          "evidence_refs": [
+            { "source_type": "comment", "source_id": "comment-1", "evidence_level": "commented", "created_at": "2026-05-14T00:10:00+08:00", "weight": 0.9 }
+          ],
+          "confidence": 0.78,
+          "status": "candidate"
+        }
+      ],
+      "must_not_infer": [],
+      "temporal_boundary": {
+        "generated_at": "2026-05-14T00:10:00+08:00",
+        "evidence_window_start": "2026-05-14T00:10:00+08:00",
+        "evidence_window_end": "2026-05-14T00:10:00+08:00",
+        "recency_policy": "comment can support candidate interest and stance with cited evidence"
+      },
+      "promotion_rules": ["commented_allows_candidate_stance_with_evidence"],
+      "created_at": "2026-05-14T00:10:00+08:00"
+    },
+    {
+      "schema_version": "exposure_digest.v0",
+      "exposure_id": "syn-exp-4-corrected",
+      "page_cache_id": "syn-page-2",
+      "source_id": "syn-page-2",
+      "evidence_level": "corrected",
+      "observed_behavior": [
+        { "type": "corrected", "created_at": "2026-05-14T00:15:00+08:00", "source_id": "correction-1" }
+      ],
+      "user_authored_text": [
+        { "kind": "correction", "text_ref": "synthetic://comment/correction-1", "source_id": "correction-1" }
+      ],
+      "selected_text_refs": [
+        {
+          "source_id": "selected-2",
+          "quote_hash": "e79177063d6a0bd0",
+          "source_span": { "start": 184, "end": 244, "span_base": "normalized_text" }
+        }
+      ],
+      "inferred_attention": [
+        {
+          "value": "Attention is on whether a product exposes correction workflows and evidence levels.",
+          "evidence_refs": [
+            { "source_type": "correction", "source_id": "correction-1", "evidence_level": "corrected", "created_at": "2026-05-14T00:15:00+08:00", "weight": 1 }
+          ],
+          "confidence": 0.9
+        }
+      ],
+      "possible_interest": [
+        {
+          "value": "Candidate interest in trust surfaces over generic automatic summaries.",
+          "evidence_refs": [
+            { "source_type": "correction", "source_id": "correction-1", "evidence_level": "corrected", "created_at": "2026-05-14T00:15:00+08:00", "weight": 1 }
+          ],
+          "confidence": 0.86,
+          "status": "candidate"
+        }
+      ],
+      "stance_if_any": {
+        "stance": "negative",
+        "evidence_refs": [
+          { "source_type": "correction", "source_id": "correction-1", "evidence_level": "corrected", "created_at": "2026-05-14T00:15:00+08:00", "weight": 1 }
+        ],
+        "confidence": 0.8
+      },
+      "active_question_candidates": [
+        {
+          "question": "Should page-memory evaluation prioritize correction and evidence-level workflows over generic summaries?",
+          "evidence_refs": [
+            { "source_type": "correction", "source_id": "correction-1", "evidence_level": "corrected", "created_at": "2026-05-14T00:15:00+08:00", "weight": 1 }
+          ],
+          "confidence": 0.82,
+          "status": "candidate"
+        }
+      ],
+      "must_not_infer": ["Do not let product-page summary override the later correction."],
+      "temporal_boundary": {
+        "generated_at": "2026-05-14T00:15:00+08:00",
+        "evidence_window_start": "2026-05-14T00:15:00+08:00",
+        "evidence_window_end": "2026-05-14T00:15:00+08:00",
+        "recency_policy": "correction supersedes weaker earlier interpretation"
+      },
+      "promotion_rules": ["correction_priority"],
+      "created_at": "2026-05-14T00:15:00+08:00"
+    }
+  ],
+  "memory_growth_signals": {
+    "schema_version": "memory_growth_signals.v0",
+    "signal_batch_id": "syn-batch-1",
+    "temporal_boundary": {
+      "generated_at": "2026-05-14T00:20:00+08:00",
+      "evidence_window_start": "2026-05-14T00:00:00+08:00",
+      "evidence_window_end": "2026-05-14T00:15:00+08:00",
+      "recency_policy": "synthetic window; do not promote to durable project without more evidence"
+    },
+    "active_questions": [
+      {
+        "question": "How should page-memory digests improve Personal Gist prediction without hiding wrong-scope memory?",
+        "status": "active",
+        "evidence_refs": [
+          { "ref_id": "syn-exp-3-commented", "ref_type": "exposure_digest", "evidence_level": "commented", "created_at": "2026-05-14T00:10:00+08:00", "weight": 0.9 },
+          { "ref_id": "syn-exp-4-corrected", "ref_type": "exposure_digest", "evidence_level": "corrected", "created_at": "2026-05-14T00:15:00+08:00", "weight": 1 }
+        ],
+        "counter_evidence_refs": [],
+        "confidence": 0.78
+      }
+    ],
+    "project_clues": [
+      {
+        "label": "page-memory digest eval",
+        "state": "currently_active",
+        "evidence_refs": [
+          { "ref_id": "syn-exp-3-commented", "ref_type": "exposure_digest", "evidence_level": "commented", "created_at": "2026-05-14T00:10:00+08:00", "weight": 0.9 },
+          { "ref_id": "syn-exp-4-corrected", "ref_type": "exposure_digest", "evidence_level": "corrected", "created_at": "2026-05-14T00:15:00+08:00", "weight": 1 }
+        ],
+        "confidence": 0.72
+      }
+    ],
+    "theme_heat": [
+      {
+        "theme": "evidence-grounded memory",
+        "trend": "warming",
+        "evidence_refs": [
+          { "ref_id": "syn-exp-2-highlighted", "ref_type": "exposure_digest", "evidence_level": "highlighted", "created_at": "2026-05-14T00:05:00+08:00", "weight": 0.7 },
+          { "ref_id": "syn-exp-3-commented", "ref_type": "exposure_digest", "evidence_level": "commented", "created_at": "2026-05-14T00:10:00+08:00", "weight": 0.9 },
+          { "ref_id": "syn-exp-4-corrected", "ref_type": "exposure_digest", "evidence_level": "corrected", "created_at": "2026-05-14T00:15:00+08:00", "weight": 1 }
+        ],
+        "confidence": 0.8
+      }
+    ],
+    "contradictions_or_shifts": [
+      {
+        "from": "generic page summaries",
+        "to": "evidence-boundary digests",
+        "evidence_refs": [
+          { "ref_id": "syn-exp-4-corrected", "ref_type": "exposure_digest", "evidence_level": "corrected", "created_at": "2026-05-14T00:15:00+08:00", "weight": 1 }
+        ]
+      }
+    ],
+    "should_surface_to_user": {
+      "value": true,
+      "reason": "Synthetic example has comment and correction evidence, but display must show evidence path first."
+    },
+    "display_rule": "evidence_path_first",
+    "created_at": "2026-05-14T00:20:00+08:00"
+  },
+  "retrieval_cases": [
+    {
+      "case_id": "ret-001",
+      "query": "weak seen exposure not agreement",
+      "gold_source_ids": ["syn-page-1"],
+      "gold_evidence": [{ "source_id": "syn-page-1", "quote_hash": "27c8b946bbe80972" }]
+    },
+    {
+      "case_id": "ret-002",
+      "query": "automatic summaries team sharing onboarding",
+      "gold_source_ids": ["syn-page-2"],
+      "gold_evidence": [{ "source_id": "syn-page-2", "quote_hash": "6f29a899d079e84a" }]
+    },
+    {
+      "case_id": "ret-003",
+      "query": "gist attention objection next move memory benchmark",
+      "gold_source_ids": ["syn-page-3"],
+      "gold_evidence": [{ "source_id": "syn-page-3", "quote_hash": "4831ca99d48f16d2" }]
+    },
+    {
+      "case_id": "ret-004",
+      "query": "correction workflows evidence levels missing",
+      "gold_source_ids": ["syn-page-2"],
+      "gold_evidence": [{ "source_id": "syn-page-2", "quote_hash": "e79177063d6a0bd0" }]
+    }
+  ],
+  "personal_gist_cases": [
+    {
+      "case_id": "pg-syn-001",
+      "source_id": "syn-page-3",
+      "strategy_comparison": ["source_digest", "exposure_digest", "raw_selected_comment_context"],
+      "gold": {
+        "gist": "The useful memory eval is whether prior context predicts user-specific gist, attention, objection, and next move, not memory count.",
+        "attention": ["gist attention objection next move", "wrong-scope memory"],
+        "objection": "Generic summaries can hide wrong-scope memory and should not be treated as enough.",
+        "next_move": "Run an eval that checks Personal Gist lift and severe wrong-scope failures."
+      }
+    }
+  ]
+}

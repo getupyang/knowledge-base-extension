@@ -1,0 +1,197 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mem-ai.local/schemas/page-memory/exposure-digest.schema.json",
+  "title": "ExposureDigest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "exposure_id",
+    "page_cache_id",
+    "source_id",
+    "evidence_level",
+    "observed_behavior",
+    "user_authored_text",
+    "selected_text_refs",
+    "inferred_attention",
+    "possible_interest",
+    "stance_if_any",
+    "active_question_candidates",
+    "must_not_infer",
+    "temporal_boundary",
+    "promotion_rules",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": { "type": "string", "const": "exposure_digest.v0" },
+    "exposure_id": { "type": "string", "minLength": 1 },
+    "page_cache_id": { "type": ["integer", "string"] },
+    "source_id": { "type": "string", "minLength": 1 },
+    "evidence_level": {
+      "type": "string",
+      "enum": ["seen", "highlighted", "commented", "asked", "corrected"]
+    },
+    "observed_behavior": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/observed_behavior" }
+    },
+    "user_authored_text": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/user_text_ref" }
+    },
+    "selected_text_refs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/selected_text_ref" }
+    },
+    "inferred_attention": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/inference" }
+    },
+    "possible_interest": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/candidate_inference" }
+    },
+    "stance_if_any": { "$ref": "#/$defs/stance" },
+    "active_question_candidates": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/candidate_question" }
+    },
+    "must_not_infer": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "temporal_boundary": { "$ref": "#/$defs/temporal_boundary" },
+    "promotion_rules": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "created_at": { "type": "string" }
+  },
+  "$defs": {
+    "evidence_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_type", "source_id", "evidence_level", "created_at"],
+      "properties": {
+        "source_type": { "type": "string" },
+        "source_id": { "type": ["integer", "string"] },
+        "evidence_level": {
+          "type": "string",
+          "enum": ["seen", "highlighted", "commented", "asked", "corrected"]
+        },
+        "created_at": { "type": "string" },
+        "weight": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "observed_behavior": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "created_at", "source_id"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["seen", "highlighted", "commented", "asked", "corrected"]
+        },
+        "created_at": { "type": "string" },
+        "source_id": { "type": ["integer", "string"] }
+      }
+    },
+    "user_text_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "text_ref", "source_id"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["comment", "reply", "correction"] },
+        "text_ref": { "type": "string" },
+        "source_id": { "type": ["integer", "string"] }
+      }
+    },
+    "selected_text_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_id", "quote_hash"],
+      "properties": {
+        "source_id": { "type": ["integer", "string"] },
+        "quote_hash": { "type": "string", "pattern": "^[a-f0-9]{16}$" },
+        "source_span": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["start", "end", "span_base"],
+          "properties": {
+            "start": { "type": "integer", "minimum": 0 },
+            "end": { "type": "integer", "minimum": 0 },
+            "span_base": { "type": "string", "const": "normalized_text" }
+          }
+        }
+      }
+    },
+    "inference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "evidence_refs", "confidence"],
+      "properties": {
+        "value": { "type": "string" },
+        "evidence_refs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/evidence_ref" }
+        },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "candidate_inference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "evidence_refs", "confidence", "status"],
+      "properties": {
+        "value": { "type": "string" },
+        "evidence_refs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/evidence_ref" }
+        },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "status": { "type": "string", "const": "candidate" }
+      }
+    },
+    "stance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stance", "evidence_refs", "confidence"],
+      "properties": {
+        "stance": {
+          "type": "string",
+          "enum": ["positive", "negative", "mixed", "questioning", "unknown"]
+        },
+        "evidence_refs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/evidence_ref" }
+        },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "candidate_question": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["question", "evidence_refs", "confidence", "status"],
+      "properties": {
+        "question": { "type": "string" },
+        "evidence_refs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/evidence_ref" }
+        },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "status": { "type": "string", "const": "candidate" }
+      }
+    },
+    "temporal_boundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["generated_at", "evidence_window_start", "evidence_window_end", "recency_policy"],
+      "properties": {
+        "generated_at": { "type": "string" },
+        "evidence_window_start": { "type": "string" },
+        "evidence_window_end": { "type": "string" },
+        "recency_policy": { "type": "string" }
+      }
+    }
+  }
+}

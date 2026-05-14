@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mem-ai.local/schemas/page-memory/memory-growth-signals.schema.json",
+  "title": "MemoryGrowthSignals",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "signal_batch_id",
+    "temporal_boundary",
+    "active_questions",
+    "project_clues",
+    "theme_heat",
+    "contradictions_or_shifts",
+    "should_surface_to_user",
+    "display_rule",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": { "type": "string", "const": "memory_growth_signals.v0" },
+    "signal_batch_id": { "type": "string", "minLength": 1 },
+    "temporal_boundary": { "$ref": "#/$defs/temporal_boundary" },
+    "active_questions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/active_question" }
+    },
+    "project_clues": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/project_clue" }
+    },
+    "theme_heat": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/theme_heat" }
+    },
+    "contradictions_or_shifts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/shift" }
+    },
+    "should_surface_to_user": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "reason"],
+      "properties": {
+        "value": { "type": "boolean" },
+        "reason": { "type": "string" }
+      }
+    },
+    "display_rule": {
+      "type": "string",
+      "enum": ["evidence_path_first", "candidate_only", "do_not_surface"]
+    },
+    "created_at": { "type": "string" }
+  },
+  "$defs": {
+    "temporal_boundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generated_at",
+        "evidence_window_start",
+        "evidence_window_end",
+        "recency_policy"
+      ],
+      "properties": {
+        "generated_at": { "type": "string" },
+        "evidence_window_start": { "type": "string" },
+        "evidence_window_end": { "type": "string" },
+        "recency_policy": { "type": "string" }
+      }
+    },
+    "evidence_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref_id", "ref_type", "evidence_level", "created_at", "weight"],
+      "properties": {
+        "ref_id": { "type": "string" },
+        "ref_type": {
+          "type": "string",
+          "enum": ["source_digest", "exposure_digest", "comment", "reply", "correction"]
+        },
+        "evidence_level": {
+          "type": "string",
+          "enum": ["seen", "highlighted", "commented", "asked", "corrected"]
+        },
+        "created_at": { "type": "string" },
+        "weight": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "active_question": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["question", "status", "evidence_refs", "counter_evidence_refs", "confidence"],
+      "properties": {
+        "question": { "type": "string" },
+        "status": {
+          "type": "string",
+          "enum": ["recent_clue", "active", "cooling", "resolved", "converted_to_decision"]
+        },
+        "evidence_refs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/evidence_ref" }
+        },
+        "counter_evidence_refs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/evidence_ref" }
+        },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "project_clue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "state", "evidence_refs", "confidence"],
+      "properties": {
+        "label": { "type": "string" },
+        "state": {
+          "type": "string",
+          "enum": ["recently_mentioned", "currently_active", "latent_but_important", "confirmed_project"]
+        },
+        "evidence_refs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/evidence_ref" }
+        },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "theme_heat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["theme", "trend", "evidence_refs", "confidence"],
+      "properties": {
+        "theme": { "type": "string" },
+        "trend": { "type": "string", "enum": ["warming", "stable", "cooling", "recurring"] },
+        "evidence_refs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/evidence_ref" }
+        },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "shift": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to", "evidence_refs"],
+      "properties": {
+        "from": { "type": "string" },
+        "to": { "type": "string" },
+        "evidence_refs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/evidence_ref" }
+        }
+      }
+    }
+  }
+}
