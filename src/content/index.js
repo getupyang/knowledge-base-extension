@@ -1,4 +1,4 @@
-const KB_CONTENT_VERSION = "0.3.12-ops-user-ledger";
+const KB_CONTENT_VERSION = "0.3.13-ui-contrast";
 console.info(`[KB] content script loaded: ${KB_CONTENT_VERSION}`);
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -398,7 +398,8 @@ const selectionBar = (() => {
         z-index: 2147483647;
         display: flex;
         gap: 2px;
-        background: oklch(0.55 0.14 150);
+        background: oklch(0.55 0.14 150) !important;
+        color: oklch(0.985 0.006 125) !important;
         border-radius: 4px;
         padding: 4px 5px;
         box-shadow: 0 6px 20px rgba(40,30,20,0.22);
@@ -406,22 +407,30 @@ const selectionBar = (() => {
         pointer-events: all;
         white-space: nowrap;
         transition: opacity 0.15s;
+        box-sizing: border-box;
+        isolation: isolate;
       }
       #kb-sel-bar button {
-        background: none;
-        border: none;
-        color: oklch(0.985 0.006 125);
-        font-size: 12px;
-        padding: 4px 10px;
-        border-radius: 3px;
+        -webkit-appearance: none !important;
+        appearance: none !important;
+        background: transparent !important;
+        border: 0 !important;
+        color: oklch(0.985 0.006 125) !important;
+        font-size: 12px !important;
+        line-height: 1.2 !important;
+        padding: 4px 10px !important;
+        border-radius: 3px !important;
         cursor: pointer;
         display: flex;
         align-items: center;
         gap: 4px;
+        font-family: "Inter Tight", "Inter", -apple-system, sans-serif !important;
         transition: background 0.12s;
-        letter-spacing: 0.04em;
+        letter-spacing: 0.04em !important;
+        text-transform: none !important;
+        box-sizing: border-box !important;
       }
-      #kb-sel-bar button:hover { background: oklch(0.48 0.13 150); }
+      #kb-sel-bar button:hover { background: oklch(0.48 0.13 150) !important; }
       #kb-sel-bar .kb-bar-divider {
         width: 1px; background: oklch(0.72 0.08 150);
         margin: 3px 1px; border-radius: 1px;
@@ -1511,6 +1520,11 @@ const commentSystem = (() => {
         --kb-brand-strong: oklch(0.42 0.13 150);
         --kb-brand-soft: oklch(0.96 0.02 150);
         --kb-brand-faint: oklch(0.975 0.014 150);
+        --kb-notice-bg: oklch(0.985 0.018 145 / 0.98);
+        --kb-notice-text: oklch(0.20 0.014 145);
+        --kb-notice-border: oklch(0.55 0.14 150 / 0.32);
+        --kb-notice-action-bg: oklch(0.42 0.13 150);
+        --kb-notice-action-text: oklch(0.985 0.006 125);
         --kb-panel-shadow: rgba(16,44,32,0.08);
         --kb-card-shadow: rgba(60,40,20,0.04);
         --kb-grid-dot: oklch(0.91 0.014 145);
@@ -1543,6 +1557,11 @@ const commentSystem = (() => {
           --kb-brand-strong: oklch(0.55 0.14 150);
           --kb-brand-soft: oklch(0.28 0.035 150);
           --kb-brand-faint: oklch(0.235 0.024 150);
+          --kb-notice-bg: oklch(0.245 0.026 150 / 0.98);
+          --kb-notice-text: oklch(0.94 0.008 135);
+          --kb-notice-border: oklch(0.64 0.11 150 / 0.36);
+          --kb-notice-action-bg: oklch(0.70 0.12 150);
+          --kb-notice-action-text: oklch(0.12 0.014 145);
           --kb-panel-shadow: rgba(0,0,0,0.34);
           --kb-card-shadow: rgba(0,0,0,0.18);
           --kb-grid-dot: oklch(0.30 0.014 145);
@@ -1604,6 +1623,12 @@ const commentSystem = (() => {
           radial-gradient(var(--kb-grid-dot) 0.5px, transparent 0.5px);
         background-size: 20px 20px;
       }
+      #kb-comment-panel button {
+        -webkit-appearance: none !important;
+        appearance: none !important;
+        text-transform: none !important;
+        box-sizing: border-box !important;
+      }
       #kb-comment-panel.kb-btn-hidden { transform: translateX(100%); }
       #kb-cp-header {
         padding: 14px 16px 12px; border-bottom: 1px solid var(--kb-line);
@@ -1621,11 +1646,11 @@ const commentSystem = (() => {
         margin-left: 6px; font-weight: 400;
       }
       #kb-cp-close {
-        background: none; border: none; padding: 4px 8px;
-        font-size: 12px; cursor: pointer; color: var(--kb-ink-mute);
+        background: transparent !important; border: 0 !important; padding: 4px 8px !important;
+        font-size: 12px !important; line-height: 1.2 !important; cursor: pointer; color: var(--kb-ink-mute) !important;
         font-family: inherit; letter-spacing: 0.04em;
       }
-      #kb-cp-close:hover { color: var(--kb-terra); }
+      #kb-cp-close:hover { color: var(--kb-terra) !important; }
       #kb-cp-body {
         flex: 1; overflow-y: auto; padding: 12px 14px;
         position: relative;
@@ -1655,11 +1680,11 @@ const commentSystem = (() => {
         background: linear-gradient(transparent, var(--kb-surface));
       }
       .kb-cmt-expand {
-        font-size: 11px; color: var(--kb-terra); cursor: pointer; margin-top: 4px;
-        background: none; border: none; padding: 0; text-align: left;
+        font-size: 11px !important; line-height: 1.25 !important; color: var(--kb-terra) !important; cursor: pointer; margin-top: 4px;
+        background: transparent !important; border: 0 !important; padding: 0 !important; text-align: left;
         font-family: inherit; letter-spacing: 0.03em;
       }
-      .kb-cmt-expand:hover { text-decoration: underline; }
+      .kb-cmt-expand:hover { text-decoration: underline; color: var(--kb-terra) !important; }
       .kb-cmt-quote {
         font-size: 12px; color: var(--kb-ink-2);
         font-family: "Source Han Serif SC", "Noto Serif SC", serif;
@@ -1758,34 +1783,34 @@ const commentSystem = (() => {
       }
       .kb-inline-reply textarea:focus { border-color: var(--kb-terra); }
       .kb-inline-reply-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
-      .kb-reply-send {
-        background: var(--kb-brand-strong); color: var(--kb-paper);
-        border: none; border-radius: 3px; padding: 5px 12px;
-        font-size: 11px; cursor: pointer; letter-spacing: 0.04em;
+      #kb-comment-panel .kb-reply-send {
+        background: var(--kb-brand-strong) !important; color: var(--kb-paper) !important;
+        border: 0 !important; border-radius: 3px; padding: 5px 12px !important;
+        font-size: 11px !important; line-height: 1.2 !important; cursor: pointer; letter-spacing: 0.04em;
         font-family: inherit;
       }
-      .kb-reply-send:hover { background: var(--kb-brand); }
-      .kb-reply-btn {
-        background: none; border: none;
-        color: var(--kb-ink-mute); font-size: 11px;
-        cursor: pointer; padding: 0; font-family: inherit;
+      #kb-comment-panel .kb-reply-send:hover { background: var(--kb-brand) !important; }
+      #kb-comment-panel .kb-reply-btn {
+        background: transparent !important; border: 0 !important;
+        color: var(--kb-ink-mute) !important; font-size: 11px !important;
+        line-height: 1.25 !important; cursor: pointer; padding: 0 !important; font-family: inherit;
       }
-      .kb-reply-btn:hover { color: var(--kb-terra); }
+      #kb-comment-panel .kb-reply-btn:hover { color: var(--kb-terra) !important; }
       .kb-ai-feedback {
         display: flex; align-items: center; gap: 6px;
         margin-top: 8px; flex-wrap: wrap;
       }
-      .kb-feedback-chip {
-        background: transparent; color: var(--kb-ink-mute);
-        border: 1px solid var(--kb-line); border-radius: 3px;
-        padding: 3px 7px; font-size: 11px; cursor: pointer;
+      #kb-comment-panel .kb-feedback-chip {
+        background: transparent !important; color: var(--kb-ink-mute) !important;
+        border: 1px solid var(--kb-line) !important; border-radius: 3px;
+        padding: 3px 7px !important; font-size: 11px !important; cursor: pointer;
         font-family: inherit; line-height: 1.2;
       }
-      .kb-feedback-chip:hover,
-      .kb-feedback-chip.active {
-        border-color: var(--kb-brand-strong);
-        color: var(--kb-brand-strong);
-        background: var(--kb-brand-soft);
+      #kb-comment-panel .kb-feedback-chip:hover,
+      #kb-comment-panel .kb-feedback-chip.active {
+        border-color: var(--kb-brand-strong) !important;
+        color: var(--kb-brand-strong) !important;
+        background: var(--kb-brand-soft) !important;
       }
       .kb-feedback-done {
         color: var(--kb-ink-mute); font-size: 11px;
@@ -1810,28 +1835,29 @@ const commentSystem = (() => {
       .kb-feedback-actions {
         display: flex; gap: 8px; margin-top: 7px; align-items: center;
       }
-      .kb-ai-btn {
-        background: var(--kb-brand-strong); color: var(--kb-paper);
-        border: none; border-radius: 3px;
-        padding: 6px 14px; font-size: 11px; cursor: pointer; margin-top: 6px;
+      #kb-comment-panel .kb-ai-btn {
+        background: var(--kb-brand-strong) !important; color: var(--kb-paper) !important;
+        border: 0 !important; border-radius: 3px;
+        padding: 6px 14px !important; font-size: 11px !important; line-height: 1.2 !important; cursor: pointer; margin-top: 6px;
         font-family: inherit; letter-spacing: 0.04em;
       }
-      .kb-ai-btn:hover { background: var(--kb-brand); }
-      .kb-ai-btn:disabled { background: var(--kb-ink-faint); cursor: not-allowed; }
-      .kb-ai-ready-btn {
-        border: 1px solid oklch(0.55 0.14 150 / 0.42);
-        background: var(--kb-blue-soft);
-        color: var(--kb-blue);
+      #kb-comment-panel .kb-ai-btn:hover { background: var(--kb-brand) !important; }
+      #kb-comment-panel .kb-ai-btn:disabled { background: var(--kb-ink-faint) !important; cursor: not-allowed; }
+      #kb-comment-panel .kb-ai-ready-btn {
+        border: 1px solid oklch(0.55 0.14 150 / 0.42) !important;
+        background: var(--kb-blue-soft) !important;
+        color: var(--kb-blue) !important;
         border-radius: 3px;
-        padding: 4px 9px;
-        font-size: 11px;
+        padding: 4px 9px !important;
+        font-size: 11px !important;
+        line-height: 1.2 !important;
         cursor: pointer;
         font-family: "JetBrains Mono", ui-monospace, monospace;
         letter-spacing: 0.03em;
       }
-      .kb-ai-ready-btn:hover {
-        border-color: var(--kb-blue);
-        background: var(--kb-brand-soft);
+      #kb-comment-panel .kb-ai-ready-btn:hover {
+        border-color: var(--kb-blue) !important;
+        background: var(--kb-brand-soft) !important;
       }
       .kb-thinking {
         font-size: 12px; color: var(--kb-ink-2); padding: 8px 10px;
@@ -1857,12 +1883,12 @@ const commentSystem = (() => {
         border-top-color: transparent;
       }
       #kb-cp-new-btn {
-        background: none; border: 1px dashed var(--kb-line);
-        color: var(--kb-ink-mute); padding: 4px 10px;
-        border-radius: 3px; font-size: 11px; cursor: pointer;
+        background: transparent !important; border: 1px dashed var(--kb-line) !important;
+        color: var(--kb-ink-mute) !important; padding: 4px 10px !important;
+        border-radius: 3px; font-size: 11px !important; line-height: 1.2 !important; cursor: pointer;
         font-family: inherit; letter-spacing: 0.04em;
       }
-      #kb-cp-new-btn:hover { border-color: var(--kb-terra); color: var(--kb-terra); border-style: solid; }
+      #kb-cp-new-btn:hover { border-color: var(--kb-terra) !important; color: var(--kb-terra) !important; border-style: solid !important; }
       #kb-cp-new-btn.kb-hidden { display: none; }
       #kb-cp-quote-preview {
         font-size: 11px; color: var(--kb-ink-2);
@@ -1883,12 +1909,12 @@ const commentSystem = (() => {
       }
       #kb-cp-textarea:focus { border-color: var(--kb-terra); }
       #kb-cp-send-btn {
-        margin-top: 8px; background: var(--kb-brand-strong); color: var(--kb-paper);
-        border: none; border-radius: 3px;
-        padding: 7px 18px; font-size: 12px; cursor: pointer;
+        margin-top: 8px; background: var(--kb-brand-strong) !important; color: var(--kb-paper) !important;
+        border: 0 !important; border-radius: 3px;
+        padding: 7px 18px !important; font-size: 12px !important; line-height: 1.2 !important; cursor: pointer;
         font-family: inherit; letter-spacing: 0.04em;
       }
-      #kb-cp-send-btn:hover { background: var(--kb-brand); }
+      #kb-cp-send-btn:hover { background: var(--kb-brand) !important; }
       #kb-cp-send-status {
         font-size: 11px; color: var(--kb-ink-mute); margin-left: 10px;
         font-family: "JetBrains Mono", ui-monospace, monospace;
@@ -1904,24 +1930,29 @@ const commentSystem = (() => {
         justify-content: space-between;
         gap: 8px;
         padding: 8px 10px;
-        border: 1px solid oklch(0.55 0.14 150 / 0.28);
+        border: 1px solid var(--kb-notice-border);
         border-radius: 6px;
-        background: oklch(0.98 0.018 145 / 0.96);
-        color: var(--kb-ink);
+        background: var(--kb-notice-bg);
+        color: var(--kb-notice-text) !important;
         box-shadow: 0 4px 16px rgba(16, 44, 32, 0.10);
         font-size: 12px;
         font-family: "Source Han Serif SC", "Noto Serif SC", serif;
+        line-height: 1.35;
       }
       #kb-cp-ai-notice.kb-hidden { display: none; }
       #kb-cp-ai-notice button {
-        border: none;
-        background: var(--kb-blue);
-        color: white;
+        -webkit-appearance: none !important;
+        appearance: none !important;
+        border: 0 !important;
+        background: var(--kb-notice-action-bg) !important;
+        color: var(--kb-notice-action-text) !important;
         border-radius: 3px;
-        padding: 4px 9px;
-        font-size: 11px;
+        padding: 4px 9px !important;
+        font-size: 11px !important;
+        line-height: 1.2 !important;
         cursor: pointer;
         font-family: "JetBrains Mono", ui-monospace, monospace;
+        text-transform: none !important;
       }
       .kb-empty {
         text-align: center; color: var(--kb-ink-faint);
