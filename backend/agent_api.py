@@ -488,6 +488,76 @@ def init_db():
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_memory_chat_created ON memory_chat_messages(created_at DESC)")
 
+    # ── 运营埋点：前端事件流（telemetry_outbox） + 后端 LLM 账本（llm_call_ledger）
+    # 表名沿用现网已有 schema（之前 Codex 实验留下的孤儿表），status='local_only' 表示这是本地接收态，不会自动上传
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS telemetry_outbox (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id TEXT NOT NULL UNIQUE,
+            event_name TEXT NOT NULL,
+            anonymous_install_id TEXT NOT NULL,
+            app_session_id TEXT,
+            page_id TEXT,
+            thread_telemetry_id TEXT,
+            surface TEXT,
+            properties_json TEXT NOT NULL DEFAULT '{}',
+            status TEXT NOT NULL DEFAULT 'local_only',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            created_at TEXT NOT NULL,
+            sent_at TEXT
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_telemetry_outbox_status ON telemetry_outbox(status, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_telemetry_outbox_name ON telemetry_outbox(event_name, created_at DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_telemetry_outbox_install ON telemetry_outbox(anonymous_install_id, created_at DESC)")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS llm_call_ledger (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            call_id TEXT NOT NULL UNIQUE,
+            stage TEXT NOT NULL,
+            comment_id INTEGER,
+            reply_id INTEGER,
+            job_id INTEGER,
+            role TEXT,
+            intent TEXT,
+            provider_mode TEXT,
+            provider TEXT,
+            provider_config TEXT,
+            local_agent TEXT,
+            api_provider TEXT,
+            model TEXT,
+            status TEXT NOT NULL,
+            attempt INTEGER NOT NULL DEFAULT 1,
+            timeout_sec INTEGER,
+            elapsed_ms INTEGER,
+            prompt_tokens_est INTEGER,
+            input_tokens INTEGER,
+            output_tokens INTEGER,
+            total_tokens INTEGER,
+            cache_tokens INTEGER,
+            actual_usage_json TEXT,
+            usage_source TEXT,
+            cost_usd REAL,
+            error_category TEXT,
+            error_code TEXT,
+            redacted_error TEXT,
+            anonymous_install_id TEXT,
+            app_session_id TEXT,
+            page_id TEXT,
+            thread_telemetry_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_call_ledger_created ON llm_call_ledger(created_at DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_call_ledger_status ON llm_call_ledger(status, created_at DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_call_ledger_stage ON llm_call_ledger(stage, created_at DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_call_ledger_comment ON llm_call_ledger(comment_id, created_at DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_call_ledger_job ON llm_call_ledger(job_id, created_at DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_call_ledger_install ON llm_call_ledger(anonymous_install_id, created_at DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_call_ledger_thread ON llm_call_ledger(thread_telemetry_id, created_at DESC)")
+
     # 兼容已有数据库：如果列不存在则添加
     for col, table in [
         ("debug_meta TEXT", "replies"),
@@ -500,12 +570,25 @@ def init_db():
         ("event_id INTEGER", "profile_signals"),
         ("exposure_page_ids TEXT NOT NULL DEFAULT '[]'", "context_packs"),
         ("exposure_refs_json TEXT NOT NULL DEFAULT '[]'", "context_packs"),
+        # 运营埋点 identity 字段
+        ("anonymous_install_id TEXT", "comments"),
+        ("app_session_id TEXT", "comments"),
+        ("page_id TEXT", "comments"),
+        ("thread_telemetry_id TEXT", "comments"),
+        ("source_surface TEXT", "comments"),
+        # telemetry_outbox / llm_call_ledger 在历史 schema 里可能缺 page_id（之前是 page_view_id）
+        ("page_id TEXT", "telemetry_outbox"),
+        ("page_id TEXT", "llm_call_ledger"),
+        ("role TEXT", "llm_call_ledger"),
+        ("intent TEXT", "llm_call_ledger"),
     ]:
         try:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {col}")
         except Exception:
             pass  # 列已存在，忽略
     conn.execute("CREATE INDEX IF NOT EXISTS idx_comments_notion_page_id ON comments(notion_page_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_comments_install_created ON comments(anonymous_install_id, created_at DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_comments_thread_telemetry ON comments(thread_telemetry_id)")
     # 非破坏性历史映射：让旧 comments/replies 在 Debug Console 里也能按事件查看。
     # 不自动 enqueue growth，避免突然批量加工用户历史库；未来新增事件会自动入队。
     conn.execute("""
@@ -908,6 +991,276 @@ def _float_or(value, default: float = 0.0) -> float:
         return float(value)
     except Exception:
         return default
+
+
+# ──────────────────────────────────────────
+# 运营埋点 helpers（telemetry_outbox + llm_call_ledger）
+# 时区统一 Asia/Shanghai；隐私边界：禁止任何 url/text/content/comment/excerpt/selected/reply 字段
+# 只有 feedback_text 是允许的明文（用户主动给开发者的反馈）
+# ──────────────────────────────────────────
+
+try:
+    from zoneinfo import ZoneInfo
+    _SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+except Exception:  # 极旧 Python 兜底
+    _SHANGHAI_TZ = None
+
+
+def _now_shanghai_iso() -> str:
+    """事件落库时间戳，Asia/Shanghai。"""
+    if _SHANGHAI_TZ is not None:
+        return datetime.now(_SHANGHAI_TZ).isoformat(timespec="seconds")
+    return datetime.now().isoformat(timespec="seconds")
+
+
+_TELEMETRY_FORBIDDEN_KEYS = {
+    # URL / 地址
+    "url", "page_url", "href", "location",
+    # 划线 / 选区 原文
+    "selected_text", "excerpt", "selection", "selected",
+    # 评论 / 用户输入正文
+    "comment", "comment_text", "comment_content", "comment_body",
+    # AI 回复正文
+    "reply", "reply_text", "reply_content", "reply_body", "ai_reply",
+    # 通用正文字段
+    "text", "content", "body", "page_content", "page_text",
+    "surrounding_text", "context_text",
+}
+_TELEMETRY_ALLOWED_FREE_TEXT_KEYS = {"feedback_text"}
+_TELEMETRY_FEEDBACK_TEXT_MAX = 2000
+
+
+def _redact_error(msg: str) -> str:
+    """mask 邮箱 / 长 URL / Bearer token，然后截断到 500 字符。
+    错误信息有时会嵌入 prompt 或用户输入片段，落库前做兜底。"""
+    if not msg:
+        return ""
+    text = str(msg)
+    # email
+    text = re.sub(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b", "[email]", text)
+    # bearer token
+    text = re.sub(r"(?i)\bbearer\s+[A-Za-z0-9._\-]+", "Bearer [redacted]", text)
+    # API key 风格 (sk-..., key=..., token=...)
+    text = re.sub(r"(?i)\b(sk-[A-Za-z0-9]{8,}|[\w_-]*(?:key|token|secret)[\w_-]*=)[A-Za-z0-9._\-]+", r"\1[redacted]", text)
+    # URL
+    text = re.sub(r"https?://\S+", "[url]", text)
+    return text[:500]
+
+
+def _scrub_telemetry_properties(raw_props) -> dict:
+    """前端发来的 properties 防护：丢禁词 key、截断 feedback_text、强制 dict。"""
+    if not isinstance(raw_props, dict):
+        return {}
+    cleaned = {}
+    dropped = []
+    for key, value in raw_props.items():
+        if not isinstance(key, str) or not key:
+            continue
+        if key.startswith("_"):
+            continue
+        lk = key.lower()
+        # feedback_text 是唯一被允许的明文字段
+        if lk in _TELEMETRY_ALLOWED_FREE_TEXT_KEYS:
+            if value is None:
+                continue
+            text = str(value)[:_TELEMETRY_FEEDBACK_TEXT_MAX]
+            cleaned[key] = text
+            continue
+        if lk in _TELEMETRY_FORBIDDEN_KEYS:
+            dropped.append(key)
+            continue
+        # value 也限制：dict/list/原语，jsonable
+        try:
+            json.dumps(value, ensure_ascii=False)
+        except Exception:
+            cleaned[key] = str(value)[:500]
+            continue
+        cleaned[key] = value
+    if dropped:
+        print(f"[telemetry] dropped forbidden keys: {dropped}")
+    return cleaned
+
+
+def _enrich_env_properties(props: dict) -> dict:
+    """把后端知道的 LLM 配置 + notion 状态写进 properties。前端不需要重复发。"""
+    try:
+        status = get_llm_status() or {}
+    except Exception:
+        status = {}
+    props.setdefault("llm_provider_mode", _provider_mode_for(status))
+    props.setdefault("llm_provider", status.get("selected_provider"))
+    props.setdefault("llm_model", status.get("api_model") or "default")
+    props.setdefault("notion_configured", bool(os.environ.get("KB_NOTION_TOKEN")))
+    return props
+
+
+def _provider_mode_for(status: dict) -> str:
+    """前端版本相同的映射：把内部 provider 名变成 user_api / local_cli / mock。"""
+    p = (status or {}).get("selected_provider") or ""
+    if p == "api":
+        return "user_api"
+    if p in ("claude_code", "codex_cli"):
+        return "local_cli"
+    if p == "mock":
+        return "mock"
+    return "unknown"
+
+
+_TELEMETRY_RATE_BUCKET = {}  # install_id -> (window_start_epoch, count)
+_TELEMETRY_RATE_LIMIT_PER_MIN = 120
+
+
+def _rate_limit_ok(install_id: str) -> bool:
+    """每 install_id 每分钟最多 N 条事件，防止失控前端打爆。"""
+    import time as _time
+    now = _time.time()
+    window_start, count = _TELEMETRY_RATE_BUCKET.get(install_id, (now, 0))
+    if now - window_start >= 60:
+        window_start, count = now, 0
+    if count >= _TELEMETRY_RATE_LIMIT_PER_MIN:
+        _TELEMETRY_RATE_BUCKET[install_id] = (window_start, count)
+        return False
+    _TELEMETRY_RATE_BUCKET[install_id] = (window_start, count + 1)
+    return True
+
+
+def _telemetry_insert_event(
+    *,
+    event_name: str,
+    anonymous_install_id: str,
+    app_session_id: str = "",
+    page_id: str = "",
+    thread_telemetry_id: str = "",
+    surface: str = "",
+    properties: Optional[dict] = None,
+) -> str:
+    """写入 telemetry_outbox。返回 event_id。"""
+    event_id = hashlib.sha256(
+        f"{anonymous_install_id}|{event_name}|{_now_shanghai_iso()}|{os.urandom(8).hex()}".encode()
+    ).hexdigest()[:32]
+    props = _enrich_env_properties(properties or {})
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute(
+            """INSERT INTO telemetry_outbox
+               (event_id, event_name, anonymous_install_id, app_session_id, page_id,
+                thread_telemetry_id, surface, properties_json, status, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'local_only', ?)""",
+            (
+                event_id, event_name, anonymous_install_id, app_session_id or None,
+                page_id or None, thread_telemetry_id or None, surface or None,
+                _json(props), _now_shanghai_iso(),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return event_id
+
+
+def _ledger_insert_started(
+    *,
+    call_id: str,
+    stage: str,
+    timeout_sec: int,
+    ledger_ctx: Optional[dict] = None,
+) -> None:
+    """LLM 调用开始前先写一行 started，防止进程崩溃漏单。"""
+    ctx = ledger_ctx or {}
+    now = _now_shanghai_iso()
+    try:
+        status = get_llm_status() or {}
+    except Exception:
+        status = {}
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute(
+            """INSERT INTO llm_call_ledger
+               (call_id, stage, comment_id, reply_id, job_id, role, intent,
+                provider_mode, provider, provider_config, local_agent, api_provider, model,
+                status, attempt, timeout_sec,
+                anonymous_install_id, app_session_id, page_id, thread_telemetry_id,
+                created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?,
+                       ?, ?, ?, ?, ?, ?,
+                       'started', 1, ?,
+                       ?, ?, ?, ?,
+                       ?, ?)""",
+            (
+                call_id, stage,
+                ctx.get("comment_id"), ctx.get("reply_id"), ctx.get("job_id"),
+                ctx.get("role"), ctx.get("intent"),
+                _provider_mode_for(status),
+                status.get("selected_provider"),
+                status.get("provider_config"),
+                status.get("local_agent"),
+                status.get("api_provider"),
+                status.get("api_model") or "default",
+                timeout_sec,
+                ctx.get("anonymous_install_id"), ctx.get("app_session_id"),
+                ctx.get("page_id"), ctx.get("thread_telemetry_id"),
+                now, now,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _ledger_finish(
+    *,
+    call_id: str,
+    status: str,           # success / error / timeout
+    elapsed_ms: int,
+    meta: Optional[dict] = None,
+    error: str = "",
+    error_category: str = "",
+    error_code: str = "",
+) -> None:
+    """LLM 调用结束后更新 ledger 行（按 call_id）。"""
+    m = meta or {}
+    actual_usage = m.get("actual_usage") if isinstance(m.get("actual_usage"), dict) else None
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute(
+            """UPDATE llm_call_ledger
+               SET status = ?, elapsed_ms = ?,
+                   prompt_tokens_est = ?,
+                   input_tokens = ?, output_tokens = ?, total_tokens = ?, cache_tokens = ?,
+                   actual_usage_json = ?, usage_source = ?, cost_usd = ?,
+                   error_category = ?, error_code = ?, redacted_error = ?,
+                   updated_at = ?
+               WHERE call_id = ?""",
+            (
+                status, int(elapsed_ms or 0),
+                m.get("prompt_tokens_est"),
+                m.get("input_tokens"), m.get("output_tokens"),
+                m.get("total_tokens"), m.get("cache_tokens"),
+                _json(actual_usage) if actual_usage else None,
+                m.get("usage_source"), m.get("cost_usd"),
+                error_category or None, error_code or None,
+                _redact_error(error) if error else None,
+                _now_shanghai_iso(), call_id,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _categorize_llm_error(exc: Exception) -> tuple[str, str]:
+    """LLM 异常 → (error_category, error_code) 短枚举。"""
+    name = type(exc).__name__
+    s = str(exc).lower()
+    if "timeout" in name.lower() or "timeout" in s:
+        return ("timeout", "llm_timeout")
+    if "auth" in s or "unauthorized" in s or "401" in s:
+        return ("auth", "unauthorized")
+    if "rate" in s and "limit" in s or "429" in s:
+        return ("rate_limit", "rate_limit")
+    if "network" in s or "connection" in s or "refused" in s:
+        return ("network", "network")
+    return ("unknown", name[:60] or "unknown")
 
 
 def _record_intake_local_saved(comment_id: int):
@@ -2868,23 +3221,68 @@ def _llm_no_call_meta(reason: str) -> dict:
     }
 
 
-def _call_llm_with_meta(prompt: str, system_prompt: str, timeout: int = 1800) -> tuple:
-    """Call the configured LLM provider and return content, rc, and provider metadata."""
+def _call_llm_with_meta(prompt: str, system_prompt: str, timeout: int = 1800,
+                         ledger_ctx: Optional[dict] = None) -> tuple:
+    """Call the configured LLM provider and return content, rc, and provider metadata.
+
+    ledger_ctx：把 stage/role/intent + identity 传进来，本函数负责写 llm_call_ledger 一行。
+    失败、超时、成功都写。call_id 用 uuid。"""
+    import time as _time
+    import uuid as _uuid
+    call_id = _uuid.uuid4().hex
+    stage = (ledger_ctx or {}).get("stage", "answer")
+    started_at = _time.time()
+    try:
+        _ledger_insert_started(
+            call_id=call_id, stage=stage, timeout_sec=int(timeout or 0),
+            ledger_ctx=ledger_ctx,
+        )
+    except Exception as e:
+        # ledger 失败不能阻塞 LLM 调用
+        print(f"[ledger] insert_started failed: {type(e).__name__}: {e}")
+
     client = get_llm_client()
     try:
         content = client.generate_text(prompt, system_prompt=system_prompt, timeout=timeout)
-        return content, 0, client.last_call_meta
+        elapsed_ms = int((_time.time() - started_at) * 1000)
+        try:
+            _ledger_finish(call_id=call_id, status="success",
+                           elapsed_ms=elapsed_ms, meta=client.last_call_meta)
+        except Exception as e:
+            print(f"[ledger] finish(success) failed: {type(e).__name__}: {e}")
+        meta = dict(client.last_call_meta or {})
+        meta["call_id"] = call_id
+        return content, 0, meta
     except LLMTimeoutError as e:
+        elapsed_ms = int((_time.time() - started_at) * 1000)
         if client.last_call_meta:
             client.last_call_meta["status"] = "timeout"
+        try:
+            _ledger_finish(call_id=call_id, status="timeout",
+                           elapsed_ms=elapsed_ms, meta=client.last_call_meta,
+                           error=str(e),
+                           error_category="timeout", error_code="llm_timeout")
+        except Exception as ex:
+            print(f"[ledger] finish(timeout) failed: {type(ex).__name__}: {ex}")
         raise subprocess.TimeoutExpired(cmd="llm_provider", timeout=timeout) from e
     except LLMError as e:
-        return str(e)[:1000], 1, client.last_call_meta
+        elapsed_ms = int((_time.time() - started_at) * 1000)
+        cat, code = _categorize_llm_error(e)
+        try:
+            _ledger_finish(call_id=call_id, status="error",
+                           elapsed_ms=elapsed_ms, meta=client.last_call_meta,
+                           error=str(e), error_category=cat, error_code=code)
+        except Exception as ex:
+            print(f"[ledger] finish(error) failed: {type(ex).__name__}: {ex}")
+        meta = dict(client.last_call_meta or {})
+        meta["call_id"] = call_id
+        return str(e)[:1000], 1, meta
 
 
-def _call_claude(prompt: str, system_prompt: str, timeout: int = 1800) -> tuple:
+def _call_claude(prompt: str, system_prompt: str, timeout: int = 1800,
+                  ledger_ctx: Optional[dict] = None) -> tuple:
     """Legacy name kept for call-site stability. Calls configured LLM provider."""
-    content, rc, meta = _call_llm_with_meta(prompt, system_prompt, timeout)
+    content, rc, meta = _call_llm_with_meta(prompt, system_prompt, timeout, ledger_ctx=ledger_ctx)
     print(
         f"[agent_api] llm call provider={meta.get('provider')} "
         f"model={meta.get('model')} status={meta.get('status')} rc={rc}"
@@ -2968,8 +3366,9 @@ def _heuristic_router_result(comment: str, selected_text: str = "", page_title: 
     }
 
 def run_router(page_url: str, page_title: str, selected_text: str,
-               surrounding_text: str, comment: str, last_ai_reply: str = "") -> dict:
-    """调用路由器 prompt（Step 1），返回解析后的 JSON dict"""
+               surrounding_text: str, comment: str, last_ai_reply: str = "",
+               identity_ctx: Optional[dict] = None) -> dict:
+    """调用路由器 prompt（Step 1），返回解析后的 JSON dict。identity_ctx 用于 ledger 写入。"""
     if _codex_router_should_use_heuristic():
         result = _heuristic_router_result(comment, selected_text, page_title)
         result["_router_call"] = _llm_no_call_meta("codex_cli_heuristic_router")
@@ -2993,7 +3392,9 @@ def run_router(page_url: str, page_title: str, selected_text: str,
     system_prompt = "你是意图路由器。只输出 JSON，不要任何其他文字、解释或 markdown 代码块。"
 
     try:
-        content, rc, call_meta = _call_llm_with_meta(prompt, system_prompt, timeout=30)
+        ledger_ctx = {**(identity_ctx or {}), "stage": "router"}
+        content, rc, call_meta = _call_llm_with_meta(prompt, system_prompt, timeout=30,
+                                                     ledger_ctx=ledger_ctx)
         if rc != 0:
             print(f"[agent_api] router error: rc={rc} content={content[:200]}")
             return None
@@ -3417,8 +3818,9 @@ def _trigger_learning_layer(comment_id: int, user_comment: str, agent_reply: str
 def run_agent_v2(comment_id: int, intent: str, role: str, prompt: str,
                  plan: str = "", quick_response: str = "", learned: list = None,
                  user_comment: str = "", context_pack: dict = None,
-                 router_call: dict = None):
-    """后台线程：v2 agent 执行，结果写回 replies 表"""
+                 router_call: dict = None,
+                 identity_ctx: Optional[dict] = None):
+    """后台线程：v2 agent 执行，结果写回 replies 表。identity_ctx 用于 ledger 写入。"""
     import time
     start_time = time.time()
     status = "error"
@@ -3444,7 +3846,11 @@ def run_agent_v2(comment_id: int, intent: str, role: str, prompt: str,
             "否则控制在 300-500 字以内，最多 5 个要点。不要为了显得全面而展开所有分支。"
         )
         try:
-            content, rc, step2_call = _call_llm_with_meta(prompt, system_prompt, timeout=1800)
+            ledger_ctx = {**(identity_ctx or {}),
+                          "stage": "answer", "role": role, "intent": intent,
+                          "comment_id": comment_id}
+            content, rc, step2_call = _call_llm_with_meta(prompt, system_prompt, timeout=1800,
+                                                          ledger_ctx=ledger_ctx)
             print(
                 f"[agent_api] v2 Step 2 provider={step2_call.get('provider')} "
                 f"model={step2_call.get('model')} comment_id={comment_id}"
@@ -3548,8 +3954,9 @@ def run_agent_v2(comment_id: int, intent: str, role: str, prompt: str,
 # v1 兼容：保留旧 run_agent 作为 fallback
 def run_agent_v1_fallback(comment_id: int, agent_type: str,
                           page_url: str, selected_text: str,
-                          surrounding_text: str, comment: str):
-    """v1 fallback：用旧的硬编码 prompt 直接调用"""
+                          surrounding_text: str, comment: str,
+                          identity_ctx: Optional[dict] = None):
+    """v1 fallback：用旧的硬编码 prompt 直接调用。identity_ctx 用于 ledger 写入。"""
     import time
     start_time = time.time()
     # 用 v2 的角色 prompt 作为 fallback（比旧硬编码更好）
@@ -3566,7 +3973,11 @@ def run_agent_v1_fallback(comment_id: int, agent_type: str,
     content = ""
     llm_call = None
     try:
-        content, rc, llm_call = _call_llm_with_meta(prompt, system_prompt, timeout=1800)
+        ledger_ctx = {**(identity_ctx or {}),
+                      "stage": "v1_fallback", "role": role, "intent": "dialogue",
+                      "comment_id": comment_id}
+        content, rc, llm_call = _call_llm_with_meta(prompt, system_prompt, timeout=1800,
+                                                    ledger_ctx=ledger_ctx)
         status = "success" if rc == 0 and content else "error"
         if rc != 0:
             content = f"Agent 执行出错：{content[:500]}"
@@ -3677,9 +4088,21 @@ class CommentCreate(BaseModel):
     page_content: str = ""       # 页面全文（首次提交时传，后端按URL去重缓存）
     comment: str
     no_agent: bool = False  # True 时仅存储，不触发 agent（用户手动召唤时再触发）
+    # 运营埋点 identity（前端 telemetryIdentity() 注入）
+    anonymous_install_id: str = ""
+    app_session_id: str = ""
+    page_id: str = ""
+    thread_telemetry_id: str = ""
+    source_surface: str = ""
 
 class ReplyCreate(BaseModel):
     content: str
+    # 运营埋点 identity
+    anonymous_install_id: str = ""
+    app_session_id: str = ""
+    page_id: str = ""
+    thread_telemetry_id: str = ""
+    source_surface: str = ""
 
 class StatusUpdate(BaseModel):
     status: str  # open / resolved / tracking / archived
@@ -3704,10 +4127,14 @@ def create_comment(body: CommentCreate):
     agent_type_for_db = v1_agent_type or "v2_pending"
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.execute(
-        """INSERT INTO comments (page_url, page_title, selected_text, surrounding_text, comment, agent_type, status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)""",
+        """INSERT INTO comments (page_url, page_title, selected_text, surrounding_text, comment, agent_type, status, created_at, updated_at,
+                                 anonymous_install_id, app_session_id, page_id, thread_telemetry_id, source_surface)
+           VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?,
+                   ?, ?, ?, ?, ?)""",
         (body.page_url, body.page_title, body.selected_text, body.surrounding_text or "",
-         cleaned_comment, agent_type_for_db, now, now)
+         cleaned_comment, agent_type_for_db, now, now,
+         body.anonymous_install_id or None, body.app_session_id or None,
+         body.page_id or None, body.thread_telemetry_id or None, body.source_surface or None)
     )
     comment_id = cursor.lastrowid
 
@@ -3765,6 +4192,15 @@ def create_comment(body: CommentCreate):
         selected = body.selected_text or "（无划线内容）"
         surrounding = body.surrounding_text or ""
 
+        # 运营埋点 identity，传递给 router/v2/v1 用于 ledger 写入
+        identity_ctx = {
+            "anonymous_install_id": body.anonymous_install_id or None,
+            "app_session_id": body.app_session_id or None,
+            "page_id": body.page_id or None,
+            "thread_telemetry_id": body.thread_telemetry_id or None,
+            "comment_id": comment_id,
+        }
+
         # 路径 1：有 @手动路由 → 映射到 v2 role，跳过路由器
         if v1_agent_type and v1_agent_type in V1_TO_V2_ROLE:
             intent, role = V1_TO_V2_ROLE[v1_agent_type]
@@ -3780,18 +4216,21 @@ def create_comment(body: CommentCreate):
             _conn.close()
             run_agent_v2(comment_id, intent, role, prompt, user_comment=cleaned_comment,
                          context_pack=context_pack,
-                         router_call=_llm_no_call_meta("manual_v1_agent_route"))
+                         router_call=_llm_no_call_meta("manual_v1_agent_route"),
+                         identity_ctx=identity_ctx)
             return
 
         # 路径 2：v2 路由器
         router_result = run_router(body.page_url, body.page_title,
-                                   selected, surrounding, cleaned_comment)
+                                   selected, surrounding, cleaned_comment,
+                                   identity_ctx=identity_ctx)
 
         # 路由器失败 → v1 fallback
         if not router_result:
             print(f"[agent_api] router failed, falling back to v1 ({DEFAULT_AGENT})")
             run_agent_v1_fallback(comment_id, DEFAULT_AGENT, body.page_url,
-                                 selected, surrounding, cleaned_comment)
+                                 selected, surrounding, cleaned_comment,
+                                 identity_ctx=identity_ctx)
             return
 
         intent = router_result.get("intent", "dialogue")
@@ -3814,7 +4253,8 @@ def create_comment(body: CommentCreate):
         run_agent_v2(comment_id, intent, role, prompt,
                      quick_response=quick_response, learned=learned,
                      user_comment=cleaned_comment, context_pack=context_pack,
-                     router_call=router_result.get("_router_call"))
+                     router_call=router_result.get("_router_call"),
+                     identity_ctx=identity_ctx)
 
     thread = threading.Thread(target=_dispatch, daemon=True)
     thread.start()
@@ -4021,6 +4461,15 @@ def rerun_agent(comment_id: int):
         surrounding = c.get("surrounding_text", "") or ""
         comment = c["comment"]
 
+        # 运营埋点 identity：从 comments 表 row 里读出（创建时已持久化）
+        identity_ctx = {
+            "anonymous_install_id": c.get("anonymous_install_id"),
+            "app_session_id": c.get("app_session_id"),
+            "page_id": c.get("page_id"),
+            "thread_telemetry_id": c.get("thread_telemetry_id"),
+            "comment_id": comment_id,
+        }
+
         # ── 快捷路径：上一轮是 plan，用户确认后直接执行 Step 2 ──
         if last_debug_meta.get("is_plan"):
             role = last_debug_meta.get("role", "researcher")
@@ -4036,15 +4485,18 @@ def rerun_agent(comment_id: int):
             run_agent_v2(comment_id, "task", role, prompt,
                          plan=f"用户已确认",
                          user_comment=comment, context_pack=context_pack,
-                         router_call=_llm_no_call_meta("plan_confirmed_skip_router"))
+                         router_call=_llm_no_call_meta("plan_confirmed_skip_router"),
+                         identity_ctx=identity_ctx)
             return
 
         # ── 正常路径：走 v2 路由器 ──
         router_result = run_router(c["page_url"], c.get("page_title", ""),
-                                   selected, surrounding, comment, last_ai_reply)
+                                   selected, surrounding, comment, last_ai_reply,
+                                   identity_ctx=identity_ctx)
         if not router_result:
             run_agent_v1_fallback(comment_id, DEFAULT_AGENT, c["page_url"],
-                                 selected, surrounding, comment)
+                                 selected, surrounding, comment,
+                                 identity_ctx=identity_ctx)
             return
 
         intent = router_result.get("intent", "dialogue")
@@ -4059,7 +4511,8 @@ def rerun_agent(comment_id: int):
         run_agent_v2(comment_id, intent, role, prompt,
                      quick_response=quick_response, learned=learned,
                      user_comment=comment, context_pack=context_pack,
-                     router_call=router_result.get("_router_call"))
+                     router_call=router_result.get("_router_call"),
+                     identity_ctx=identity_ctx)
 
     thread = threading.Thread(target=_rerun, daemon=True)
     thread.start()
@@ -4068,6 +4521,48 @@ def rerun_agent(comment_id: int):
 @app.get("/health")
 def health():
     return {"status": "ok", "data_dir": DATA_DIR, "db": DB_PATH}
+
+
+# ──────────────────────────────────────────
+# 运营埋点上报 endpoint
+# ──────────────────────────────────────────
+
+class TelemetryEvent(BaseModel):
+    event_name: str
+    anonymous_install_id: str
+    app_session_id: str = ""
+    page_id: str = ""
+    thread_telemetry_id: str = ""
+    surface: str = ""
+    properties: dict = {}
+
+
+@app.post("/telemetry/events")
+def telemetry_event(body: TelemetryEvent):
+    """前端事件上报。失败也总是返回 200，不阻塞用户。"""
+    name = (body.event_name or "").strip()
+    install_id = (body.anonymous_install_id or "").strip()
+    if not name or not install_id:
+        # 静默拒绝，不返回 400（前端 fire-and-forget，不重试）
+        return {"ok": False, "reason": "missing_required_fields"}
+    if not _rate_limit_ok(install_id):
+        return {"ok": False, "reason": "rate_limited"}
+    try:
+        props = _scrub_telemetry_properties(body.properties or {})
+        event_id = _telemetry_insert_event(
+            event_name=name,
+            anonymous_install_id=install_id,
+            app_session_id=body.app_session_id or "",
+            page_id=body.page_id or "",
+            thread_telemetry_id=body.thread_telemetry_id or "",
+            surface=body.surface or "",
+            properties=props,
+        )
+        return {"ok": True, "event_id": event_id}
+    except Exception as e:
+        print(f"[telemetry] insert failed: {type(e).__name__}: {e}")
+        return {"ok": False, "reason": "internal_error"}
+
 
 class ClientErrorReport(BaseModel):
     source: str = "unknown"       # callAIViaAgent / upsertNotionPage / saveToNotion ...

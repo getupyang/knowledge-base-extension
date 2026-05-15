@@ -515,6 +515,58 @@ def _extract_json(text: str) -> Any:
     raise ValueError("no JSON object found in LLM output")
 
 
+# ──────────────────────────────────────────
+# Usage 估算（本地 CLI 不返回真实 token，用字符近似）
+# ──────────────────────────────────────────
+
+def _count_tokens_rough(text: str) -> int:
+    """粗略 token 估算：中文 ~1 char/token，英文 ~4 chars/token。
+    实际是统计中文字符 + 英文 word 数。够好用于 cost 排序，不是计费精度。"""
+    if not text:
+        return 0
+    s = str(text)
+    chinese = sum(1 for ch in s if "一" <= ch <= "鿿")
+    rest_chars = max(0, len(s) - chinese)
+    return chinese + (rest_chars // 4)
+
+
+# 大致价格（USD/百万 token）。粗略估算，仅用于成本排序。
+_MODEL_PRICING = {
+    "default": (3.0, 15.0),  # 兜底用 sonnet 价
+    "claude-opus": (15.0, 75.0),
+    "claude-sonnet": (3.0, 15.0),
+    "claude-haiku": (0.80, 4.0),
+    "gpt-5": (1.25, 10.0),
+    "gpt-5-mini": (0.25, 2.0),
+    "gpt-4o": (2.5, 10.0),
+    "gpt-4o-mini": (0.15, 0.60),
+}
+
+
+def _estimate_usage(provider_name: str, prompt: str, system_prompt: str, content: str) -> dict:
+    """返回 usage dict 合并进 last_call_meta。本地 CLI 没真实 usage 时用 estimated。"""
+    in_tok = _count_tokens_rough((system_prompt or "") + "\n" + (prompt or ""))
+    out_tok = _count_tokens_rough(content or "")
+    total = in_tok + out_tok
+    # 价格匹配：用 model 名前缀粗匹配
+    model_key = "default"
+    p_lower = (provider_name or "").lower()
+    for k in _MODEL_PRICING:
+        if k != "default" and k in p_lower:
+            model_key = k
+            break
+    price_in, price_out = _MODEL_PRICING[model_key]
+    cost = round((in_tok * price_in + out_tok * price_out) / 1_000_000, 6)
+    return {
+        "input_tokens": in_tok,
+        "output_tokens": out_tok,
+        "total_tokens": total,
+        "prompt_tokens_est": in_tok,
+        "cost_usd": cost,
+        "usage_source": "estimated",  # 区分于真实 API usage
+    }
+
+
 @dataclass
 class LLMClient:
     provider: Optional[BaseProvider] = None
@@ -538,10 +590,12 @@ class LLMClient:
         self.last_call_meta = {**meta, "status": "running"}
         try:
             content = primary.generate_text(prompt, system_prompt=system_prompt, timeout=timeout, model=model)
+            usage = _estimate_usage(primary.name, prompt, system_prompt, content)
             self.last_call_meta = {
                 **meta,
                 "status": "success",
                 "elapsed_s": round(time.time() - started, 3),
+                **usage,
             }
             return content
         except LLMError as primary_error:
@@ -553,10 +607,12 @@ class LLMClient:
                 self.last_call_meta = {**fallback_meta, "status": "running"}
                 try:
                     content = api_provider.generate_text(prompt, system_prompt=system_prompt, timeout=timeout, model=model)
+                    usage = _estimate_usage(api_provider.name, prompt, system_prompt, content)
                     self.last_call_meta = {
                         **fallback_meta,
                         "status": "success",
                         "elapsed_s": round(time.time() - fallback_started, 3),
+                        **usage,
                     }
                     return content
                 except LLMError as fallback_error:

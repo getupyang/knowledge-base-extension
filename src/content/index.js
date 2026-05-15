@@ -1,4 +1,4 @@
-const KB_CONTENT_VERSION = "0.3.6-pdf-selection-bar";
+const KB_CONTENT_VERSION = "0.3.12-ops-user-ledger";
 console.info(`[KB] content script loaded: ${KB_CONTENT_VERSION}`);
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -54,6 +54,216 @@ function isWindowsPlatform() {
 function truncate(str, max) {
   if (!str) return "";
   return str.length > max ? str.slice(0, max) + "..." : str;
+}
+
+function kbRandomId(prefix) {
+  const raw = (globalThis.crypto && crypto.randomUUID)
+    ? crypto.randomUUID().replace(/-/g, "")
+    : `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+  return `${prefix}_${raw}`;
+}
+
+const KB_TELEMETRY_INSTALL_KEY = "kb_telemetry_install_id_v1";
+const KB_TELEMETRY_SESSION_KEY = "kb_telemetry_session_v1";
+const KB_TELEMETRY_SESSION_TTL_MS = 30 * 60 * 1000;
+// install_id 放 chrome.storage.local（跨域名共享），保证一台机器 = 一个 UUID
+// session_id 仍走 localStorage（per origin），跨网站会算多个 session，但 30min idle TTL 让影响有限
+
+// 噪声参数：utm_*/from/source/ref/referrer/spm/gclid/fbclid 等追踪/导流参数
+// page_id 设计：同一 URL（剥噪声后）→ 同一 page_id，方便把同页连续动作串起来；不存 URL 原文
+const KB_TELEMETRY_NOISE_PARAMS = new Set([
+  "from", "source", "ref", "referrer", "spm", "gclid", "fbclid",
+]);
+function kbNormalizeUrlForHash(rawUrl) {
+  try {
+    const u = new URL(rawUrl);
+    u.hash = "";  // 剥 fragment
+    // 剥 utm_*
+    const toDelete = [];
+    u.searchParams.forEach((_, k) => {
+      const lk = k.toLowerCase();
+      if (lk.startsWith("utm_") || KB_TELEMETRY_NOISE_PARAMS.has(lk)) toDelete.push(k);
+    });
+    toDelete.forEach((k) => u.searchParams.delete(k));
+    u.hostname = u.hostname.toLowerCase();
+    // 末尾斜杠
+    let s = u.toString();
+    if (s.endsWith("/") && u.pathname !== "/") s = s.slice(0, -1);
+    return s.trim();
+  } catch {
+    return String(rawUrl || "").trim();
+  }
+}
+let _kbPageIdCache = null;
+async function getTelemetryPageId() {
+  if (_kbPageIdCache) return _kbPageIdCache;
+  try {
+    const normalized = kbNormalizeUrlForHash(location.href);
+    const buf = new TextEncoder().encode(normalized);
+    const digest = await crypto.subtle.digest("SHA-256", buf);
+    const hex = Array.from(new Uint8Array(digest))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+    _kbPageIdCache = `page_${hex.slice(0, 28)}`;  // 28 hex + "page_" 前缀 = 33 字符
+  } catch {
+    _kbPageIdCache = kbRandomId("page");  // 极端兜底
+  }
+  return _kbPageIdCache;
+}
+
+// Environment 字段：每个事件都带
+function getTelemetryEnv() {
+  let browser = "";
+  try {
+    const brands = (navigator.userAgentData && navigator.userAgentData.brands) || [];
+    const main = brands.find((b) => /Chrome|Edge|Brave|Opera|Arc|Firefox/i.test(b.brand));
+    browser = (main && main.brand) || "";
+  } catch {}
+  if (!browser) {
+    const ua = navigator.userAgent || "";
+    if (/Edg\//i.test(ua)) browser = "Edge";
+    else if (/Chrome\//i.test(ua)) browser = "Chrome";
+    else if (/Firefox\//i.test(ua)) browser = "Firefox";
+    else if (/Safari\//i.test(ua)) browser = "Safari";
+  }
+  let os = "";
+  try {
+    const p = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
+    if (/mac/i.test(p)) os = "macOS";
+    else if (/win/i.test(p)) os = "Windows";
+    else if (/linux/i.test(p)) os = "Linux";
+    else if (/cros/i.test(p)) os = "ChromeOS";
+  } catch {}
+  let extensionId = "";
+  try { extensionId = (chrome.runtime && chrome.runtime.id) || ""; } catch {}
+  return {
+    app_version: KB_CONTENT_VERSION,
+    extension_id: extensionId,
+    browser: browser || "Unknown",
+    os: os || "Unknown",
+    locale: navigator.language || "",
+  };
+}
+
+// install_id 缓存：模块加载时立刻发起读取，命中后填充。所有 telemetry 调用都用 async getter。
+let _kbInstallIdCache = null;
+let _kbInstallIdPromise = null;
+function _loadInstallIdFromStorage() {
+  if (_kbInstallIdPromise) return _kbInstallIdPromise;
+  _kbInstallIdPromise = new Promise((resolve) => {
+    try {
+      chrome.storage.local.get([KB_TELEMETRY_INSTALL_KEY], (r) => {
+        let id = (r && r[KB_TELEMETRY_INSTALL_KEY]) || "";
+        if (!id) {
+          // 迁移：旧版把 install_id 写在 localStorage，这里搬过去而不是另起一个 UUID
+          let legacy = "";
+          try { legacy = localStorage.getItem(KB_TELEMETRY_INSTALL_KEY) || ""; } catch {}
+          id = legacy || kbRandomId("install");
+          try {
+            chrome.storage.local.set({ [KB_TELEMETRY_INSTALL_KEY]: id });
+          } catch {}
+        }
+        _kbInstallIdCache = id;
+        resolve(id);
+      });
+    } catch {
+      // 极端兜底：chrome.storage 不可用时回退 localStorage
+      let id = "";
+      try { id = localStorage.getItem(KB_TELEMETRY_INSTALL_KEY) || ""; } catch {}
+      if (!id) {
+        id = kbRandomId("install");
+        try { localStorage.setItem(KB_TELEMETRY_INSTALL_KEY, id); } catch {}
+      }
+      _kbInstallIdCache = id;
+      resolve(id);
+    }
+  });
+  return _kbInstallIdPromise;
+}
+_loadInstallIdFromStorage();  // 触发预加载
+async function getTelemetryInstallId() {
+  if (_kbInstallIdCache) return _kbInstallIdCache;
+  return await _loadInstallIdFromStorage();
+}
+
+function getTelemetrySessionId() {
+  const now = Date.now();
+  let state = null;
+  try { state = JSON.parse(localStorage.getItem(KB_TELEMETRY_SESSION_KEY) || "null"); } catch {}
+  if (!state || !state.id || now - Number(state.lastSeen || 0) > KB_TELEMETRY_SESSION_TTL_MS) {
+    state = { id: kbRandomId("session"), lastSeen: now };
+  } else {
+    state.lastSeen = now;
+  }
+  try { localStorage.setItem(KB_TELEMETRY_SESSION_KEY, JSON.stringify(state)); } catch {}
+  return state.id;
+}
+
+function charBucket(value) {
+  const n = typeof value === "number" ? value : String(value || "").length;
+  if (n <= 0) return "0";
+  if (n <= 20) return "1-20";
+  if (n <= 80) return "21-80";
+  if (n <= 200) return "81-200";
+  if (n <= 500) return "201-500";
+  if (n <= 1000) return "501-1000";
+  return "1000+";
+}
+
+function providerMode(provider) {
+  if (provider === "api") return "user_api";
+  if (provider === "claude_code" || provider === "codex_cli") return "local_cli";
+  if (provider === "mock") return "mock";
+  return "unknown";
+}
+
+function parseMaybeJson(value) {
+  if (!value) return {};
+  if (typeof value !== "string") return value || {};
+  try { return JSON.parse(value) || {}; } catch { return {}; }
+}
+
+function summarizeAiDebugMeta(debugMeta) {
+  const dm = parseMaybeJson(debugMeta);
+  const call = dm.llm?.answer_call || dm.llm?.step2_call || {};
+  const provider = call.provider || dm.llm_provider || "";
+  return {
+    stage: call.stage || "answer",
+    status: call.status || dm.status || "",
+    provider_mode: call.provider_mode || providerMode(provider),
+    provider,
+    provider_config: call.provider_config || "",
+    local_agent: call.local_agent || "",
+    api_provider: call.api_provider || dm.llm_api_provider || "",
+    model: call.model || dm.llm_model || "",
+    fallback_used: Boolean(call.fallback_used),
+    fallback_from: call.fallback_from || "",
+    answer_source: dm.llm?.answer_source || "",
+    agent_role: dm.role || "",
+    intent: dm.intent || "",
+    is_quick: Boolean(dm.is_quick),
+    is_plan: Boolean(dm.is_plan),
+    elapsed_s: call.elapsed_s ?? dm.elapsed_s,
+    prompt_tokens_est: call.prompt_tokens_est ?? dm.prompt_tokens_est,
+    input_tokens: call.input_tokens,
+    output_tokens: call.output_tokens,
+    total_tokens: call.total_tokens,
+    cache_tokens: call.cache_tokens,
+    cost_usd: call.cost_usd,
+    usage_source: call.usage_source,
+    error_category: call.error_category,
+    error_code: call.error_code,
+  };
+}
+
+function categorizeClientError(msg) {
+  const s = String(msg || "").toLowerCase();
+  if (s.includes("failed to fetch") || s.includes("networkerror")) return { error_category: "network", error_code: "backend_unreachable" };
+  if (s.includes("timeout")) return { error_category: "timeout", error_code: "client_timeout" };
+  if (s.includes("http 401")) return { error_category: "auth", error_code: "unauthorized" };
+  if (s.includes("http 429")) return { error_category: "rate_limit", error_code: "rate_limit" };
+  if (s.includes("extension context invalidated")) return { error_category: "extension", error_code: "context_invalidated" };
+  return { error_category: "unknown", error_code: "unknown" };
 }
 
 // ─── 前后文截取：获取划线文本前后各200字，解决指代不清 ───
@@ -443,6 +653,83 @@ const commentSystem = (() => {
   let currentExcerpt = "";
   const _aiUnreadCommentIds = new Set();
 
+  function ensureThreadTelemetryId(comment) {
+    if (!comment) return "";
+    if (comment.telemetryThreadId) return comment.telemetryThreadId;
+    const id = kbRandomId("thread");
+    comment.telemetryThreadId = id;
+    const comments = load();
+    const match = comments.find(x => String(x.id) === String(comment.id));
+    if (match) {
+      match.telemetryThreadId = id;
+      save(comments);
+    }
+    return id;
+  }
+
+  function threadTurnCount(comment) {
+    return (comment?.replies || []).length;
+  }
+
+  async function _postTelemetry(body, attempt = 0) {
+    try {
+      const resp = await fetch("http://localhost:8766/telemetry/events", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!resp.ok && attempt === 0) {
+        // 重试 1 次，500ms 后
+        await new Promise((r) => setTimeout(r, 500));
+        return _postTelemetry(body, 1);
+      }
+      return resp.ok;
+    } catch {
+      if (attempt === 0) {
+        await new Promise((r) => setTimeout(r, 500));
+        return _postTelemetry(body, 1);
+      }
+      return false;
+    }
+  }
+
+  async function telemetryEvent(eventName, surface, properties = {}, comment = null) {
+    try {
+      const [pageId, installId] = await Promise.all([
+        getTelemetryPageId(), getTelemetryInstallId(),
+      ]);
+      const envProps = getTelemetryEnv();
+      const body = {
+        event_name: eventName,
+        anonymous_install_id: installId,
+        app_session_id: getTelemetrySessionId(),
+        page_id: pageId,
+        thread_telemetry_id: comment ? ensureThreadTelemetryId(comment) : "",
+        surface,
+        properties: { ...envProps, ...properties },
+      };
+      return await _postTelemetry(body);
+    } catch {
+      return false;
+    }
+  }
+
+  async function telemetryIdentity(comment = null, surface = "sidebar") {
+    const [pageId, installId] = await Promise.all([
+      getTelemetryPageId(), getTelemetryInstallId(),
+    ]);
+    return {
+      anonymous_install_id: installId,
+      app_session_id: getTelemetrySessionId(),
+      page_id: pageId,
+      thread_telemetry_id: comment ? ensureThreadTelemetryId(comment) : "",
+      source_surface: surface,
+    };
+  }
+
+  // page_opened 已废弃：iframe/PDF/SPA 噪声大，且产品价值低。
+  // "用户活跃度"看 highlight_saved / sidebar_comment_created / ai_reply_requested 的 install_id distinct 即可。
+
   // ── 提前保存 selection（提交时 selection 已消失，需要提前捕获）──
   let _savedSelection = "";
   document.addEventListener("mouseup", () => {
@@ -476,7 +763,14 @@ const commentSystem = (() => {
   }
   function addComment(excerpt, text) {
     const comments = load();
-    const c = { id: Date.now(), excerpt, text, createdAt: new Date().toISOString(), replies: [] };
+    const c = {
+      id: Date.now(),
+      telemetryThreadId: kbRandomId("thread"),
+      excerpt,
+      text,
+      createdAt: new Date().toISOString(),
+      replies: [],
+    };
     comments.unshift(c);
     save(comments);
     setTimeout(updateBadge, 0);
@@ -486,7 +780,13 @@ const commentSystem = (() => {
     const comments = load();
     const c = comments.find(x => x.id === commentId);
     if (!c) return;
-    c.replies.push({ id: Date.now(), text: replyText, isAI, debugMeta, createdAt: new Date().toISOString() });
+    c.replies.push({
+      id: Date.now(),
+      text: replyText,
+      isAI,
+      debugMeta,
+      createdAt: new Date().toISOString(),
+    });
     save(comments);
     return c;
   }
@@ -496,12 +796,56 @@ const commentSystem = (() => {
     if (!c) return null;
     const idx = c.replies.findIndex(r => String(r.id) === String(replyId));
     if (idx === -1) return addReply(commentId, replyText, isAI, debugMeta);
-    c.replies[idx] = { id: Date.now(), text: replyText, isAI, debugMeta, createdAt: new Date().toISOString() };
+    c.replies[idx] = {
+      ...c.replies[idx],
+      id: c.replies[idx].id || Date.now(),
+      text: replyText,
+      isAI,
+      debugMeta,
+      createdAt: new Date().toISOString(),
+    };
     save(comments);
     return c;
   }
   function countAIReplies(c) {
     return (c?.replies || []).filter(r => r.isAI).length;
+  }
+  function patchReply(commentId, replyId, patch) {
+    const comments = load();
+    const c = comments.find(x => String(x.id) === String(commentId));
+    if (!c) return null;
+    const r = (c.replies || []).find(x => String(x.id) === String(replyId));
+    if (!r) return null;
+    Object.assign(r, patch || {});
+    save(comments);
+    updateCommentCard(commentId);
+    return { comment: c, reply: r };
+  }
+  async function submitAiFeedback(commentId, replyId, rating, feedbackText = "") {
+    const comments = load();
+    const c = comments.find(x => String(x.id) === String(commentId));
+    const r = c?.replies?.find(x => String(x.id) === String(replyId));
+    if (!c || !r) return;
+    if (rating === "down" && !feedbackText.trim()) {
+      showToast("写一句哪里不对，再发送反馈", "error");
+      return;
+    }
+    // 字段瘦身：stage/role/model/token/cost 都查 ledger，前端事件只携带"用户视角"
+    const ok = await telemetryEvent("ai_reply_feedback_submitted", "sidebar", {
+      rating,
+      feedback_text: rating === "down" ? feedbackText.trim() : "",
+      reply_chars_bucket: charBucket(r.text),
+    }, c);
+    if (!ok) {
+      showToast("反馈暂时没发出：本地服务未连接", "error");
+      return;
+    }
+    patchReply(commentId, replyId, {
+      feedbackRating: rating,
+      feedbackSubmitted: true,
+      feedbackDraftOpen: false,
+    });
+    showToast("反馈已记录", "success");
   }
   function setAiPending(commentId, patch = {}) {
     const comments = load();
@@ -542,6 +886,7 @@ const commentSystem = (() => {
       id: Number(row.id) || Date.now(),
       agentCommentId: Number(row.id) || null,
       notionPageId: row.notion_page_id || null,
+      telemetryThreadId: row.thread_telemetry_id || null,
       excerpt: row.selected_text || "",
       text: row.comment || "",
       createdAt: row.created_at || new Date().toISOString(),
@@ -1067,6 +1412,9 @@ const commentSystem = (() => {
     }).then(resp => {
       if (resp.success) {
         if (resp.notionSynced === false && resp.notionError) console.warn("[KB] optional Notion backup not synced:", resp.notionError);
+        telemetryEvent("highlight_saved", "selection_bar", {
+          selected_text_chars_bucket: charBucket(excerpt),
+        });
         showToast(captureSavedToast(resp, "已高亮并保存到本地记忆库"), "success");
       } else {
         const detail = resp.detail || "未知错误";
@@ -1423,6 +1771,45 @@ const commentSystem = (() => {
         cursor: pointer; padding: 0; font-family: inherit;
       }
       .kb-reply-btn:hover { color: var(--kb-terra); }
+      .kb-ai-feedback {
+        display: flex; align-items: center; gap: 6px;
+        margin-top: 8px; flex-wrap: wrap;
+      }
+      .kb-feedback-chip {
+        background: transparent; color: var(--kb-ink-mute);
+        border: 1px solid var(--kb-line); border-radius: 3px;
+        padding: 3px 7px; font-size: 11px; cursor: pointer;
+        font-family: inherit; line-height: 1.2;
+      }
+      .kb-feedback-chip:hover,
+      .kb-feedback-chip.active {
+        border-color: var(--kb-brand-strong);
+        color: var(--kb-brand-strong);
+        background: var(--kb-brand-soft);
+      }
+      .kb-feedback-done {
+        color: var(--kb-ink-mute); font-size: 11px;
+      }
+      .kb-feedback-panel {
+        width: 100%; margin-top: 6px;
+        border: 1px solid var(--kb-line-2);
+        background: var(--kb-paper-soft);
+        border-radius: 4px; padding: 8px;
+      }
+      .kb-feedback-panel textarea {
+        width: 100%; min-height: 64px; resize: vertical;
+        border: 1px solid var(--kb-line); border-radius: 3px;
+        box-sizing: border-box; padding: 8px;
+        font-family: inherit; font-size: 12px; line-height: 1.5;
+        background: var(--kb-paper); color: var(--kb-ink);
+      }
+      .kb-feedback-note {
+        color: var(--kb-ink-mute); font-size: 11px; line-height: 1.5;
+        margin-top: 6px;
+      }
+      .kb-feedback-actions {
+        display: flex; gap: 8px; margin-top: 7px; align-items: center;
+      }
       .kb-ai-btn {
         background: var(--kb-brand-strong); color: var(--kb-paper);
         border: none; border-radius: 3px;
@@ -1952,6 +2339,24 @@ const commentSystem = (() => {
       if (dm.status === "error" || dm.status === "failed" || dm.error) return true;
       return /^(AI 回复失败|Agent 执行出错)/.test(r.text || "");
     };
+    const isPendingAIReply = (r) => r?.isAI && /^AI 仍在处理中/.test(r.text || "");
+    const feedbackEligible = (r) => r?.isAI && !isFailedAIReply(r) && !isPendingAIReply(r);
+    const renderFeedbackControls = (r) => feedbackEligible(r)
+      ? `<div class="kb-ai-feedback">
+          <button type="button" class="kb-feedback-chip ${r.feedbackRating === "up" ? "active" : ""}" data-ai-feedback-up="${c.id}" data-reply-id="${r.id}">赞</button>
+          <button type="button" class="kb-feedback-chip ${r.feedbackRating === "down" ? "active" : ""}" data-ai-feedback-down="${c.id}" data-reply-id="${r.id}">踩</button>
+          ${r.feedbackSubmitted ? `<span class="kb-feedback-done">已记录</span>` : ""}
+          ${r.feedbackDraftOpen ? `
+            <div class="kb-feedback-panel">
+              <textarea id="kb-feedback-ta-${c.id}-${r.id}" placeholder="哪里不对、没帮上忙，直接写一句"></textarea>
+              <div class="kb-feedback-note">这段反馈会发送给开发者；不会附带网页内容、划线原文、你的评论或 AI 回复全文。</div>
+              <div class="kb-feedback-actions">
+                <button type="button" class="kb-ai-btn" data-ai-feedback-submit="${c.id}" data-reply-id="${r.id}">发送反馈</button>
+                <button type="button" class="kb-reply-btn" data-ai-feedback-cancel="${c.id}" data-reply-id="${r.id}">取消</button>
+              </div>
+            </div>` : ""}
+        </div>`
+      : "";
     const repliesHtml = c.replies.map(r => {
       let debugHtml = "";
       if (DEBUG_MODE && r.isAI && r.debugMeta) {
@@ -2010,6 +2415,7 @@ const commentSystem = (() => {
         <div class="kb-reply-label">${labelHtml}</div>
         <div class="kb-reply-body">${bodyHtml}</div>
         ${debugHtml}
+        ${renderFeedbackControls(r)}
         ${retryHtml}
       </div>`;
     }).join("");
@@ -2055,7 +2461,7 @@ const commentSystem = (() => {
       render();
       return;
     }
-    const c = load().find(x => x.id === commentId);
+    const c = load().find(x => String(x.id) === String(commentId));
     if (!c) {
       oldCard.remove();
       return;
@@ -2119,6 +2525,29 @@ const commentSystem = (() => {
       expandBtn.textContent = isExpanded ? "收起 ↑" : "展开全部 ↓";
       return;
     }
+    const feedbackUp = e.target.closest("[data-ai-feedback-up]");
+    if (feedbackUp) {
+      submitAiFeedback(feedbackUp.dataset.aiFeedbackUp, feedbackUp.dataset.replyId, "up");
+      return;
+    }
+    const feedbackDown = e.target.closest("[data-ai-feedback-down]");
+    if (feedbackDown) {
+      patchReply(feedbackDown.dataset.aiFeedbackDown, feedbackDown.dataset.replyId, { feedbackDraftOpen: true });
+      return;
+    }
+    const feedbackSubmit = e.target.closest("[data-ai-feedback-submit]");
+    if (feedbackSubmit) {
+      const commentId = feedbackSubmit.dataset.aiFeedbackSubmit;
+      const replyId = feedbackSubmit.dataset.replyId;
+      const ta = document.getElementById(`kb-feedback-ta-${commentId}-${replyId}`);
+      submitAiFeedback(commentId, replyId, "down", ta?.value || "");
+      return;
+    }
+    const feedbackCancel = e.target.closest("[data-ai-feedback-cancel]");
+    if (feedbackCancel) {
+      patchReply(feedbackCancel.dataset.aiFeedbackCancel, feedbackCancel.dataset.replyId, { feedbackDraftOpen: false });
+      return;
+    }
     // 打开追问框
     const openBtn = e.target.closest("[data-open-reply]");
     if (openBtn) {
@@ -2173,12 +2602,17 @@ const commentSystem = (() => {
     const comments = load();
     const c = comments.find(x => x.id === commentId);
     if (!c) return;
+    telemetryEvent("followup_created", "sidebar", {
+      followup_chars_bucket: charBucket(text),
+      thread_turn_count_before: Math.max(0, threadTurnCount(c) - 1),
+    }, c);
     if (c.agentCommentId) {
       try {
+        const identity = await telemetryIdentity(c, "sidebar");
         await fetch(`http://localhost:8766/comments/${c.agentCommentId}/reply`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ content: text }),
+          body: JSON.stringify({ content: text, ...identity }),
         });
       } catch { /* 离线时静默 */ }
     }
@@ -2200,6 +2634,14 @@ const commentSystem = (() => {
     btn.disabled = true;
     status.textContent = "保存中...";
     const c = addComment(currentExcerpt, text);
+    const initialExcerpt = currentExcerpt || _savedSelection || "";
+    telemetryEvent("sidebar_comment_created", "sidebar", {
+      comment_chars_bucket: charBucket(text),
+      active_note_chars_bucket: charBucket(text),
+      selected_text_chars_bucket: charBucket(initialExcerpt),
+      has_selected_text: Boolean(initialExcerpt),
+      thread_turn_count_before: 0,
+    }, c);
     ta.value = "";
 
     // 同步写入 agent_api（source of truth），仅存储，不触发 agent
@@ -2215,6 +2657,7 @@ const commentSystem = (() => {
         pageContent = getPageContent();
         _pageContentSent.add(url);
       }
+      const identity = await telemetryIdentity(c, "sidebar");
       const resp = await fetch("http://localhost:8766/comments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -2226,6 +2669,7 @@ const commentSystem = (() => {
           page_content: pageContent,
           comment: text,
           no_agent: true,  // 告知后端不要立即触发 agent
+          ...identity,
         }),
       });
       if (resp.ok) {
@@ -2345,6 +2789,14 @@ const commentSystem = (() => {
     const comments = load();
     const c = comments.find(x => x.id === commentId);
     if (!c) { _askAIRunning.delete(commentId); _lockReplyInput(commentId, false); return; }
+    const _askStartMs = Date.now();
+    const _requestedVia = options.replaceReplyId ? "regenerate" : (options.selectedText ? "better_question" : "ask_ai");
+    telemetryEvent("ai_reply_requested", "sidebar", {
+      requested_via: _requestedVia,
+      existing_ai_reply_count: countAIReplies(c),
+      thread_turn_count_before: threadTurnCount(c),
+      replace_reply: Boolean(options.replaceReplyId),
+    }, c);
 
     // thinkingEl 用固定 id，render() 重建 DOM 后能重新找到
     const thinkingId = "kb-thinking-" + commentId;
@@ -2412,6 +2864,7 @@ const commentSystem = (() => {
         if (!rerunResp.ok) throw new Error(`无法重新召唤 AI（HTTP ${rerunResp.status}）`);
       } else {
         const surrounding = options.surroundingText || getSurroundingText(c.excerpt || "");
+        const identity = await telemetryIdentity(c, "sidebar");
         const resp = await fetch("http://localhost:8766/comments", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -2423,6 +2876,7 @@ const commentSystem = (() => {
             page_content: options.pageContent || "",
             comment: conversationComment,
             no_agent: false,
+            ...identity,
           }),
         });
         if (!resp.ok) throw new Error("agent_api 不可用");
@@ -2496,18 +2950,42 @@ const commentSystem = (() => {
         if (shouldNotify) _markAiReplyReady(commentId);
         // 每次 AI 回复后同步 capture（本地为主，外部备份可选）
         const freshC = load().find(x => x.id === commentId);
-        if (freshC) syncCaptureToVault(freshC);
+        if (freshC) {
+          // 字段瘦身：stage/role/model/token/cost 都查 ledger（用 thread_telemetry_id 关联）
+          telemetryEvent("ai_reply_completed", "sidebar", {
+            requested_via: _requestedVia,
+            reply_chars_bucket: charBucket(reply),
+            thread_turn_count_before: Math.max(0, threadTurnCount(freshC) - 1),
+            elapsed_s_user: Math.round((Date.now() - _askStartMs) / 100) / 10,
+            status: "success",
+          }, freshC);
+          syncCaptureToVault(freshC);
+        }
       } else {
+        // 超时合并进 ai_reply_failed，按 error_category="timeout" 区分
         const pendingText = "AI 仍在处理中，请稍候刷新页面查看结果。";
         if (options.replaceReplyId) {
           replaceReply(commentId, options.replaceReplyId, pendingText, true);
         } else {
           addReply(commentId, pendingText, true);
         }
+        const freshC = load().find(x => x.id === commentId);
+        telemetryEvent("ai_reply_failed", "sidebar", {
+          requested_via: _requestedVia,
+          error_category: "timeout",
+          error_code: "poll_timeout",
+          elapsed_s_user: Math.round((Date.now() - _askStartMs) / 100) / 10,
+        }, freshC || c);
         clearAiPending(commentId);
       }
     } catch (err) {
       const msg = err.message || String(err);
+      const freshC = load().find(x => x.id === commentId);
+      telemetryEvent("ai_reply_failed", "sidebar", {
+        requested_via: _requestedVia,
+        ...categorizeClientError(msg),
+        elapsed_s_user: Math.round((Date.now() - _askStartMs) / 100) / 10,
+      }, freshC || c);
       let failureText = "";
       if (msg.includes("Extension context invalidated")) {
         failureText = "AI 回复失败：插件已失效，请刷新页面后重试。";
@@ -2543,6 +3021,14 @@ const commentSystem = (() => {
     highlightByText(excerpt);
     currentExcerpt = excerpt;
     const c = addComment(excerpt, comment);
+    telemetryEvent("sidebar_comment_created", "sidebar", {
+      comment_chars_bucket: charBucket(comment),
+      active_note_chars_bucket: charBucket(comment),
+      selected_text_chars_bucket: charBucket(excerpt),
+      has_selected_text: true,
+      requested_via: "better_question",
+      thread_turn_count_before: 0,
+    }, c);
     panelOpen = true;
     panelEl.classList.remove("kb-btn-hidden");
     document.body.style.marginRight = "360px";

@@ -8,6 +8,84 @@ const BETTER_QUESTION_ASK_AI = "kb_better_question_ask_ai";
 // ─── 工具 ───
 function $(id) { return document.getElementById(id); }
 
+// ─── 运营埋点（notebook 子页打开）───
+// install_id 用 chrome.storage.local，跨扩展页共享；session_id 用 localStorage（本页生命周期内）
+const NB_TELEMETRY_INSTALL_KEY = "kb_telemetry_install_id_v1";
+const NB_TELEMETRY_SESSION_KEY = "kb_telemetry_session_v1";
+const NB_TELEMETRY_SESSION_TTL_MS = 30 * 60 * 1000;
+function nbRandomId(prefix) {
+  const raw = (globalThis.crypto && crypto.randomUUID)
+    ? crypto.randomUUID().replace(/-/g, "")
+    : `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+  return `${prefix}_${raw}`;
+}
+async function getNotebookInstallId() {
+  return new Promise((resolve) => {
+    try {
+      chrome.storage.local.get([NB_TELEMETRY_INSTALL_KEY], (r) => {
+        let id = r && r[NB_TELEMETRY_INSTALL_KEY];
+        if (!id) {
+          id = nbRandomId("install");
+          chrome.storage.local.set({ [NB_TELEMETRY_INSTALL_KEY]: id });
+        }
+        resolve(id);
+      });
+    } catch { resolve(nbRandomId("install")); }
+  });
+}
+function getNotebookSessionId() {
+  const now = Date.now();
+  let state = null;
+  try { state = JSON.parse(localStorage.getItem(NB_TELEMETRY_SESSION_KEY) || "null"); } catch {}
+  if (!state || !state.id || now - Number(state.lastSeen || 0) > NB_TELEMETRY_SESSION_TTL_MS) {
+    state = { id: nbRandomId("session"), lastSeen: now };
+  } else {
+    state.lastSeen = now;
+  }
+  try { localStorage.setItem(NB_TELEMETRY_SESSION_KEY, JSON.stringify(state)); } catch {}
+  return state.id;
+}
+function getNotebookEnv() {
+  let browser = "", os = "";
+  try {
+    const brands = (navigator.userAgentData && navigator.userAgentData.brands) || [];
+    const main = brands.find((b) => /Chrome|Edge|Brave|Opera|Arc|Firefox/i.test(b.brand));
+    browser = (main && main.brand) || (/Edg\//i.test(navigator.userAgent) ? "Edge" : "Chrome");
+  } catch { browser = "Chrome"; }
+  try {
+    const p = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
+    if (/mac/i.test(p)) os = "macOS";
+    else if (/win/i.test(p)) os = "Windows";
+    else if (/linux/i.test(p)) os = "Linux";
+  } catch {}
+  let extensionId = "";
+  try { extensionId = (chrome.runtime && chrome.runtime.id) || ""; } catch {}
+  return {
+    app_version: "notebook-1",
+    extension_id: extensionId,
+    browser: browser || "Unknown",
+    os: os || "Unknown",
+    locale: navigator.language || "",
+  };
+}
+async function notebookTelemetry(eventName, properties) {
+  try {
+    const installId = await getNotebookInstallId();
+    const body = {
+      event_name: eventName,
+      anonymous_install_id: installId,
+      app_session_id: getNotebookSessionId(),
+      surface: "notebook",
+      properties: { ...getNotebookEnv(), ...(properties || {}) },
+    };
+    await fetch(`${API_BASE}/telemetry/events`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch { /* fire-and-forget */ }
+}
+
 function isWindowsPlatform() {
   const platform = (
     (navigator.userAgentData && navigator.userAgentData.platform) ||
@@ -204,6 +282,8 @@ function switchTab(tab) {
   if (tab === "thought-map") loadThoughtMap();
   if (tab === "thinking") loadThinking();
   if (tab === "diary") loadDiary();
+  // 运营埋点：子页打开
+  notebookTelemetry("notebook_opened", { notebook_route: tab });
 }
 
 document.querySelectorAll(".kb-nb-nav-item").forEach(a => {
