@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import threading
+import time
 import urllib.error
 import urllib.request
 import hashlib
@@ -581,6 +582,9 @@ def init_db():
         ("page_id TEXT", "llm_call_ledger"),
         ("role TEXT", "llm_call_ledger"),
         ("intent TEXT", "llm_call_ledger"),
+        # margin-cloud 跨设备同步：null = 未推送，ISO ts = 推送成功
+        ("synced_to_cloud_at TEXT", "telemetry_outbox"),
+        ("synced_to_cloud_at TEXT", "llm_call_ledger"),
     ]:
         try:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {col}")
@@ -780,6 +784,234 @@ def _startup_check():
         print(f"[agent_api] ⚠ LLM provider 不可用：{llm['error']}")
 
 _startup_check()
+
+# ──────────────────────────────────────────
+# margin-cloud 跨设备同步 worker
+# 把本地 telemetry_outbox + llm_call_ledger 异步推到云端，
+# 让运营后台能看到所有用户（不止本机）的事件 + LLM 账本。
+#
+# 设计原则：
+# - 完全异步，不阻塞用户请求路径
+# - 失败容错：错就标记 + 下个 tick 重试，不丢数据
+# - 隐私：endpoint 端有 schema 白名单兜底；这里负责传得对
+# - LLM prompt / response 永远不上云，只上元数据
+# ──────────────────────────────────────────
+
+CLOUD_ENDPOINT = os.environ.get("MARGIN_CLOUD_ENDPOINT", "").rstrip("/")
+CLOUD_INGEST_TOKEN = os.environ.get("MARGIN_INGEST_TOKEN", "")
+CLOUD_SYNC_INTERVAL_SEC = int(os.environ.get("MARGIN_CLOUD_SYNC_INTERVAL_SEC", "10") or "10")
+CLOUD_SYNC_BATCH = int(os.environ.get("MARGIN_CLOUD_SYNC_BATCH", "100") or "100")
+CLOUD_SYNC_ENABLED = bool(CLOUD_ENDPOINT) and bool(CLOUD_INGEST_TOKEN)
+
+
+def _cloud_log_failure(stage: str, payload: dict) -> None:
+    """把同步失败结构化记进 .logs/failures.jsonl，kb-health 能看到。"""
+    try:
+        path = os.path.join(LOG_DIR, "failures.jsonl")
+        payload = {
+            "ts": datetime.utcnow().isoformat() + "Z",
+            "kind": "margin_cloud_sync",
+            "stage": stage,
+            **payload,
+        }
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def _cloud_post(path: str, body: dict, timeout: int = 15) -> tuple[bool, str]:
+    """同步 POST 到 margin-cloud。返回 (ok, error_or_response_snippet)。"""
+    url = f"{CLOUD_ENDPOINT}{path}"
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={
+            "content-type": "application/json",
+            "authorization": f"Bearer {CLOUD_INGEST_TOKEN}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body_text = resp.read().decode("utf-8", errors="replace")[:500]
+            if 200 <= resp.status < 300:
+                return True, body_text
+            return False, f"http_{resp.status}: {body_text}"
+    except urllib.error.HTTPError as e:
+        try:
+            err_body = e.read().decode("utf-8", errors="replace")[:300]
+        except Exception:
+            err_body = ""
+        return False, f"http_{e.code}: {err_body}"
+    except urllib.error.URLError as e:
+        return False, f"url_error: {e.reason}"
+    except Exception as e:
+        return False, f"exception: {type(e).__name__}: {e}"
+
+
+def _cloud_sync_events_once() -> int:
+    """推一批未同步的 telemetry_outbox 行到云端。返回成功推送数。"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """SELECT id, event_id, event_name, anonymous_install_id, app_session_id,
+                      page_id, page_view_id, thread_telemetry_id, surface,
+                      properties_json, created_at
+               FROM telemetry_outbox
+               WHERE synced_to_cloud_at IS NULL
+               ORDER BY id ASC
+               LIMIT ?""",
+            (CLOUD_SYNC_BATCH,),
+        ).fetchall()
+    finally:
+        # 释放只读连接，写入用新连接（避免长事务卡 WAL）
+        pass
+
+    if not rows:
+        conn.close()
+        return 0
+
+    events = []
+    for r in rows:
+        try:
+            props = json.loads(r["properties_json"] or "{}")
+        except Exception:
+            props = {}
+        events.append({
+            "event_id": r["event_id"],
+            "event_name": r["event_name"],
+            "anonymous_install_id": r["anonymous_install_id"],
+            "app_session_id": r["app_session_id"],
+            "page_id": r["page_id"],
+            "page_view_id": r["page_view_id"],
+            "thread_telemetry_id": r["thread_telemetry_id"],
+            "surface": r["surface"],
+            "properties": props,
+            "ts_client": r["created_at"],
+            "created_at": r["created_at"],
+        })
+
+    ok, info = _cloud_post("/api/events", {"events": events})
+    if not ok:
+        conn.close()
+        _cloud_log_failure("events", {
+            "batch": len(events),
+            "info": info,
+        })
+        return 0
+
+    now = datetime.utcnow().isoformat() + "Z"
+    ids = [r["id"] for r in rows]
+    placeholders = ",".join("?" * len(ids))
+    conn.execute(
+        f"UPDATE telemetry_outbox SET synced_to_cloud_at = ? WHERE id IN ({placeholders})",
+        [now] + ids,
+    )
+    conn.commit()
+    conn.close()
+    return len(rows)
+
+
+def _cloud_sync_ledger_once() -> int:
+    """推一批未同步的 llm_call_ledger 行到云端。返回成功推送数。
+
+    注意：ledger 行会随着 call 进展更新（started→success/error/timeout），
+    所以只在 status != 'started' 时同步终态行。否则 started 行被推上去后
+    本地 update 不会再次同步（synced_to_cloud_at 已设）。
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """SELECT id, call_id, stage, role, intent, comment_id, reply_id, job_id,
+                      provider_mode, provider, provider_config, local_agent, api_provider, model,
+                      status, attempt, timeout_sec, elapsed_ms,
+                      prompt_tokens_est, input_tokens, output_tokens, total_tokens, cache_tokens,
+                      actual_usage_json, usage_source, cost_usd,
+                      error_category, error_code, redacted_error,
+                      anonymous_install_id, app_session_id, page_id, page_view_id, thread_telemetry_id,
+                      created_at, updated_at
+               FROM llm_call_ledger
+               WHERE synced_to_cloud_at IS NULL
+                 AND status != 'started'
+               ORDER BY id ASC
+               LIMIT ?""",
+            (CLOUD_SYNC_BATCH,),
+        ).fetchall()
+    finally:
+        pass
+
+    if not rows:
+        conn.close()
+        return 0
+
+    out_rows = []
+    for r in rows:
+        item = {k: r[k] for k in r.keys()}
+        item.pop("id", None)
+        if item.get("actual_usage_json"):
+            try:
+                item["actual_usage_json"] = json.loads(item["actual_usage_json"])
+            except Exception:
+                item["actual_usage_json"] = None
+        out_rows.append(item)
+
+    ok, info = _cloud_post("/api/ledger", {"rows": out_rows})
+    if not ok:
+        conn.close()
+        _cloud_log_failure("ledger", {
+            "batch": len(out_rows),
+            "info": info,
+        })
+        return 0
+
+    now = datetime.utcnow().isoformat() + "Z"
+    ids = [r["id"] for r in rows]
+    placeholders = ",".join("?" * len(ids))
+    conn.execute(
+        f"UPDATE llm_call_ledger SET synced_to_cloud_at = ? WHERE id IN ({placeholders})",
+        [now] + ids,
+    )
+    conn.commit()
+    conn.close()
+    return len(rows)
+
+
+def _cloud_sync_loop():
+    """后台线程：定时把未同步的行推到云端。"""
+    consecutive_errors = 0
+    while True:
+        try:
+            n_events = _cloud_sync_events_once()
+            n_ledger = _cloud_sync_ledger_once()
+            if n_events or n_ledger:
+                print(f"[margin-cloud] synced events={n_events} ledger={n_ledger}")
+            consecutive_errors = 0
+        except Exception as e:
+            consecutive_errors += 1
+            _cloud_log_failure("loop_exception", {
+                "error": f"{type(e).__name__}: {e}",
+                "consecutive": consecutive_errors,
+            })
+            # 指数退避：连续失败时把间隔放大，最多放大到 5 倍
+            time.sleep(min(CLOUD_SYNC_INTERVAL_SEC * (consecutive_errors + 1), CLOUD_SYNC_INTERVAL_SEC * 5))
+            continue
+        time.sleep(CLOUD_SYNC_INTERVAL_SEC)
+
+
+def _start_cloud_sync_if_enabled():
+    if not CLOUD_SYNC_ENABLED:
+        print(f"[margin-cloud] sync disabled (endpoint={'set' if CLOUD_ENDPOINT else 'unset'}, token={'set' if CLOUD_INGEST_TOKEN else 'unset'})")
+        return
+    print(f"[margin-cloud] sync enabled → {CLOUD_ENDPOINT} every {CLOUD_SYNC_INTERVAL_SEC}s")
+    t = threading.Thread(target=_cloud_sync_loop, name="margin-cloud-sync", daemon=True)
+    t.start()
+
+
+_start_cloud_sync_if_enabled()
 
 # ──────────────────────────────────────────
 # v2: 文件加载工具
