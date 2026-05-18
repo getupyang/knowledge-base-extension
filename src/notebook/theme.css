@@ -318,10 +318,14 @@ a { color: inherit; }
   white-space: nowrap;
 }
 
-/* Thinking 页 */
-.kb-nb-thinking-header {
+/* Section actions */
+.kb-nb-thinking-header,
+.kb-nb-section-title-row {
   display: flex; justify-content: space-between; align-items: baseline;
   gap: 16px;
+}
+.kb-nb-section-title-row .kb-nb-page-title {
+  margin-right: 12px;
 }
 .kb-nb-soft-btn {
   background: none; border: 1px solid var(--kb-line);
@@ -567,6 +571,12 @@ a { color: inherit; }
   color: var(--kb-danger);
   font-size: 12px;
   font-family: "Source Han Serif SC", "Noto Serif SC", serif;
+}
+.kb-nb-curated-status {
+  margin: 8px 0 0;
+  color: var(--kb-ink-mute);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 /* Profile · 一句话穿透 + 4 字段 */

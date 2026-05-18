@@ -221,7 +221,7 @@ function updateDiaryUnreadNotice() {
     if (count > 0) {
       diaryCount.textContent = "";
       diaryCount.classList.add("unread");
-      diaryCount.title = `${count} 条未读 AI 回复`;
+      diaryCount.title = `${count} 条未读 Margin 回复`;
     } else {
       diaryCount.textContent = diaryCount.dataset.total || diaryCount.textContent || "—";
       diaryCount.classList.remove("unread");
@@ -232,7 +232,7 @@ function updateDiaryUnreadNotice() {
     aiBanner.classList.toggle("kb-nb-hidden", count <= 0);
     if (count > 0) {
       aiBanner.innerHTML = `
-        <div><strong>AI 回来了</strong><span>${count} 条回复待看</span></div>
+        <div><strong>Margin 回来了</strong><span>${count} 条回复待看</span></div>
         <button data-open-unread-replies>查看</button>
       `;
     }
@@ -241,14 +241,14 @@ function updateDiaryUnreadNotice() {
   if (!notice) return;
   if (!count) {
     notice.innerHTML = _diaryBaselineInitializedNow
-      ? `<span>已建立已读基线，之后新完成的 AI 回复会在这里提醒</span>`
-      : `<span>没有未读 AI 回复</span>`;
+      ? `<span>已建立已读基线，之后新完成的 Margin 回复会在这里提醒</span>`
+      : `<span>没有未读 Margin 回复</span>`;
     notice.classList.add("empty");
     return;
   }
   notice.classList.remove("empty");
   notice.innerHTML = `
-    <span>${count} 条未读 AI 回复</span>
+    <span>${count} 条未读 Margin 回复</span>
     <span class="kb-nb-diary-unread-actions">
       <button data-jump-unread-reply>查看第一条</button>
       <button data-mark-all-ai-read>全部标为已读</button>
@@ -417,7 +417,7 @@ function renderProfileCurated(data, ts) {
         <div class="kb-nb-profile-field-value">${escapeHtml(f.identity || "—")}</div>
       </div>
       <div class="kb-nb-profile-field">
-        <div class="kb-nb-profile-field-label">当前 PROJECT</div>
+        <div class="kb-nb-profile-field-label">当前项目</div>
         <div class="kb-nb-profile-field-value">${escapeHtml(f.current_project || "—")}</div>
       </div>
       <div class="kb-nb-profile-field">
@@ -459,7 +459,7 @@ async function loadProfileCurated() {
 
 async function triggerProfileCurated(isRefresh) {
   const box = $("kb-nb-profile-curated");
-  box.innerHTML = `<div class="kb-nb-curated-running">让 Opus 读你最近 30 条批注 + 资料，约 30 秒…</div>`;
+  box.innerHTML = `<div class="kb-nb-curated-running">Margin 正在整理你的最近批注和资料…</div>`;
   try {
     const data = await api("/notebook/profile/curated", {
       method: "POST",
@@ -500,7 +500,7 @@ async function loadRules() {
     $("kb-nb-rules-hit").textContent = data.stats.hit_rate == null ? "—" : (Math.round(data.stats.hit_rate * 100) + "%");
     const list = $("kb-nb-rules-list");
     if (!data.active.length) {
-      list.innerHTML = `<div class="kb-nb-empty">AI 还没从你的反馈里学到任何工作方式。<br>批注、纠正它的回答，它会开始记。</div>`;
+      list.innerHTML = `<div class="kb-nb-empty">Margin 还没从你的反馈里学到任何工作方式。<br>批注、纠正它的回答，它会开始记。</div>`;
     } else {
       list.innerHTML = data.active.map(r => renderRule(r)).join("");
     }
@@ -537,12 +537,16 @@ function renderRulesCurated(data, ts) {
 
   const uncategorizedCount = (data.uncategorized_rule_ids || []).length;
   const skillCount = skills.length;
+  const statusHtml = data._message
+    ? `<p class="kb-nb-curated-status">${escapeHtml(data._message)}</p>`
+    : "";
   box.innerHTML = `
     <div class="kb-nb-skills-header">
       <h3 class="kb-nb-skills-title">我正在养成的 ${skillCount} 个工作方式</h3>
       <button class="kb-nb-profile-oneliner-refresh" id="kb-nb-rules-recurate">重新提炼 · 上次 ${ageStr}</button>
     </div>
     <p class="kb-nb-skills-subtitle">这是我作为你的协作者在长出的能力 — 来自你 ${data._total_rules || 0} 条具体反馈。</p>
+    ${statusHtml}
     <div class="kb-nb-skills-list">${skillsHtml || '<div class="kb-nb-empty">还没识别出工作方式，再批注几次让我学到更多</div>'}</div>
     ${uncategorizedCount > 0 ? `
       <details class="kb-nb-md-details" style="margin-top:14px;">
@@ -608,14 +612,14 @@ async function loadRulesCurated() {
     console.warn("[notebook] load skills failed", e);
   }
 
-  // 无 generation 或 DB 读失败 → 显示"让 AI 整理一稿"按钮
+  // 无 generation 或 DB 读失败 → 显示"让 Margin 整理一稿"按钮
   const btn = document.getElementById("kb-nb-rules-curate-btn");
   if (btn) btn.onclick = () => triggerRulesCurated(false);
 }
 
 async function triggerRulesCurated(isRefresh) {
   const box = $("kb-nb-rules-curated");
-  box.innerHTML = `<div class="kb-nb-curated-running">让 Opus 把零散规则提炼成 3-6 个工作方式，约 30 秒…</div>`;
+  box.innerHTML = `<div class="kb-nb-curated-running">Margin 正在把零散反馈提炼成工作方式…</div>`;
   try {
     const data = await api("/notebook/rules/curated", {
       method: "POST",
@@ -633,7 +637,7 @@ async function triggerRulesCurated(isRefresh) {
     // M3.0 范围 B：后端已写 DB，前端不再 localStorage
     const ts = data._generation_id ? Date.now() : Date.now();
     renderRulesCurated(data, ts);
-    toast(isRefresh ? "重新蒸馏完成" : "蒸馏完成");
+    toast(data._stale_rules_source ? "原始规则不足，已保留上一版" : (isRefresh ? "重新提炼完成" : "提炼完成"));
   } catch (e) {
     box.innerHTML = `
       <div class="kb-nb-curated-failed">
@@ -669,7 +673,7 @@ function renderRule(r) {
       <div class="kb-nb-rule-meta">
         ${lastUsed !== created ? `用过 · ${fmtTimeAgo(lastUsed)}` : "<span style='opacity:0.5'>未触发</span>"}
         <br>
-        <span style="opacity:0.7">M3 启用 usage_count</span>
+        <span style="opacity:0.7">命中统计待启用</span>
       </div>
     </div>
   `;
@@ -841,7 +845,7 @@ function renderThinking(data) {
   const box = $("kb-nb-thinking-active");
   // 优先展示 running 状态
   if (data.running_job) {
-    box.innerHTML = `<div class="kb-nb-thinking-running">AI 正在整理你最近的思考，Codex 本地模式可能需要 1–3 分钟…</div>`;
+    box.innerHTML = `<div class="kb-nb-thinking-running">Margin 正在整理你最近的思考，本地运行可能需要 1–3 分钟…</div>`;
     return;
   }
   if (!data.active) {
@@ -888,6 +892,19 @@ async function loadMemoryMap(force) {
       const el = $(id);
       if (el) el.innerHTML = `<div class="kb-nb-empty">读取失败</div>`;
     });
+  }
+}
+
+async function refreshProjectMap() {
+  const btn = $("kb-nb-project-refresh");
+  const box = $("kb-nb-project-map");
+  if (btn) btn.disabled = true;
+  if (box) box.innerHTML = `<div class="kb-nb-curated-running">Margin 正在读取最新项目线索…</div>`;
+  try {
+    await loadMemoryMap(true);
+    toast("项目线索已更新");
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -981,6 +998,19 @@ async function loadThoughtMap(force) {
     });
   } catch (e) {
     box.innerHTML = `<div class="kb-nb-empty">读取失败</div>`;
+  }
+}
+
+async function refreshThoughtMap() {
+  const btn = $("kb-nb-thought-map-refresh");
+  const box = $("kb-nb-thought-map");
+  if (btn) btn.disabled = true;
+  if (box) box.innerHTML = `<div class="kb-nb-curated-running">Margin 正在重新整理思考地图…</div>`;
+  try {
+    await loadThoughtMap(true);
+    toast("思考地图已更新");
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -1433,7 +1463,7 @@ async function askBetterQuestion(actionId) {
   if (hasDirectBridge && window.kbCommentSystem?.askAIForQuestionExcerpt) {
     const localCommentId = window.kbCommentSystem.askAIForQuestionExcerpt(payload);
     clicked.disabled = false;
-    toast(localCommentId ? "已在右侧评注里召唤 AI" : "召唤 AI 失败");
+    toast(localCommentId ? "已在右侧评注里召唤 Margin" : "召唤 Margin 失败");
     return;
   }
   _betterQuestionPending.set(actionId, clicked);
@@ -1464,7 +1494,7 @@ window.addEventListener("message", e => {
     btn.disabled = false;
     _betterQuestionPending.delete(actionId);
   }
-  toast(e.data.ok ? "已在右侧评注里召唤 AI" : "召唤 AI 失败");
+  toast(e.data.ok ? "已在右侧评注里召唤 Margin" : "召唤 Margin 失败");
 });
 
 function renderThoughtNode(node) {
@@ -1622,7 +1652,7 @@ async function requestThinking(reason) {
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({ kind: "synthesize_thinking", payload: { trigger_reason: reason } })
     });
-    toast(r.deduped ? "已经在跑了 · 等一下" : "已 queue · worker 正在跑");
+    toast(r.deduped ? "已经在整理了 · 等一下" : "已开始整理");
     startThinkingPolling(r.id);
   } catch (e) {
     toast("无法触发 · 检查后端");
@@ -1683,6 +1713,12 @@ function renderThinkingFailed(job) {
   if (retry) retry.addEventListener("click", () => requestThinking("user_request"));
 }
 
+const projectRefreshBtn = $("kb-nb-project-refresh");
+if (projectRefreshBtn) projectRefreshBtn.addEventListener("click", refreshProjectMap);
+
+const thoughtMapRefreshBtn = $("kb-nb-thought-map-refresh");
+if (thoughtMapRefreshBtn) thoughtMapRefreshBtn.addEventListener("click", refreshThoughtMap);
+
 $("kb-nb-thinking-refresh").addEventListener("click", () => requestThinking("user_request"));
 
 // ─── 5. 问记忆（Memory Chat V0）───
@@ -1725,7 +1761,7 @@ async function loadChat() {
 }
 
 function renderChatMessage(m) {
-  const role = m.role === "user" ? "你" : "AGENT";
+  const role = m.role === "user" ? "你" : "Margin";
   const body = m.role === "assistant" ? md(m.content || "") : escapeHtml(m.content || "").replace(/\n/g, "<br>");
   return `
     <div class="kb-nb-chat-msg ${m.role === "assistant" ? "assistant" : "user"}">
@@ -1790,7 +1826,7 @@ async function loadDiary() {
         <div class="kb-nb-diary-page">
           <a href="${escapeHtml(c.page_url)}" target="_blank" rel="noopener">${escapeHtml(c.page_title || c.page_url)}</a>
         </div>` : "";
-      // 把这条评论的 AI replies 渲染成紧跟其后的 agent 流
+      // 把这条评论的 Margin replies 渲染成紧跟其后的 agent 流
       const aiReplies = (c.replies || []).filter(r => r.author === "agent");
       const repliesHtml = aiReplies.map(r => {
         const rt = new Date(r.created_at);
@@ -1805,7 +1841,7 @@ async function loadDiary() {
         return `
           <div class="kb-nb-diary-item agent ${unread ? "unread" : ""}" data-agent-reply-id="${escapeHtml(replyId)}">
             <div class="kb-nb-diary-meta">
-              AGENT · ${rts}
+              Margin · ${rts}
               ${unread ? `<span class="kb-nb-diary-unread-tag">未读</span>` : ""}
             </div>
             <div class="kb-nb-diary-text kb-nb-diary-preview">${escapeHtml(preview)}${isLong ? "…" : ""}</div>
@@ -1846,7 +1882,7 @@ $("kb-nb-diary-list").addEventListener("click", e => {
   const markAllBtn = e.target.closest("[data-mark-all-ai-read]");
   if (markAllBtn) {
     markAgentRepliesSeen(_diaryUnreadReplyIds);
-    toast("已标记全部 AI 回复为已读");
+    toast("已标记全部 Margin 回复为已读");
     return;
   }
 

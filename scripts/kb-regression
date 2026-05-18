@@ -240,6 +240,7 @@ class Regression:
         worker = read_text(BACKEND_DIR / "worker.py")
         content = read_text(SRC_DIR / "content" / "index.js")
         notebook = read_text(SRC_DIR / "notebook" / "app.js")
+        notebook_html = read_text(SRC_DIR / "notebook" / "index.html")
         console_html = read_text(SRC_DIR / "debug" / "sqlite-console.html")
 
         backend_terms = [
@@ -304,6 +305,20 @@ class Regression:
             "/notebook/thought-map?days=42" not in notebook,
             "notebook must let the backend choose the local thought-map window instead of forcing 42 days",
         )
+        for forbidden in [
+            "Opus",
+            "Codex 本地模式",
+            "M3 启用",
+            "AGENT 观察",
+            "AGENT 在学什么",
+            "重新蒸馏完成",
+            "已 queue",
+            "worker 正在跑",
+        ]:
+            assert_true(
+                forbidden not in notebook and forbidden not in notebook_html,
+                f"notebook user-facing copy must hide provider/runtime names behind Margin wording: {forbidden}",
+            )
 
         worker_terms = [
             "memory_growth_for_comment",

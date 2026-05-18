@@ -39,7 +39,7 @@
           </a>
         </div>
         <div class="kb-nb-nav-group">
-          <div class="kb-nb-nav-group-title">程序记忆 · Agent 在学什么</div>
+          <div class="kb-nb-nav-group-title">程序记忆 · Margin 在学什么</div>
           <a class="kb-nb-nav-item" data-tab="rules" href="#rules">
             <span>养成的习惯</span><span class="kb-nb-nav-count" id="kb-nb-count-rules">—</span>
           </a>
@@ -54,7 +54,7 @@
           </a>
         </div>
         <div class="kb-nb-nav-callout" id="kb-nb-callout">
-          <div class="kb-nb-callout-tag">AGENT 观察</div>
+          <div class="kb-nb-callout-tag">Margin 观察</div>
           <div class="kb-nb-callout-body" id="kb-nb-callout-body">…</div>
         </div>
       </nav>
@@ -91,9 +91,9 @@
           <!-- Curated 浓缩卡片（首次访问引导，跑过缓存 24h） -->
           <div id="kb-nb-profile-curated" class="kb-nb-curated-section">
             <div class="kb-nb-curated-empty" id="kb-nb-profile-curated-empty">
-              <div class="kb-nb-mono-soft">AI 还没替你写浓缩状态卡</div>
-              <div style="margin-top:6px;color:var(--kb-ink-mute);">让 Opus 读你的资料 + 最近 30 条批注，写一句穿透状态 + 4 个关键字段。约 30 秒。</div>
-              <button id="kb-nb-profile-curate-btn" class="kb-nb-soft-btn" style="margin-top:10px;">让 AI 写一稿 →</button>
+              <div class="kb-nb-mono-soft">Margin 还没替你写浓缩状态卡</div>
+              <div style="margin-top:6px;color:var(--kb-ink-mute);">让 Margin 读你的资料和最近批注，写一句穿透状态 + 4 个关键字段。</div>
+              <button id="kb-nb-profile-curate-btn" class="kb-nb-soft-btn" style="margin-top:10px;">让 Margin 写一稿 →</button>
             </div>
           </div>
 
@@ -108,7 +108,10 @@
           <div class="kb-nb-page-header">
             <span class="kb-nb-page-mono">● 知识记忆 · 项目</span>
           </div>
-          <h2 class="kb-nb-page-title">当前项目</h2>
+          <div class="kb-nb-section-title-row">
+            <h2 class="kb-nb-page-title">当前项目</h2>
+            <button id="kb-nb-project-refresh" class="kb-nb-soft-btn">重新整理 →</button>
+          </div>
           <p class="kb-nb-page-subtitle">系统从你的真实批注里自动长出的项目候选 — 先展示证据和问题，不急着写死成档案。</p>
           <div id="kb-nb-project-map" class="kb-nb-project-map">读取中…</div>
           <div class="kb-nb-divider-soft"></div>
@@ -124,23 +127,26 @@
             <span class="kb-nb-page-mono">● 知识记忆 · 思考秩序</span>
             <button class="kb-nb-page-export" data-export="thought-map">导出 ↗</button>
           </div>
-          <h2 class="kb-nb-page-title">这段时间你在围着什么转</h2>
-          <p class="kb-nb-page-subtitle">这里展示 Agent 最近如何理解你的关注变化，并决定之后评论区回复时优先带上哪些上下文。</p>
+          <div class="kb-nb-section-title-row">
+            <h2 class="kb-nb-page-title">这段时间你在围着什么转</h2>
+            <button id="kb-nb-thought-map-refresh" class="kb-nb-soft-btn">重新整理 →</button>
+          </div>
+          <p class="kb-nb-page-subtitle">这里展示 Margin 最近如何理解你的关注变化，并决定之后评论区回复时优先带上哪些上下文。</p>
           <div id="kb-nb-thought-map">读取中…</div>
         </section>
 
         <!-- 养成的习惯 -->
         <section class="kb-nb-page kb-nb-hidden" id="kb-tab-rules">
           <div class="kb-nb-page-header">
-            <span class="kb-nb-page-mono">● 程序记忆 · AGENT 在学什么</span>
+            <span class="kb-nb-page-mono">● 程序记忆 · Margin 在学什么</span>
             <button class="kb-nb-page-export" data-export="rules">导出 ↗</button>
           </div>
           <h2 class="kb-nb-page-title">跟你打交道的方式</h2>
-          <p class="kb-nb-page-subtitle">这些不是「关于你」的事实，而是 AGENT 通过你的反馈学到的「下次该怎么响应你」。每条都来自一次具体的修正。</p>
+          <p class="kb-nb-page-subtitle">这些不是「关于你」的事实，而是 Margin 通过你的反馈学到的「下次该怎么响应你」。每条都来自一次具体的修正。</p>
           <div class="kb-nb-stats" id="kb-nb-rules-stats">
             <div class="kb-nb-stat"><div class="kb-nb-stat-num" id="kb-nb-rules-week">—</div><div class="kb-nb-stat-label">本周新增</div></div>
             <div class="kb-nb-stat"><div class="kb-nb-stat-num" id="kb-nb-rules-active">—</div><div class="kb-nb-stat-label">累计</div></div>
-            <div class="kb-nb-stat"><div class="kb-nb-stat-num kb-nb-stat-mute" id="kb-nb-rules-hit">—</div><div class="kb-nb-stat-label">命中率（M3 启用）</div></div>
+            <div class="kb-nb-stat"><div class="kb-nb-stat-num kb-nb-stat-mute" id="kb-nb-rules-hit">—</div><div class="kb-nb-stat-label">命中率（待启用）</div></div>
             <div class="kb-nb-stat-quote">"请用我的判断方式收敛 — 这样你越变了，我也越省心。"</div>
           </div>
 
@@ -148,8 +154,8 @@
           <div id="kb-nb-rules-curated" class="kb-nb-curated-section">
             <div class="kb-nb-curated-empty" id="kb-nb-rules-curated-empty">
               <div class="kb-nb-mono-soft">还没提炼出我正在养成的工作方式</div>
-              <div style="margin-top:6px;color:var(--kb-ink-mute);">把这些零散反馈抽象成 3-6 个"工作方式" — 让你看到 AI 长出了哪些为你服务的能力。约 30 秒。</div>
-              <button id="kb-nb-rules-curate-btn" class="kb-nb-soft-btn" style="margin-top:10px;">让 AI 提炼一稿 →</button>
+              <div style="margin-top:6px;color:var(--kb-ink-mute);">把这些零散反馈抽象成 3-6 个"工作方式" — 让你看到 Margin 长出了哪些为你服务的能力。</div>
+              <button id="kb-nb-rules-curate-btn" class="kb-nb-soft-btn" style="margin-top:10px;">让 Margin 提炼一稿 →</button>
             </div>
           </div>
 
@@ -170,7 +176,7 @@
             <h2 class="kb-nb-page-title">最近你在想的事</h2>
             <button id="kb-nb-thinking-refresh" class="kb-nb-soft-btn">立刻整理一次 →</button>
           </div>
-          <p class="kb-nb-page-subtitle">用 Opus 级别模型对你最近的批注做一次深度反思 — 不靠词云，靠把你脑子里反复在转的问题说出来。</p>
+          <p class="kb-nb-page-subtitle">让 Margin 对你最近的批注做一次深度反思 — 不靠词云，靠把你脑子里反复在转的问题说出来。</p>
           <div id="kb-nb-thinking-active" class="kb-nb-thinking-active">读取中…</div>
           <div class="kb-nb-divider-soft"></div>
           <div class="kb-nb-thinking-bottom">
@@ -194,8 +200,8 @@
             <span class="kb-nb-page-mono">● 时间线 · 共同日记</span>
             <button class="kb-nb-page-export" data-export="diary">导出 ↗</button>
           </div>
-          <h2 class="kb-nb-page-title">你做了什么 · AGENT 做了什么</h2>
-          <p class="kb-nb-page-subtitle">每次你的行为后紧跟一条 AGENT 行为 — 让你看到机器在身后悄悄做的所有事。M2 仅展示你的批注流，AGENT 流 M3 启用。</p>
+          <h2 class="kb-nb-page-title">你做了什么 · Margin 做了什么</h2>
+          <p class="kb-nb-page-subtitle">每次你的行为后紧跟一条 Margin 行为 — 让你看到它在身后做的所有事。当前先展示你的批注流。</p>
           <div id="kb-nb-diary-list">读取中…</div>
         </section>
       </main>

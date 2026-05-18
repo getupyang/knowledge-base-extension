@@ -26,6 +26,7 @@ npm run regression
   - Follow-up flow records to backend and then triggers AI by default.
   - Debug Console exposes events, context packs, field notes, and acceptance state.
   - Notebook and thought-map code does not ship maintainer-specific private-memory topics or hardcoded Better Question clusters.
+  - Notebook user-facing copy hides provider/runtime names behind Margin wording.
 
 ## 2. Hermetic API/DB Regression
 
