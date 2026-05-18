@@ -10,6 +10,17 @@ npm run regression
 
 这个命令是提交门禁，不是展示页。任一必需项失败都会返回非 0。
 
+## 2026-05-18 · Notebook Privacy Audit Note
+
+- 记录时间：2026-05-18 21:30 Asia/Shanghai
+- 关联 commits：`fab35bc`、`05bfc8e`、`cede099`、`27c45f4`
+- 改了什么：移除 Notebook 中 maintainer-specific private-memory fallback 和 hardcoded Better Question clusters；把用户可见 provider/runtime 文案收敛为 `Margin`；区分真正生成和本地 evidence refresh；修正 stale rules 状态；移除全局点阵背景。
+- 为什么改：Notebook 曾在无本机证据或弱证据场景下 fallback 到开发者私有样例，存在跨用户记忆泄漏风险，必须作为隐私 bug 修复。
+- 用户如何验收：更新到包含上述 commits 的 `main`，重新加载 Chrome extension 并刷新 Notebook；确认 `你 & 项目`、`思考地图`、`养成的习惯`、`最近你在想的事` 不再出现 maintainer-specific 私有 topic 或旧样例内容；确认 `当前项目` 是 `刷新线索`，不是伪装成 LLM 重新生成；确认前端不出现 explicit provider/runtime 名称。
+- 已验证：`node --check src/notebook/app.js`、`python3 -m py_compile backend/agent_api.py scripts/kb-regression`、`git diff --check`、`scripts/kb-regression --skip-live --skip-browser`。
+- 适用范围：Notebook 前端、thought-map/memory-map 后端推断、rules/skills distillation、Notebook UI 文案与静态回归门禁。
+- 可能过时的地方：`当前项目`和`思考地图`目前仍是本地 evidence map，不是 LLM-generated snapshot；如果后续新增 generated project snapshot，需要同步更新刷新语义和本节说明。
+
 ## 1. Static Checks
 
 - Python syntax: `backend/llm_client.py`, `backend/agent_api.py`, `backend/worker.py`, `backend/server.py`, `scripts/kb-health`, `scripts/kb-regression`.
