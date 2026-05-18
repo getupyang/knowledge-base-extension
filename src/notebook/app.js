@@ -1133,46 +1133,172 @@ const _betterQuestionActions = new Map();
 const _betterQuestionPending = new Map();
 let _commentBridgePromise = null;
 
-function clusterQuestions(questions) {
-  const groups = [
-    {
-      id: "eval-product-feedback",
-      label: "AI 产品评测如何真正指导产品迭代？",
-      keywords: ["gdpval", "netflix", "cranfield", "评测", "benchmark", "recommender", "推荐系统", "产品目标", "指标"],
-      better: [
-        "哪些 benchmark 曾经真实改变了一个领域的产品迭代？",
-        "AI memory 产品应该评“被懂”的感觉，还是评任务结果，还是两者之间的因果链？",
-        "如何把第一视角 gold review 和第三方 judge 结合成持续回归体系？",
-      ],
-    },
-    {
-      id: "social-tech-fieldwork",
-      label: "技术共同体如何把理念变成可参与的社会实验？",
-      keywords: ["burning man", "ccc", "emf", "why", "黑客", "社会实验", "共同体", "参与", "活动"],
-      better: [
-        "这些活动分别通过什么机制把松散兴趣变成长期社区？",
-        "中国语境里有没有类似的社会技术实验入口，普通参与者能怎么加入？",
-        "这些活动留下了哪些可复用的组织经验、项目或知识产物？",
-      ],
-    },
-    {
-      id: "spatiotemporal-impact",
-      label: "视觉/时空数据如何从研究走向真实社会影响？",
-      keywords: ["street view", "visual census", "李飞飞", "timnit", "时空", "lbs", "卫星", "社会影响"],
-      better: [
-        "这类项目后来形成了持续研究谱系，还是只停留在一次性论文？",
-        "街景、卫星、LBS 数据在公共研究和商业决策里分别创造了什么价值？",
-        "从个人经历看，我错过的那条时空大数据学习线索，现在还能怎么补回来？",
-      ],
-    },
+const BETTER_QUESTION_STOP_TERMS = new Set([
+  "如何", "是否", "什么", "哪些", "为什么", "怎么", "能否", "如果", "以及", "这个", "这些",
+  "一个", "一种", "当前", "最终", "用户", "系统", "问题", "场景", "方式", "需要", "应该",
+  "可以", "进行", "相关", "真实", "结合", "类似", "更多", "判断", "设计", "the", "and",
+  "for", "with", "from", "into", "what", "why", "how", "should", "could",
+]);
+
+function stableHash(text) {
+  let h = 0;
+  for (let i = 0; i < text.length; i += 1) h = ((h << 5) - h + text.charCodeAt(i)) | 0;
+  return Math.abs(h).toString(36);
+}
+
+function keywordTokensFromText(text, maxTokens = 18) {
+  const raw = String(text || "").toLowerCase();
+  const weighted = new Map();
+  const add = (token, weight = 1) => {
+    const t = String(token || "").trim();
+    if (!t || t.length < 2 || BETTER_QUESTION_STOP_TERMS.has(t)) return;
+    if (/^\d+$/.test(t)) return;
+    weighted.set(t, (weighted.get(t) || 0) + weight);
+  };
+
+  (raw.match(/[a-z0-9][a-z0-9_-]{2,}/g) || []).forEach(t => add(t, 1.2));
+  (raw.match(/[\u4e00-\u9fff]{2,}/g) || []).forEach(segment => {
+    if (segment.length <= 6) {
+      add(segment, 1.4);
+      return;
+    }
+    for (let n = 2; n <= 4; n += 1) {
+      for (let i = 0; i <= segment.length - n; i += 1) add(segment.slice(i, i + n), 1);
+    }
+  });
+
+  return [...weighted.entries()]
+    .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)
+    .slice(0, maxTokens)
+    .map(([token]) => token);
+}
+
+function questionKeywords(q) {
+  return keywordTokensFromText(questionTextForCluster(q), 20);
+}
+
+function sharedTokenCount(a, b) {
+  const bSet = new Set(b || []);
+  return (a || []).filter(t => bSet.has(t)).length;
+}
+
+function evidenceOverlap(a, b) {
+  const left = new Set(a?.evidence_comment_ids || []);
+  return (b?.evidence_comment_ids || []).some(id => left.has(id));
+}
+
+function questionStrength(q) {
+  return Number(q?.signal_strength || 0) + ((q?.scope === "project") ? 0.08 : 0);
+}
+
+function sortedQuestionMatches(items) {
+  return [...items].sort((a, b) => {
+    const strength = questionStrength(b) - questionStrength(a);
+    if (strength) return strength;
+    return String(b.created_at || "").localeCompare(String(a.created_at || ""));
+  });
+}
+
+function commonTokensForQuestions(matches, max = 3) {
+  const counts = new Map();
+  (matches || []).forEach(q => {
+    const seen = new Set(questionKeywords(q).slice(0, 12));
+    seen.forEach(t => counts.set(t, (counts.get(t) || 0) + 1));
+  });
+  return [...counts.entries()]
+    .filter(([, n]) => n >= 2)
+    .sort((a, b) => b[1] - a[1] || b[0].length - a[0].length)
+    .slice(0, max)
+    .map(([t]) => t);
+}
+
+function compactTopic(text) {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  if (!value) return "这组问题";
+  return value.length > 28 ? value.slice(0, 28) + "…" : value;
+}
+
+function buildBetterQuestions(topic, matches) {
+  const t = compactTopic(topic);
+  const hasProjectScope = matches.some(q => q.scope === "project");
+  const highStrength = matches.some(q => Number(q.signal_strength || 0) >= 0.85);
+  const prompts = [
+    `这组问题背后的共同判断是什么，哪些证据已经支持它？`,
+    `如果只推进一步，围绕「${t}」最应该补哪类证据？`,
+    `这件事应该进入行动或项目，还是先继续观察？`,
   ];
-  return groups.map(group => {
-    const matches = (questions || []).filter(q => {
-      const text = questionTextForCluster(q);
-      return group.keywords.some(k => text.includes(k.toLowerCase()));
+  if (hasProjectScope) {
+    prompts.unshift(`要把「${t}」推进成项目决策，还缺哪条正反证据？`);
+  }
+  if (highStrength) {
+    prompts.splice(1, 0, `下次遇到相关材料时，我应该优先验证「${t}」里的哪个假设？`);
+  }
+  return [...new Set(prompts)].slice(0, 3);
+}
+
+function makeQuestionCluster(topic, matches, source) {
+  const sorted = sortedQuestionMatches(matches).slice(0, 6);
+  const common = commonTokensForQuestions(sorted);
+  const displayTopic = topic || (common.length ? common.join(" / ") : sorted[0]?.question || "这组问题");
+  return {
+    id: `dynamic-${stableHash(`${source}:${displayTopic}:${sorted.map(q => q.id || q.comment_id).join(",")}`)}`,
+    label: `围绕「${compactTopic(displayTopic)}」的问题正在成形`,
+    topic: displayTopic,
+    source,
+    matches: sorted,
+    better: buildBetterQuestions(displayTopic, sorted),
+  };
+}
+
+function clusterQuestions(memoryMap) {
+  const questions = (memoryMap?.active_questions || [])
+    .filter(q => (q.question || "").trim())
+    .map((q, idx) => ({...q, _idx: idx, _tokens: questionKeywords(q)}));
+  const themes = (memoryMap?.themes || []).filter(t => (t.theme || "").trim());
+  const clusters = [];
+  const used = new Set();
+  const keyFor = q => String(q.id || q.comment_id || q._idx);
+
+  themes.slice(0, 10).forEach(theme => {
+    const themeTokens = keywordTokensFromText(theme.theme || "", 16);
+    const themeEvidence = new Set(theme.representative_comment_ids || []);
+    const matches = questions.filter(q => {
+      if (used.has(keyFor(q))) return false;
+      const tokenHit = sharedTokenCount(q._tokens, themeTokens) >= 1;
+      const evidenceHit = (q.evidence_comment_ids || []).some(id => themeEvidence.has(id));
+      return tokenHit || evidenceHit;
     });
-    return {...group, matches};
-  }).filter(group => group.matches.length >= 2);
+    if (matches.length >= 2) {
+      const cluster = makeQuestionCluster(theme.theme, matches, "theme");
+      clusters.push(cluster);
+      cluster.matches.forEach(q => used.add(keyFor(q)));
+    }
+  });
+
+  questions.forEach(seed => {
+    if (used.has(keyFor(seed))) return;
+    const matches = [seed];
+    questions.forEach(candidate => {
+      if (candidate === seed || used.has(keyFor(candidate))) return;
+      const overlap = sharedTokenCount(seed._tokens, candidate._tokens);
+      const strongLink = overlap >= 2 || (overlap >= 1 && (candidate.scope === seed.scope || evidenceOverlap(seed, candidate)));
+      if (strongLink) matches.push(candidate);
+    });
+    if (matches.length >= 2) {
+      const common = commonTokensForQuestions(matches);
+      const cluster = makeQuestionCluster(common.join(" / "), matches, "question-overlap");
+      clusters.push(cluster);
+      cluster.matches.forEach(q => used.add(keyFor(q)));
+    }
+  });
+
+  return clusters
+    .sort((a, b) => {
+      const score = questionStrength(sortedQuestionMatches(b.matches)[0]) - questionStrength(sortedQuestionMatches(a.matches)[0]);
+      if (score) return score;
+      return b.matches.length - a.matches.length;
+    })
+    .slice(0, 5);
 }
 
 function evidenceRefsForQuestion(q) {
@@ -1250,7 +1376,7 @@ function renderBetterQuestionButton(group, question, index) {
 }
 
 function renderBetterQuestions(memoryMap) {
-  const clusters = clusterQuestions(memoryMap?.active_questions || []);
+  const clusters = clusterQuestions(memoryMap);
   _betterQuestionActions.clear();
   if (!clusters.length) {
     return `

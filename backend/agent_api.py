@@ -2272,12 +2272,6 @@ def _thought_read_for_node(label: str, lane: str, trend: str, evidence_count: in
     return f"本机多次批注都碰到「{label}」。它会作为候选主题参与后续回复的上下文排序。"
 
 
-def _thought_label_contains(node: dict, *needles: str) -> bool:
-    label = (node or {}).get("label") or ""
-    lower = label.lower()
-    return any((needle.lower() in lower if re.fullmatch(r"[A-Za-z0-9 _/-]+", needle) else needle in label) for needle in needles)
-
-
 def _thought_aha(main: dict, emerging: list, cooling: list, nodes: list) -> dict:
     if not nodes:
         return {
@@ -2290,46 +2284,57 @@ def _thought_aha(main: dict, emerging: list, cooling: list, nodes: list) -> dict
     lead = main or (emerging[0] if emerging else nodes[0])
     lead_label = lead.get("label") or "当前问题"
     rising_labels = [n.get("label") for n in emerging if n.get("label")]
+    lead_counts = lead.get("source_counts") or {}
+    lead_lane = lead.get("lane") or ""
+    lead_evidence = int(lead.get("evidence_count") or 0)
+    lead_days = int(lead.get("distinct_day_count") or 0)
     evidence_ids = []
     for node in [lead] + list(emerging or [])[:2]:
         for cid in node.get("evidence_comment_ids") or []:
             if cid and cid not in evidence_ids:
                 evidence_ids.append(cid)
 
-    all_focus = [lead] + list(emerging or [])
-    has_eval = any(_thought_label_contains(n, "评测", "benchmark", "产品判断") for n in all_focus)
-    has_reading = any(_thought_label_contains(n, "读论文", "论文方法论", "方法论复用") for n in all_focus)
-    has_video = any(_thought_label_contains(n, "视频", "展示") for n in all_focus)
-    has_social = any(_thought_label_contains(n, "社会技术", "活动参与", "附近理论", "双年展") for n in all_focus)
-    has_model_reason = any(_thought_label_contains(n, "模型现实任务", "差异原因") for n in all_focus)
-
-    if has_eval and has_reading:
-        headline = "你不是在收集论文和评测，而是在找一套判断产品是否真的变好的方法"
-        read = "反复出现的不是某篇论文本身，而是“指标、任务、用户价值、真实采用”之间怎样连起来。读论文、看 benchmark、追问后续影响，其实都在服务同一个判断：一个系统怎样证明自己不是看起来很强，而是真的让产品变好。"
-        next_question = "下一步最值得问：这些案例里，哪一种证据真正改变了产品决策，哪一种只是论文里的漂亮指标？"
-    elif has_eval:
-        headline = f"你围着「{lead_label}」转，核心不是资料更多，而是证据能不能改变判断"
-        read = "这些批注的共同点是：你不满足于官方叙事或单页解释，会追问真实应用、后续采用和评测是否改变了实践。系统后续应该优先帮你找“证据链”，而不是只补背景知识。"
-        next_question = "下一步最值得问：这个评测或指标有没有进入真实产品、团队决策或行业标准？"
-    elif has_social:
-        headline = "你最近的社会技术兴趣，落点已经从“这是什么”转向“我怎么参与并复用它”"
-        read = "Burning Man、黑客营地、附近研究、双年展这些表面上很散，但底层都在问同一件事：理念如何变成可参与的场域、组织经验和真实产物。"
-        next_question = "下一步最值得问：这些场域留下了哪些可复用的组织方法，以及你今年能从哪个入口实际参与？"
-    elif has_video:
-        headline = "这个新线索更像一个马上要执行的产品表达任务"
-        read = "围绕视频、展示和工具选择的批注不是长期研究主题，而是当下要把产品讲清楚的执行问题。系统应该帮你压缩选择成本，而不是展开成泛泛的工具榜单。"
-        next_question = "下一步最值得问：你的产品视频第一版到底要证明什么，是功能、使用场景，还是用户看到后的行动？"
-    elif has_model_reason:
-        headline = "你在追问模型表现差异背后的机制，而不只是要例子"
-        read = "这些问题表面是分类解释或例子补全，底层是在判断：不同模型、不同任务形态为什么会表现不同，以及这种差异对产品设计意味着什么。"
-        next_question = "下一步最值得问：哪些任务差异来自模型能力，哪些其实来自任务定义和反馈循环设计？"
-    elif main and rising_labels:
+    if main and rising_labels:
         headline = f"主线是「{lead_label}」，但真正的新变化在「{rising_labels[0]}」"
-        read = "稳定主线提供背景，新升温线索说明你最近的注意力正在换挡。系统后续应该把新问题放进旧主线里判断，而不是把它当成孤立兴趣。"
+        read = (
+            f"本机证据里「{lead_label}」已有 {lead_evidence} 条线索、跨 {max(1, lead_days)} 天出现；"
+            f"同时「{rising_labels[0]}」最近在升温。系统后续应该把新问题放进旧主线里判断，而不是把它当成孤立兴趣。"
+        )
         next_question = f"下一步最值得问：新出现的「{rising_labels[0]}」是在延伸主线，还是在开启一条新的工作线？"
+    elif lead_counts.get("active_question"):
+        headline = f"最清楚的不是主题，而是这个未解问题：「{lead_label}」"
+        read = (
+            f"这条线索来自本机 memory growth 抽出的 active question，并有 {lead_evidence} 条证据。"
+            "它更适合被当成下一次回复要优先检查的张力，而不是被包装成长期兴趣画像。"
+        )
+        next_question = f"下一步最值得问：围绕「{lead_label}」，你现在缺的是事实证据、判断框架，还是一个可执行的小实验？"
+    elif lead_counts.get("project_signal"):
+        headline = f"「{lead_label}」像一个正在成形的工作容器，但还不是确认档案"
+        read = (
+            f"系统看到的是本机项目/工作流信号，不是用户手动确认的项目卡。"
+            f"目前证据数是 {lead_evidence}，应该先展示依据和不确定性，再决定是否写入长期项目背景。"
+        )
+        next_question = f"下一步最值得问：要把「{lead_label}」升级成项目档案，还需要哪条用户主动确认的证据？"
+    elif lead_counts.get("theme_signal"):
+        headline = f"最近浮上来的关注面是「{lead_label}」"
+        read = (
+            f"这不是单个页面标题，而是多次本地批注抽出的主题信号。"
+            f"它可以参与上下文排序，但还需要继续观察是否变成可推进的问题或项目。"
+        )
+        next_question = f"下一步最值得问：围绕「{lead_label}」，哪些问题只是背景兴趣，哪些已经需要行动或决策？"
+    elif lead_lane in ("sprout", "merging") or rising_labels:
+        headline = f"「{lead_label}」正在升温，但现在先按候选线索处理"
+        read = (
+            f"这条线索近期变强，但证据还需要继续累计。"
+            "系统会把它用于相关回复的上下文排序，同时避免替用户过早下长期结论。"
+        )
+        next_question = f"下一步最值得问：如果继续追「{lead_label}」，你想先得到解释、对比、行动路径，还是风险判断？"
     else:
         headline = f"现在最清楚的线索是「{lead_label}」，但还不能写死成长期画像"
-        read = "证据已经足够形成一个候选问题，但跨天持续性或行动信号还不够强。系统会先把它当作下一次回复的上下文候选，而不是替用户下结论。"
+        read = (
+            f"证据已经足够形成一个候选问题（{lead_evidence} 条，跨 {max(1, lead_days)} 天），"
+            "但持续性或行动信号还不够强。系统会先把它当作下一次回复的上下文候选，而不是替用户下结论。"
+        )
         next_question = f"下一步最值得问：你继续追这个问题时，是想要背景解释、行动方案，还是判断框架？"
 
     if cooling:

@@ -25,6 +25,7 @@ npm run regression
   - Local-first capture paths exist, with legacy Notion routes kept for compatibility.
   - Follow-up flow records to backend and then triggers AI by default.
   - Debug Console exposes events, context packs, field notes, and acceptance state.
+  - Notebook and thought-map code does not ship maintainer-specific private-memory topics or hardcoded Better Question clusters.
 
 ## 2. Hermetic API/DB Regression
 

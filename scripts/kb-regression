@@ -282,6 +282,24 @@ class Regression:
                 forbidden not in backend,
                 f"backend must not contain product-owner specific thought-map label: {forbidden}",
             )
+        for forbidden in [
+            "技术共同体如何把理念变成可参与的社会实验",
+            "中国语境里有没有类似的社会技术实验入口",
+            "这些场域留下了哪些可复用的组织方法",
+            "你最近的社会技术兴趣",
+            "Burning Man、黑客营地",
+            "附近研究、双年展",
+            "从个人经历看，我错过",
+            "视觉/时空数据如何从研究走向真实社会影响",
+            "街景、卫星、LBS 数据",
+            "social-tech-fieldwork",
+            "spatiotemporal-impact",
+            "eval-product-feedback",
+        ]:
+            assert_true(
+                forbidden not in backend and forbidden not in notebook,
+                f"notebook/thought-map must not ship maintainer-specific memory topic: {forbidden}",
+            )
         assert_true(
             "/notebook/thought-map?days=42" not in notebook,
             "notebook must let the backend choose the local thought-map window instead of forcing 42 days",
