@@ -6860,9 +6860,10 @@ def notebook_rules_curated():
                             "evidence_rule_ids": s["evidence_rule_ids"]} for s in active["skills"]],
                 "uncategorized_rule_ids": [],
                 "_status": "ok",
-                "_message": "当前原始规则不足，先保留上一次已提炼的工作方式。",
+                "_message": "当前可重新提炼的可信原始规则不足，先保留上一次已提炼的工作方式。",
                 "_total_rules": generation.get("source_rules_count") or len(rules),
                 "_generation_id": generation.get("id"),
+                "_generation_created_at": generation.get("created_at"),
                 "_persisted": True,
                 "_stale_rules_source": True,
             }
@@ -6882,6 +6883,7 @@ def notebook_rules_curated():
             },
         )
         active = _read_active_skills()
+        generation = active.get("latest_generation") or {}
         return {
             "skills": [{"name": s["name"], "description": s["description"],
                         "evidence_rule_ids": s["evidence_rule_ids"]} for s in active["skills"]],
@@ -6889,6 +6891,7 @@ def notebook_rules_curated():
             "_status": "ok",
             "_total_rules": len(rules),
             "_generation_id": gen_id,
+            "_generation_created_at": generation.get("created_at"),
             "_persisted": True,
         }
     except subprocess.TimeoutExpired:

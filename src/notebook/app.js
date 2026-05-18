@@ -635,9 +635,11 @@ async function triggerRulesCurated(isRefresh) {
       return;
     }
     // M3.0 范围 B：后端已写 DB，前端不再 localStorage
-    const ts = data._generation_id ? Date.now() : Date.now();
+    const ts = data._generation_created_at
+      ? new Date(data._generation_created_at).getTime()
+      : Date.now();
     renderRulesCurated(data, ts);
-    toast(data._stale_rules_source ? "原始规则不足，已保留上一版" : (isRefresh ? "重新提炼完成" : "提炼完成"));
+    toast(data._stale_rules_source ? "可信原始规则不足，已保留上一版" : (isRefresh ? "重新提炼完成" : "提炼完成"));
   } catch (e) {
     box.innerHTML = `
       <div class="kb-nb-curated-failed">
@@ -902,7 +904,7 @@ async function refreshProjectMap() {
   if (box) box.innerHTML = `<div class="kb-nb-curated-running">Margin 正在读取最新项目线索…</div>`;
   try {
     await loadMemoryMap(true);
-    toast("项目线索已更新");
+    toast("已读取最新项目线索");
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -1005,10 +1007,10 @@ async function refreshThoughtMap() {
   const btn = $("kb-nb-thought-map-refresh");
   const box = $("kb-nb-thought-map");
   if (btn) btn.disabled = true;
-  if (box) box.innerHTML = `<div class="kb-nb-curated-running">Margin 正在重新整理思考地图…</div>`;
+  if (box) box.innerHTML = `<div class="kb-nb-curated-running">Margin 正在读取最新思考线索…</div>`;
   try {
     await loadThoughtMap(true);
-    toast("思考地图已更新");
+    toast("思考地图已刷新");
   } finally {
     if (btn) btn.disabled = false;
   }
