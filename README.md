@@ -104,6 +104,19 @@ Today, the system includes:
 - 可选的 Notion 同步
 - 一个围绕上下文感知输出的实验性 Agent 工作流
 
+## Compatibility Notes
+
+### 2026-05-18 · WeRead reader selection support
+
+- 记录时间：2026-05-18 18:50 CST
+- 关联 commit：c295b28 `feat: support WeRead reader selection`
+- 改了什么：在微信读书 `weread.qq.com/web/reader/` 页面支持 Margin 选区快捷栏；正文为 canvas/custom selection 时，用户划选后仍可看到 `高亮 / 评注`，点击 `评注` 能把微信读书选中文本带入右侧评论面板。
+- 为什么改：微信读书 reader 页禁用了普通右键，并且正文选区不是标准 DOM `window.getSelection()`，原 content script 无法拿到选中文本，也无法显示标注 bar。
+- 用户如何验收：刷新 `chrome://extensions` 里的 Margin 扩展，刷新微信读书 reader 页，拖拽划选正文后点击 `评注`；预期右侧评论面板打开，quote 中显示刚才选中的微信读书文本。
+- 已验证：`node --check src/content/index.js`、`node --check src/content/weread-bridge.js`、`git diff --check`、`scripts/kb-regression --skip-live --skip-browser`，以及加载本地扩展后的真实 WeRead reader 页面 smoke。
+- 适用范围：当前仅针对微信读书 Web reader 页的 custom selection/copy 流程；没有新增 `clipboardRead` 权限，bridge 只通过 `web_accessible_resources` 暴露给 `https://weread.qq.com/*`。
+- 可能过时的地方：如果微信读书改掉 `.wr_selection`、`.reader_toolbar_container .toolbarItem.wr_copy` 或复制实现，本兼容层可能需要重新适配。由于正文是 canvas，Margin 无法保证像普通 DOM 页面一样把视觉高亮长期注入原文。
+
 ---
 
 ## What is interesting here
