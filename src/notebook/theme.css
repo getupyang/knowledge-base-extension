@@ -33,8 +33,6 @@
 html, body { margin: 0; padding: 0; height: 100%; }
 body {
   background: var(--kb-paper);
-  background-image: radial-gradient(oklch(0.91 0.014 145) 0.5px, transparent 0.5px);
-  background-size: 22px 22px;
   color: var(--kb-ink);
   font-family: "Inter Tight", "Inter", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
   font-size: 14px;
