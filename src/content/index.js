@@ -1,4 +1,4 @@
-const KB_CONTENT_VERSION = "0.3.13-ui-contrast";
+const KB_CONTENT_VERSION = "0.3.14-weread-selection";
 console.info(`[KB] content script loaded: ${KB_CONTENT_VERSION}`);
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -387,6 +387,7 @@ const selectionBar = (() => {
   let lastPointer = null;
   let savedExcerpt = "";
   let savedRange = null;
+  let savedTextResolver = null;
 
   function injectStyles() {
     if (document.getElementById("kb-bar-style")) return;
@@ -487,6 +488,111 @@ const selectionBar = (() => {
     return Boolean(document.querySelector("pdf-viewer, embed[type='application/pdf'], #viewerContainer, .textLayer, .page[data-page-number]"));
   }
 
+  function _isWeReadReaderPage() {
+    return location.hostname === "weread.qq.com" && location.pathname.startsWith("/web/reader/");
+  }
+
+  function _rectFromElement(el) {
+    if (!el) return null;
+    try {
+      const style = getComputedStyle(el);
+      if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return null;
+      const rect = el.getBoundingClientRect();
+      if (!_isUsableRect(rect)) return null;
+      return rect;
+    } catch {
+      return null;
+    }
+  }
+
+  function _unionRects(rects) {
+    const usable = rects.filter(_isUsableRect);
+    if (!usable.length) return null;
+    const left = Math.min(...usable.map(r => r.left));
+    const top = Math.min(...usable.map(r => r.top));
+    const right = Math.max(...usable.map(r => r.right));
+    const bottom = Math.max(...usable.map(r => r.bottom));
+    return {
+      left,
+      top,
+      right,
+      bottom,
+      width: right - left,
+      height: bottom - top,
+    };
+  }
+
+  function _readWeReadSelection() {
+    if (!_isWeReadReaderPage()) return null;
+    const rect = _unionRects(Array.from(document.querySelectorAll(".wr_selection")).map(_rectFromElement));
+    if (!_isUsableRect(rect)) return null;
+    return {
+      text: "",
+      range: null,
+      rect,
+      textResolver: _resolveWeReadSelectionText,
+    };
+  }
+
+  async function _resolveWeReadSelectionText() {
+    const copyButton = document.querySelector(".reader_toolbar_container .toolbarItem.wr_copy");
+    if (!copyButton) throw new Error("未找到微信读书的复制按钮");
+
+    const actionId = kbRandomId("weread_copy");
+    const copiedText = await _captureWeReadCopyText(actionId);
+
+    const text = String(copiedText || "").trim();
+    if (text.length < 3) throw new Error("没有读到微信读书选中文本");
+    return text;
+  }
+
+  function _captureWeReadCopyText(actionId) {
+    return _ensureWeReadCopyBridge().then((ready) => {
+      if (!ready) return "";
+      return new Promise((resolve) => {
+        let done = false;
+        const finish = (text) => {
+          if (done) return;
+          done = true;
+          window.removeEventListener("message", onMessage);
+          resolve(String(text || ""));
+        };
+        const onMessage = (event) => {
+          if (event.source !== window) return;
+          const data = event.data || {};
+          if (data.__kb_weread_copy_capture !== actionId) return;
+          finish(data.text);
+        };
+        window.addEventListener("message", onMessage);
+        window.postMessage({ __kb_weread_copy_capture_request: actionId }, "*");
+        setTimeout(() => finish(""), 1200);
+      });
+    });
+  }
+
+  let wereadBridgePromise = null;
+  function _ensureWeReadCopyBridge() {
+    if (!_isWeReadReaderPage()) return Promise.resolve(false);
+    if (document.getElementById("kb-weread-copy-bridge")) return Promise.resolve(true);
+    if (wereadBridgePromise) return wereadBridgePromise;
+    wereadBridgePromise = new Promise((resolve) => {
+      let done = false;
+      const finish = (ok) => {
+        if (done) return;
+        done = true;
+        resolve(ok);
+      };
+      const script = document.createElement("script");
+      script.id = "kb-weread-copy-bridge";
+      script.src = chrome.runtime.getURL("src/content/weread-bridge.js");
+      script.onload = () => finish(true);
+      script.onerror = () => finish(false);
+      (document.documentElement || document.head || document.body).appendChild(script);
+      setTimeout(() => finish(Boolean(document.getElementById("kb-weread-copy-bridge"))), 1200);
+    });
+    return wereadBridgePromise;
+  }
+
   function _targetClosest(target, selector) {
     return target && target.nodeType === Node.ELEMENT_NODE && target.closest?.(selector);
   }
@@ -513,12 +619,12 @@ const selectionBar = (() => {
   }
 
   function _showFromSelection(e, { hideOnEmpty = true } = {}) {
-    const info = _readSelection(e);
+    const info = _readSelection(e) || _readWeReadSelection();
     if (!info) {
       if (hideOnEmpty) hide();
       return false;
     }
-    show(info.rect, info.text, info.range);
+    show(info.rect, info.text, info.range, { textResolver: info.textResolver });
     return true;
   }
 
@@ -528,12 +634,21 @@ const selectionBar = (() => {
     selectionTimer = setTimeout(() => _showFromSelection(e, options), options.delay ?? 160);
   }
 
-  function show(rect, excerpt, range) {
+  async function _getSavedExcerpt() {
+    if (typeof savedTextResolver === "function") {
+      const resolved = await savedTextResolver();
+      savedExcerpt = resolved;
+    }
+    return savedExcerpt;
+  }
+
+  function show(rect, excerpt, range, options = {}) {
     injectStyles();
     hide();
     savedExcerpt = excerpt;
     // 克隆 range 以免 selection 清除后失效
     savedRange = range ? range.cloneRange() : null;
+    savedTextResolver = options.textResolver || null;
 
     barEl = document.createElement("div");
     barEl.id = "kb-sel-bar";
@@ -544,6 +659,12 @@ const selectionBar = (() => {
     `;
 
     document.body.appendChild(barEl);
+    ["pointerdown", "mousedown"].forEach(type => {
+      barEl.addEventListener(type, (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+      }, true);
+    });
 
     // 定位到选区下方
     const scrollX = window.scrollX || window.pageXOffset;
@@ -555,19 +676,31 @@ const selectionBar = (() => {
     barEl.style.left = left + "px";
     barEl.style.top = top + "px";
 
-    barEl.querySelector("#kb-bar-highlight").addEventListener("click", (e) => {
+    barEl.querySelector("#kb-bar-highlight").addEventListener("click", async (e) => {
       e.stopPropagation();
-      hide();
-      if (savedRange) _lastSelectionSurrounding = captureSurroundingFromRange(savedRange);
-      commentSystem.doHighlight(savedExcerpt, savedRange);
-      commentSystem.saveHighlightToVault(savedExcerpt, document.title, location.href, null);
+      try {
+        const excerpt = await _getSavedExcerpt();
+        hide();
+        if (savedRange) _lastSelectionSurrounding = captureSurroundingFromRange(savedRange);
+        commentSystem.doHighlight(excerpt, savedRange);
+        commentSystem.saveHighlightToVault(excerpt, document.title, location.href, null);
+      } catch (err) {
+        console.warn("[KB] selection bar could not read selected text:", err);
+        showToast(`没有读到选中文本：${err.message || "请重试"}`, "error");
+      }
     });
-    barEl.querySelector("#kb-bar-comment").addEventListener("click", (e) => {
+    barEl.querySelector("#kb-bar-comment").addEventListener("click", async (e) => {
       e.stopPropagation();
-      hide();
-      // 划线时用 Range 精确捕获前后文（在 Range 还有效的时候）
-      if (savedRange) _lastSelectionSurrounding = captureSurroundingFromRange(savedRange);
-      commentSystem.doHighlightAndOpenComment(savedExcerpt, savedRange);
+      try {
+        const excerpt = await _getSavedExcerpt();
+        hide();
+        // 划线时用 Range 精确捕获前后文（在 Range 还有效的时候）
+        if (savedRange) _lastSelectionSurrounding = captureSurroundingFromRange(savedRange);
+        commentSystem.doHighlightAndOpenComment(excerpt, savedRange);
+      } catch (err) {
+        console.warn("[KB] selection bar could not read selected text:", err);
+        showToast(`没有读到选中文本：${err.message || "请重试"}`, "error");
+      }
     });
 
     // 3秒无操作自动消失
@@ -580,13 +713,31 @@ const selectionBar = (() => {
     clearTimeout(hideTimer);
     clearTimeout(selectionTimer);
     if (barEl) { barEl.remove(); barEl = null; }
+    savedTextResolver = null;
+  }
+
+  function _startWeReadObserver() {
+    if (!_isWeReadReaderPage() || !document.body) return;
+    const schedule = () => _scheduleShowFromSelection(null, { hideOnEmpty: false, delay: 120 });
+    const obs = new MutationObserver((mutations) => {
+      if (mutations.some(m => {
+        const target = m.target;
+        if (target?.nodeType === Node.ELEMENT_NODE && target.matches?.(".wr_selection")) return true;
+        return Array.from(m.addedNodes || []).some(n =>
+          n.nodeType === Node.ELEMENT_NODE && (n.matches?.(".wr_selection") || n.querySelector?.(".wr_selection"))
+        );
+      })) {
+        schedule();
+      }
+    });
+    obs.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "style"] });
   }
 
   document.addEventListener("pointerdown", _rememberPointer, true);
   document.addEventListener("pointerup", (e) => {
     if (barEl && barEl.contains(e.target)) return;
     if (_targetClosest(e.target, "#kb-comment-panel")) return;
-    if (_isPdfLikePage(e.target)) _scheduleShowFromSelection(e, { hideOnEmpty: false, delay: 80 });
+    if (_isPdfLikePage(e.target) || _isWeReadReaderPage()) _scheduleShowFromSelection(e, { hideOnEmpty: false, delay: 80 });
   }, true);
 
   // mouseup 监听：有选中文字时显示 bar
@@ -614,6 +765,12 @@ const selectionBar = (() => {
   document.addEventListener("mousedown", (e) => {
     if (barEl && !barEl.contains(e.target)) hide();
   }, true);
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", _startWeReadObserver, { once: true });
+  } else {
+    _startWeReadObserver();
+  }
 
   return { hide };
 })();

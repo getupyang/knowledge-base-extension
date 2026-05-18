@@ -206,6 +206,7 @@ class Regression:
             "src/background/index.js",
             "src/collectors/claude.js",
             "src/content/index.js",
+            "src/content/weread-bridge.js",
             "src/content/marked.min.js",
             "src/notebook/app.js",
             "src/popup/popup.js",

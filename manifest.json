@@ -53,6 +53,10 @@
     {
       "resources": ["src/notebook/*"],
       "matches": ["<all_urls>"]
+    },
+    {
+      "resources": ["src/content/weread-bridge.js"],
+      "matches": ["https://weread.qq.com/*"]
     }
   ]
 }
