@@ -1,348 +1,159 @@
-# 知识库助手
+**中文** | [English](README_EN.md)
 
-# Knowledge Base Extension
+<p align="center">
+  <img src="assets/icons/icon128.png" width="96" alt="Margin 图标" />
+</p>
 
-**Turn reading into an AI workspace.**  
-**从浏览文档出发，把阅读变成一个可协作的 AI 工作台。**
+# Margin
 
-Knowledge Base Extension is a local-first Chrome extension that lets people highlight anything they read, leave thoughts in context, and turn those moments into structured AI work.
+**在网页上划线，就能问 AI。**
 
-知识库扩展是一个本地优先的 Chrome 插件。  
-它让用户在阅读过程中直接划线、记录想法，并把这些瞬间转化为结构化的 AI 工作流。
+Margin 是一个本地优先的浏览器边注 AI。你在网页、论文、GitHub、日报或 AI 对话里划线评论，AI 会在页面右侧回答；批注、回复和记忆默认保存在你自己的电脑上。
 
----
-
-## The idea
-
-Today, AI is powerful, but the way we work with it is still primitive.
-
-We still copy text into chat boxes.  
-We still restate context over and over.  
-We still lose the thread between reading, thinking, asking, and reviewing.
-
-This project explores a different interface:
-
-**not chat first, but context first**  
-**not another answer, but a working surface**
-
-如今 AI 已经很强，但人与 AI 协作的界面仍然很原始。
-
-我们还在把文字复制到聊天框里。  
-还在一遍遍重讲上下文。  
-还在阅读、思考、提问、验收之间不断断线。
-
-这个项目想探索另一种界面：
-
-**不是先聊天，而是先上下文**  
-**不是多一个答案，而是多一个工作界面**
-
-我的设计理念：
-
-**产品解决的是思考的摩擦力问题。念头产生的地方就是处理它的地方。**
+[官网](https://get-margin.vercel.app) · [快速开始](#-快速开始) · [功能介绍](#-功能介绍) · [隐私说明](#-隐私说明) · [常见问题](#-常见问题)
 
 ---
 
-## Why it matters
+## 为什么选择 Margin？
 
-The future AI product is not just “a smarter model.”
-
-It is a system that can:
-
-- stay inside the user’s real workflow
-- accumulate context across time
-- return work in a form people can inspect and improve
-- feel less like prompting, and more like collaboration
-
-未来的 AI 产品，不只是“更聪明的模型”。
-
-它更应该是一个系统，能够：
-
-- 留在用户真实的工作流里
-- 跨时间积累上下文
-- 以可检查、可改进的形式返回结果
-- 更少像刻意的 prompting、skills，更多像协作 —— 如果还有human in the loop的话 ：）
+| 能力 | Margin | 普通 AI 聊天 | 传统笔记工具 |
+| --- | --- | --- | --- |
+| 在原文旁边提问 | ✅ | ❌ 需要复制粘贴 | 部分 |
+| 网页自动成为聊天上下文 | ✅ | ❌ 需要重讲背景 | ❌ |
+| 批注、回复、记忆默认本地保存 | ✅ | ❌ | 部分 |
+| 支持让 AI 记住你的纠正和做事方式 | ✅ | 部分 | ❌ |
+| 把追问沉淀成长期上下文 | ✅ | ❌ 容易留在单次对话里 | 部分 |
+| 下次回答能接上你之前的判断 | ✅ | 部分，取决于平台记忆 | ❌ |
+| 在记忆笔记本里回看证据和变化 | ✅ | ❌ | 部分 |
+| 支持 macOS / Windows / WSL | ✅ | ✅ | ✅ |
+| 可选 Notion 外部备份 | ✅ | ❌ | 部分 |
+| 开源，可自己检查 | ✅ | ❌ | 部分 |
 
 ---
 
-## What this project is building
+## 它解决什么问题？
 
-A new interaction layer between humans and AI:
+今天和 AI 协作，最麻烦的不是模型不够聪明，而是上下文一直断：
 
-- read in place
-- think in place
-- leave comments in place
-- work with AI in place
+- 看到一段话，要复制到聊天窗口。
+- 问完一次，下次又要重讲背景。
+- 灵感、反驳、纠正散落在不同工具里。
+- AI 很会回答，但不一定记得你为什么在意。
 
-This repo is an early prototype of that layer.
+Margin 的核心想法很简单：
 
-它想搭建的是一层新的人机协作界面：
+**念头在哪里产生，AI 就应该在哪里接住它。**
 
-- 在原地阅读
-- 在原地思考
-- 在原地留下评论
-- 在原地与 AI 协作
-
-这个仓库就是这层界面的一个早期原型。
+你不用离开当前页面。划线、评论、提问，AI 直接带着原文上下文回答。之后这些评论和回复还能进入记忆笔记本，变成 AI 下次理解你的依据。
 
 ---
 
-## Current shape
+## 一分钟理解
 
-Today, the system includes:
-
-- a Chrome extension for highlighting and inline comments
-- a local backend for storing notes and AI interactions
-- a local knowledge browser
-- optional Notion sync
-- an experimental agent workflow around context-aware output
-
-目前，这个系统包括：
-
-- 一个支持划线和行内评论的 Chrome 插件
-- 一个本地后端，用于保存笔记和 AI 交互
-- 一个本地知识浏览器
-- 可选的 Notion 同步
-- 一个围绕上下文感知输出的实验性 Agent 工作流
-
-## Compatibility Notes
-
-### 2026-05-18 · WeRead reader selection support
-
-- 记录时间：2026-05-18 18:50 CST
-- 关联 commit：c295b28 `feat: support WeRead reader selection`
-- 改了什么：在微信读书 `weread.qq.com/web/reader/` 页面支持 Margin 选区快捷栏；正文为 canvas/custom selection 时，用户划选后仍可看到 `高亮 / 评注`，点击 `评注` 能把微信读书选中文本带入右侧评论面板。
-- 为什么改：微信读书 reader 页禁用了普通右键，并且正文选区不是标准 DOM `window.getSelection()`，原 content script 无法拿到选中文本，也无法显示标注 bar。
-- 用户如何验收：刷新 `chrome://extensions` 里的 Margin 扩展，刷新微信读书 reader 页，拖拽划选正文后点击 `评注`；预期右侧评论面板打开，quote 中显示刚才选中的微信读书文本。
-- 已验证：`node --check src/content/index.js`、`node --check src/content/weread-bridge.js`、`git diff --check`、`scripts/kb-regression --skip-live --skip-browser`，以及加载本地扩展后的真实 WeRead reader 页面 smoke。
-- 适用范围：当前仅针对微信读书 Web reader 页的 custom selection/copy 流程；没有新增 `clipboardRead` 权限，bridge 只通过 `web_accessible_resources` 暴露给 `https://weread.qq.com/*`。
-- 可能过时的地方：如果微信读书改掉 `.wr_selection`、`.reader_toolbar_container .toolbarItem.wr_copy` 或复制实现，本兼容层可能需要重新适配。由于正文是 canvas，Margin 无法保证像普通 DOM 页面一样把视觉高亮长期注入原文。
+1. 打开一篇你正在读的网页。
+2. 划中一句让你停下来的话。
+3. 写一句评论，记录你此刻的好奇、追问、或自己的判断和感受。
+4. Margin 在右侧回复，并保存原文、你的评论和 AI 回复。
+5. 之后 AI 回答相关问题时，可以带上这段背景，而不是让你重讲。
 
 ---
 
-## What is interesting here
+## 功能介绍
 
-This is **not** just a note-taking tool.  
-It is **not** just another AI wrapper.  
-It is an experiment in how AI could become part of the reading and thinking surface itself.
+### 划线评论
 
-这**不是**一个普通笔记工具。  
-这**不是**又一个 AI 壳。  
-它更像是在实验：AI 能不能真正成为阅读与思考界面的一部分。
+在任意网页选中文本，打开 Margin 评论入口，写下一句真实问题：
 
----
+```text
+这段为什么重要？
+```
 
-## Vision
+AI 会带着当前原文回答，而不是让你重新复制上下文。
 
-We believe the next generation of AI products will not win only because they generate better text.
+### 网页变成聊天上下文
 
-They will win because they create better **working environments** for thought, research, review, and collaboration.
+Margin 不是把网页当成孤立笔记保存。你在哪段原文旁边提问，AI 就带着那句话、页面和你的评论回答。每个网页都能变成你和 AI 的现场对话。
 
-我们相信，下一代 AI 产品的竞争，不会只发生在“谁生成得更好”。
+### 记住你的方法
 
-更关键的是：谁能创造更好的**工作环境**，让思考、研究、验收和协作真正发生。
+评论、纠正和追问是很强的个人信号。Margin 会把这些信号沉淀到本地记忆里，让 AI 逐渐知道：
 
----
+- 你在研究什么问题
+- 你喜欢什么解释方式
+- 哪些判断是你反复强调的
+- 哪些规则应该下次直接复用
 
-## Status
+### 记忆笔记本
 
-**Experimental. Local-first. Evolving quickly.**
+本地知识浏览器默认运行在：
 
-This is an active prototype, not a finished product.
+```text
+http://localhost:8765/notebook/
+```
 
-**实验阶段。本地优先。快速迭代中。**
+你可以在这里回看批注、AI 回复、近期主题、项目上下文和逐步形成的工作习惯。
 
-这是一个正在生长中的原型，还不是最终产品。
+### 可选 Notion 备份
 
----
-
-## 支持系统
-
-当前主分支支持：
-
-- macOS：使用 `bash setup.sh` / `bash start.sh`
-- Windows PowerShell：使用 `.\setup.ps1` / `.\start.ps1`
-- Windows CMD：使用 `setup.cmd` / `start.cmd`
-- WSL：在 WSL 内使用 bash 脚本，不和 Windows 终端混用
-
-Windows 支持已经有真实用户在 Windows 上完成安装并跑通。当前不支持 Windows 开机自动启动、GUI 安装器、Windows 后端调用 WSL 里的 CLI，或 WSL 后端调用 Windows 里的 CLI。
+Notion 不是必需项。Margin 默认使用本地 SQLite。你可以选择把批注同步到自己的 Notion 数据库，作为外部备份或旧数据导入来源。
 
 ---
 
-## 前置要求
+## 快速开始
 
-| 依赖 | 版本 | 说明 |
-|------|------|------|
-| macOS | 12+ | 继续使用 `bash setup.sh` / `bash start.sh` |
-| Windows | Windows 10+ | PowerShell / CMD 使用 `.\setup.ps1` / `.\start.ps1`；WSL 用户在 WSL 里继续走 bash |
-| Python 3 | 3.9+ | macOS: `python3 --version`；Windows: `py -3 --version` 或 `python --version` |
-| Node.js | 18+ | `node --version` |
-| Chrome | 最新 | 用于加载插件 |
-| Notion 账号 | — | 可选，用于外部备份和旧数据导入 |
-| LLM 后端 | — | 四选一：Claude Code、Codex CLI、千问 / Qwen API、OpenRouter API |
-
-可选本地后端：
-
-- Claude Code：`npm install -g @anthropic-ai/claude-code`，适合已有 Claude 订阅的用户
-- Codex CLI：适合已有 Codex 本地环境的用户
-
-Windows 支持的是「当前终端环境」：如果你在 PowerShell/CMD 里启动知识库助手，就会复用同一个 PowerShell/CMD 里可用的 `claude` / `codex`；如果你在 WSL 里使用 Claude Code / Codex，就在 WSL 里运行本项目的 bash 脚本。不要混用「Windows 后端调用 WSL 里的 CLI」或「WSL 后端调用 Windows 里的 CLI」。
-
-没有本地后端也能使用标准模式，先支持千问 / Qwen API 和 OpenRouter API。
-
----
-
-## 安装步骤
-
-### 第一步：克隆代码
+### 1. 克隆项目
 
 ```bash
 git clone https://github.com/getupyang/knowledge-base-extension.git
 cd knowledge-base-extension
 ```
 
-### 第二步：准备 LLM 后端
+### 2. 运行安装脚本
 
-mem-ai 先支持 4 种模型服务：
-
-1. Claude Code 直连：已安装并登录 Claude Code 的用户选这个。
-2. Codex 直连：已安装并登录 Codex CLI 的用户选这个。
-3. 千问 / Qwen API：有阿里云百炼或 Qwen API Key 的用户选这个。
-4. OpenRouter API：有 OpenRouter API Key 的用户选这个。
-
-之后想切换默认模型服务时，macOS 运行：
-
-```bash
-sh choose_ai_service.sh
-```
-
-Windows 当前先重新运行 `.\setup.ps1` 并选择重新配置。
-
-菜单会先让你选择 Claude Code / Codex / 千问 / OpenRouter。千问用户选 `3) 千问 / Qwen API` 后，脚本会继续一步步选择 API 类型和默认模型：
-
-- 阿里云百炼 / 中国内地标准 API：`https://dashscope.aliyuncs.com/compatible-mode/v1`
-- Qwen Global / 新加坡标准 API：`https://dashscope-intl.aliyuncs.com/compatible-mode/v1`
-- Qwen Coding Plan / 中国内地：`https://coding.dashscope.aliyuncs.com/v1`
-- Qwen Coding Plan / Global：`https://coding-intl.dashscope.aliyuncs.com/v1`
-
-API Key 输入时不会显示字符，这是为了避免密钥出现在屏幕上；粘贴后按回车，脚本会提示「已收到 API Key」。
-
-切换前脚本会检查后台 worker 和 jobs 队列。如果还有 `queued` / `running` 的记忆增长或整理任务，它会先列出来并让你确认是否继续，避免前台回复切到新服务、后台任务还在旧服务里跑。新产生的 AI 回复会在 `debug_meta` 里记录实际 provider/model；新后台 job 会在 `payload_json._runtime.llm_call` 里记录实际调用服务。
-
-Claude Code 用户可先登录：
-
-```bash
-claude login
-claude --version
-```
-
-选择 Claude Code 时，脚本会继续问「Claude 账号登录」还是「Anthropic API Key 模式」。账号登录不需要输入 key；API Key 模式会优先读取当前终端里的 `ANTHROPIC_API_KEY`，没有检测到时才让你粘贴。
-
-<a id="optional-notion-backup"></a>
-
-### 第三步：可选 Notion 备份
-
-这一步可以跳过。默认数据会保存到本机 `~/.knowledge-base-extension/comments.db`，并写入本地备份目录；Notion 只是一份可选外部副本。
-
-**3.1 创建 Integration（获取 Token）**
-
-1. 打开 https://www.notion.so/my-integrations
-2. 点击「New integration」
-3. 填写名称（如"知识库助手"），选择你的 Workspace
-4. 创建后复制 **Internal Integration Token**（格式：`ntn_xxx...`）
-
-**3.2 创建数据库**
-
-1. 在 Notion 左侧栏点击 `+` 新建页面
-2. 选择 **Database - Full page**（不是 Table、不是 Inline）
-3. 给数据库起个名字（如"知识库"）
-4. 添加以下字段（点击列头的 `+` 新增，**名称必须完全一致**）：
-
-| 字段名 | 类型 | 说明 |
-|--------|------|------|
-| 标题 | Title | 默认已有，不用新建 |
-| 来源平台 | Select | 新建列 → 类型选 Select |
-| 来源URL | URL | 新建列 → 类型选 URL |
-| 原文片段 | Text | 新建列 → 类型选 Text |
-| 我的想法 | Text | 新建列 → 类型选 Text |
-| 评论区对话 | Text | 新建列 → 类型选 Text |
-
-**3.3 连接 Integration**
-
-打开刚建的数据库页面 → 右上角 `···` → `Connections` → 选择你刚创建的 Integration
-
-**3.4 获取 Database ID**
-
-数据库页面的 URL 格式：
-```
-https://www.notion.so/你的名字/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx?v=yyyyyyyy
-                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                                这部分是 Database ID（?v= 之前）
-```
-注意：`?v=` 后面的是 view ID，**不要复制错**。
-
-### 第四步：运行 Setup
-
-macOS：
+macOS / WSL：
 
 ```bash
 bash setup.sh
+bash start.sh
 ```
 
 Windows PowerShell：
 
 ```powershell
 .\setup.ps1
-```
-
-如果 PowerShell 拦截本地脚本，可以改用：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\setup.ps1
+.\start.ps1
 ```
 
 Windows CMD：
 
 ```bat
 setup.cmd
+start.cmd
 ```
 
-脚本会：
-- 检查这台电脑能否运行知识库助手
-- 准备本机资料库
-- 引导你选择 AI 服务：Claude Code / Codex / 千问 / OpenRouter
-- macOS 会询问是否开启开机自动启动；Windows 当前不配置开机自启
-- macOS 安装完成后会自动启动；Windows 安装完成后运行 `.\start.ps1` 或 `start.cmd`
+安装脚本会引导你选择 AI 服务：
 
-### 第五步：配置项目上下文（可选但推荐）
+| 方式 | 适合谁 |
+| --- | --- |
+| Claude Code | 已安装并登录 Claude Code 的用户 |
+| Codex CLI | 已安装并登录 Codex CLI 的用户 |
+| 千问 / Qwen API | 有阿里云百炼或 Qwen API Key 的用户 |
+| OpenRouter API | 有 OpenRouter API Key 的用户 |
 
-macOS：
+### 3. 加载 Chrome 插件
 
-```bash
-# 编辑这台电脑的本地私有项目背景
-# 不填也可以，AI 会先基于本机 SQLite 里的批注逐步学习
-open ~/.knowledge-base-extension/project_context.md
-```
-
-Windows：
-
-```powershell
-notepad "$HOME\.knowledge-base-extension\project_context.md"
-```
-
-### 第六步：加载 Chrome 插件
-
-1. 打开 Chrome，地址栏输入 `chrome://extensions`
-2. 右上角开启「开发者模式」
+1. 打开 `chrome://extensions`
+2. 开启「开发者模式」
 3. 点击「加载已解压的扩展程序」
-4. 选择下载解压后的 `knowledge-base-extension` 文件夹（即包含 `manifest.json` 的那个目录）
+4. 选择本仓库根目录，也就是包含 `manifest.json` 的目录
 
-插件图标出现在工具栏即为成功。点击插件图标可打开记忆笔记本，也可以选择性填写 Notion Token 和 Database ID 开启外部备份；不填写也能正常使用。
+看到 Margin 图标出现在 Chrome 工具栏，就可以打开网页开始划线评论。
 
 ---
 
 ## 每次启动
 
-macOS：
+macOS / WSL：
 
 ```bash
 bash start.sh
@@ -360,179 +171,92 @@ Windows CMD：
 start.cmd
 ```
 
-如果你在 macOS 首次安装时开启了开机自动启动，重启 Mac 后通常不需要手动运行这一步。Windows 当前不配置开机自启，重启电脑后手动运行 `.\start.ps1` 即可。看到以下输出说明就绪：
+看到下面输出说明本地服务已就绪：
 
-```
+```text
 ✓ 知识库服务器：http://localhost:8765
 ✓ Agent API：http://localhost:8766
 ✓ Worker：PID xxxxx
 ```
 
-记忆笔记本有两个入口：
+---
 
-- 浏览器直接打开：http://localhost:8765/notebook/
-- Chrome 插件弹窗 → 「打开记忆笔记本」
+## 隐私说明
 
-### 可选：开机自动启动
+Margin 接触的是你的阅读、批注、追问和纠正，所以默认策略必须足够保守。
 
-当前只支持 macOS 自动启动。Windows 用户重启电脑后手动运行 `.\start.ps1` 或 `start.cmd`。
+| 数据 | 默认位置 | 说明 |
+| --- | --- | --- |
+| 批注和 AI 回复 | `~/.knowledge-base-extension/comments.db` | 本机 SQLite |
+| 本地备份 | `~/.knowledge-base-extension/backups/` | 用于恢复，不是云端同步 |
+| 项目背景 | `~/.knowledge-base-extension/project_context.md` | 你自己填写，可为空 |
+| 用户偏好 | `~/.knowledge-base-extension/user_profile.md` | 本地私有文件 |
+| 密钥配置 | `~/.kb_config` | 本机配置文件，不进 Git |
+| Notion | 可选 | 只在你主动配置后使用 |
 
-如果不想每次 Mac 重启后手动运行 `bash start.sh`，运行 `bash setup.sh` 时选择开启「开机自动启动」即可。开启后，下次登录 macOS 时会自动启动知识库助手。
-
-已经安装过、只想补上开机自动恢复的用户，也可以只运行一次：
-
-```bash
-bash start.sh --install-login-item
-```
-
-正常用户不需要理解下面的命令；它们只用于排查或手动管理。
-
-手动开启：
-
-```bash
-scripts/install-launch-agent
-```
-
-检查状态：
-
-```bash
-scripts/launch-agent-status
-```
-
-取消开机启动：
-
-```bash
-scripts/uninstall-launch-agent
-```
-
-这是一个用户主动开启的本机能力，不会把你的本地记忆上传到 GitHub，也不会改变数据目录。日志在 `~/.knowledge-base-extension/.logs/launch-agent.out.log` 和 `~/.knowledge-base-extension/.logs/launch-agent.err.log`。
+Margin 不默认扫描你的全量浏览历史。它更信任你主动划线、评论、纠正这些高置信动作。只看过一个页面，不等于你认同它，也不等于它应该变成记忆。
 
 ---
 
-## 使用方法
+## 最近更新
 
-### 划线评论（核心功能）
-
-1. 在任意网页选中一段文字
-2. 右键 → 「💬 评论」
-3. 在弹框中输入你的想法，支持 `@` 路由到不同 AI 助手：
-   - `@解释` — 解释这段内容，结合你的项目背景
-   - `@调研` — 深度调研相关话题，强制多信息源
-   - `@竞品` — 竞品分析，找差异化机会
-   - `@思辨` — 多角度辩论，提出反例
-4. 点击发送，AI 在后台处理（通常 30-60 秒）
-5. 结果自动展示在评论卡片中，先写入本地 SQLite；如果配置了 Notion，会同步一份外部副本
-
-### 保存到知识库
-
-选中文字 → 右键 → 「保存到知识库」→ 输入想法 → 存入本地 SQLite（无 AI 处理）；如果配置了 Notion，会同步一份外部副本
+- **v0.3.12** — 支持微信读书 Web reader 页选区评论；正文是 canvas/custom selection 时，仍可把选中文本带入右侧评论面板。
+- **Windows 支持** — 支持 PowerShell / CMD 启动脚本；WSL 用户继续在 WSL 内使用 bash 脚本，不混用终端环境。
+- **本地优先笔记本** — 本地 SQLite 是主数据源；Notion 作为可选备份和旧数据导入来源。
 
 ---
 
-## 目录结构
+## 技术架构
 
-```
-knowledge-base-extension/
-├── setup.sh                  # macOS / WSL 首次安装
-├── start.sh                    # macOS / WSL 每次启动
-├── setup.ps1 / start.ps1     # Windows PowerShell 入口
-├── setup.cmd / start.cmd     # Windows CMD 入口
-├── requirements.txt            # Python 依赖
-├── .kb_config.example          # 配置文件模板
-├── manifest.json               # Chrome 插件入口
-├── src/
-│   ├── background/index.js     # 插件后台：Notion API 调用、消息路由
-│   ├── content/index.js        # 页面注入：划线检测、评论区 UI
-│   ├── popup/index.html        # 插件配置页
-│   └── sidepanel/              # AI 对话侧边栏
-├── backend/
-│   ├── agent_api.py            # Agent 后端（端口 8766）
-│   ├── server.py               # 知识库浏览器（端口 8765）
-│   ├── worker.py               # 后台异步任务 worker（jobs 表）
-│   ├── agent_prompts/          # Agent / notebook 蒸馏 prompts
-│   ├── fetch_notion.py         # 拉取 Notion 数据
-│   ├── company_culture.md      # AI 输出行为规范（所有 agent 共用）
-│   └── project_context.template.md  # 项目上下文模板（复制后自己填）
-├── src/notebook/               # 记忆笔记本前端
-└── WINDOWS.md                  # Windows 终端支持说明
-```
-
----
-
-## 在另一台电脑部署
-
-目标是让另一个用户在自己的电脑上运行同一套本地服务，并看到自己的记忆笔记本。
-
-```bash
-git clone https://github.com/getupyang/knowledge-base-extension.git
-cd knowledge-base-extension
-bash setup.sh
-bash start.sh
-```
-
-Windows PowerShell：
-
-```powershell
-git clone https://github.com/getupyang/knowledge-base-extension.git
-cd knowledge-base-extension
-.\setup.ps1
-.\start.ps1
-```
-
-然后：
-
-1. 在 Chrome 开发者模式加载本仓库根目录。
-2. 点击插件图标确认本地保存可用；如果需要云端副本，再填入这个用户自己的 Notion Token 和 Database ID。
-3. 打开 http://localhost:8765/notebook/ 查看记忆笔记本。
-
-数据是本地优先、按用户隔离的：
-
-- `~/.knowledge-base-extension/comments.db` 是该用户的批注、对话、notebook generations。
-- 主数据不会因为超过某个条数或快照数而被自动清理；所有批注、对话和记忆都持续写在本机主库里。
-- `~/.knowledge-base-extension/backups/` 只保存用于回滚的本地 SQLite 恢复快照；默认保留最近 14 份快照，不影响主库里的完整数据。
-- `~/.knowledge-base-extension/learned_rules.json` 是该用户从反馈里学到的规则。
-- `~/.knowledge-base-extension/project_context.md` / `~/.knowledge-base-extension/user_profile.md` 是该用户自己的上下文。
-- Agent 回复只使用这台电脑的本地记忆目录、本地 SQLite 和当前页面内容；代码仓库不携带任何人的记忆。
-
-这些文件默认不进 git。新电脑新用户首次打开时，如果本地 `comments.db` 是空的、但该用户自己的 Notion database 里已有旧数据，记忆笔记本会自动做一次 Notion → SQLite 导入，共同日记随后就能看到旧行为。导入只用于兼容旧版本；新版运行时以本地 SQLite 为准。
-
-如果要完整迁移另一台电脑上的本地状态，停服务后拷贝上述本地文件到同一路径即可。
+| 层级 | 说明 |
+| --- | --- |
+| Chrome 插件 | 划线检测、评论入口、右侧评论面板、popup |
+| Content script | 注入网页，处理选区、锚点、评论 UI |
+| Agent API | 本地后端，默认端口 `8766` |
+| 知识库浏览器 | 本地阅读和记忆笔记本，默认端口 `8765` |
+| Worker | 处理后台异步任务和记忆增长 |
+| SQLite | 本地批注、回复、notebook 数据 |
+| 可选 Notion | 外部备份和旧数据导入 |
 
 ---
 
 ## 常见问题
 
-**Q: 发送评论后 AI 一直没有回复**
+### 不配置 Notion 会丢数据吗？
 
-检查 agent_api 是否在运行：
+不会。主数据默认保存在本机 `~/.knowledge-base-extension/comments.db`。Notion 只是可选外部副本。
+
+### 没有 Claude Code / Codex 能用吗？
+
+可以。安装时选择千问 / Qwen API 或 OpenRouter API 即可。
+
+### 为什么 AI 没有回复？
+
+先检查本地 Agent API：
+
 ```bash
 curl http://localhost:8766/health
 ```
-如果失败，重新运行 `bash start.sh`，查看日志：`~/.knowledge-base-extension/.logs/agent_api.log`
 
-Windows 用户重新运行 `.\start.ps1`，日志在 `$HOME\.knowledge-base-extension\.logs\agent_api.log`。
+如果失败，重新运行启动脚本。日志在：
 
-**Q: Notion 备份失败**
-
-检查 Token 和 Database ID 是否正确，以及数据库是否已连接 Integration（步骤 3.3）。Notion 失败不影响本地 SQLite 的批注、AI 回复和共同日记。
-
-**Q: 不配置 Notion 会丢数据吗？**
-
-不会影响正常使用。主数据在 `~/.knowledge-base-extension/comments.db`，后端会维护 `~/.knowledge-base-extension/backups/` 本地滚动备份。换机器前停服务并拷贝 `~/.knowledge-base-extension/` 即可迁移完整本地状态。
-
-**Q: Notion 里有旧数据，但共同日记是空的**
-
-升级到最新版后重启服务（macOS: `bash start.sh`；Windows: `.\start.ps1`），打开记忆笔记本会自动导入一次旧 Notion 数据。也可以手动触发：
-
-```bash
-curl -X POST http://localhost:8766/notebook/import-notion \
-  -H "Content-Type: application/json" \
-  -d '{"limit":1000}'
+```text
+~/.knowledge-base-extension/.logs/agent_api.log
 ```
 
-**Q: AI 提到了不属于我的项目**
+Windows 日志在：
 
-这属于数据隔离问题。新版已经不会信任旧版本可能带来的 maintainer 默认上下文；先升级并重启服务（macOS: `bash start.sh`；Windows: `.\start.ps1`）。如果仍出现，检查并清空这台电脑上的私有上下文文件：
+```text
+$HOME\.knowledge-base-extension\.logs\agent_api.log
+```
+
+### 插件更新后不生效怎么办？
+
+打开 `chrome://extensions`，点击 Margin 的刷新按钮，然后刷新已经打开的网页。
+
+### AI 提到了不属于我的项目怎么办？
+
+这通常是本机私有上下文或旧数据导入问题。检查这些文件：
 
 ```bash
 cat ~/.knowledge-base-extension/project_context.md
@@ -540,40 +264,43 @@ cat ~/.knowledge-base-extension/user_profile.md
 cat ~/.knowledge-base-extension/learned_rules.json
 ```
 
-**Q: 没有 Claude Code / Codex 能用吗？**
-
-可以。运行 `bash setup.sh` 或 `.\setup.ps1` 时选择千问 / Qwen API 或 OpenRouter API，即可使用标准模式。标准模式支持评论区回复、记忆笔记本、profile / skills / thinking 蒸馏；本地文件维护和长链路交付任务需要本地 agent 后端。
-
-**Q: 我有 Claude Code，能不额外花 API 钱吗？**
-
-可以。安装并登录后，`setup.sh` / `setup.ps1` 会检测当前终端里的 `claude`，默认优先走本地：
-
-```bash
-npm install -g @anthropic-ai/claude-code
-claude login
-```
-
-如果同时配置了 API key，本地后端失败时是否自动 fallback 到 API 由 `~/.kb_config` 里的 `MEMAI_LLM_FALLBACK=api|fail` 控制。默认是 `fail`，避免不知情地产生 API 成本。
-
-**Q: 同时安装了 Claude Code 和 Codex，会自动选哪个？**
-
-不会自动选。安装时必须固定选择一个。之后要切换，直接运行：
-
-```bash
-sh choose_ai_service.sh
-```
-
-它会让你在 4 个选项里选：Claude Code 直连、Codex 直连、千问 / Qwen API、OpenRouter API，并在保存后询问是否立刻重启服务。
-
-**Q: 插件配置页保存后不生效**
-
-刷新插件：`chrome://extensions` → 知识库助手 → 点击刷新按钮。
+如果你是新用户、空数据库，Margin 不应该借用开发者或其他用户的默认记忆。
 
 ---
 
-## 数据说明
+## 目录结构
 
-- 所有批注和 AI 对话存储在本地 `~/.knowledge-base-extension/comments.db`（SQLite）
-- Notion 是可选外部副本和旧数据导入来源，不是主存储
-- `~/.kb_config` 存储你的密钥，`chmod 600` 权限，不会上传到 git
-- 如果开启 Notion 备份，你的 Notion 数据库完全独立，和其他用户的数据互不干扰
+```text
+knowledge-base-extension/
+├── manifest.json              # Chrome 插件入口
+├── setup.sh / start.sh        # macOS / WSL 安装和启动
+├── setup.ps1 / start.ps1      # Windows PowerShell 入口
+├── setup.cmd / start.cmd      # Windows CMD 入口
+├── src/
+│   ├── content/               # 页面注入、划线、评论 UI
+│   ├── background/            # 插件后台
+│   ├── popup/                 # 插件弹窗
+│   ├── sidepanel/             # 侧边栏
+│   └── notebook/              # 记忆笔记本前端
+├── backend/
+│   ├── server.py              # 本地知识库浏览器，端口 8765
+│   ├── agent_api.py           # 本地 Agent API，端口 8766
+│   ├── worker.py              # 后台任务 worker
+│   └── llm_client.py          # LLM provider 适配
+└── scripts/
+    ├── kb-health              # 本地健康检查
+    └── kb-regression          # 回归检查
+```
+
+---
+
+## 反馈与交流
+
+- 官网：[https://get-margin.vercel.app](https://get-margin.vercel.app)
+- 问题反馈：[GitHub Issues](https://github.com/getupyang/knowledge-base-extension/issues)
+
+如果你在安装、Windows、隐私或本地数据保存上遇到问题，也可以扫码加我微信，备注 `Margin`。
+
+<p align="center">
+  <img src="assets/contact/wechat-qr.jpg" width="220" alt="微信二维码" />
+</p>
