@@ -49,7 +49,7 @@ npm run regression
 ## 2026-05-19 · Positive Example Feedback Packet
 
 - 记录时间：2026-05-19 16:35 Asia/Shanghai
-- 关联 commit：`7f842c6`
+- 关联 commit：`2b2f17e`
 - 分支：`codex/positive-feedback-packet`
 - 改了什么：点赞仍先记录轻量 `rating=up` 反馈；随后单独询问用户是否把这次作为“好例子”发给开发者。用户确认后复用诊断包发送确认，保存为 `rating=positive_example`。
 - 为什么改：正反馈也有产品迭代价值，但不应让每次点赞默认上传 transcript；采用 Claude Code 类似的“两步”做法，先 rating-only，再单独征求 transcript/上下文授权。
