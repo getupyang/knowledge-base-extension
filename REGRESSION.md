@@ -10,6 +10,18 @@ npm run regression
 
 这个命令是提交门禁，不是展示页。任一必需项失败都会返回非 0。
 
+## 2026-05-19 · Margin Share Card Export
+
+- 记录时间：2026-05-19 21:56 Asia/Shanghai
+- 关联 commit：`1487f4d`
+- 分支：`codex/margin-share-ui`
+- 改了什么：右侧评注栏可拖拽调整宽度；AI 回复卡片增加“分享图”入口；分享弹窗提供完整版、划线 + AI、评论 + AI 三种图片，使用本地 Margin mark 和安装二维码资源，图片复制失败时降级复制文字。
+- 为什么改：用户希望长 AI 评注能被完整、好看地分享出去，同时保留 Margin 的“网页划线/用户提问/AI 回复”产品特征；侧栏也需要能拉宽阅读长回复。
+- 用户如何验收：重新加载 Chrome extension 并刷新目标网页；拖动右侧栏左边缘应能改变宽度且刷新后保留；对一条有 AI 回复的评论点“分享图”，应看到三个 tab，完整版保持 520px playground 风格，长回复只增加图片高度不缩小字号，两个极简版分别使用划线内容和用户评论作为开头。
+- 已验证：`node --check src/content/index.js`、`git diff --check`、`scripts/kb-regression --skip-live --skip-browser`；Playwright smoke 生成 `/private/tmp/margin-share-full-md.png`、`/private/tmp/margin-share-min-quote-md.png`、`/private/tmp/margin-share-min-comment-md.png`，确认三个 tab 均为 520px 设计宽度，Markdown 标记不会原样露出。
+- 适用范围：`src/content/index.js`、`manifest.json`、`assets/share/margin-mark.png`、`assets/share/qr-install.png`；仅影响 Chrome content script 的侧栏、分享弹窗和分享图生成。
+- 可能过时的地方：分享图二维码当前指向 `https://get-margin.vercel.app`；如果官网安装路径、品牌图标、分享图设计稿或浏览器剪贴板策略变化，需要同步更新本节验收口径。
+
 ## 2026-05-19 · Support Report Debug Packet Note
 
 - 记录时间：2026-05-19 15:10 Asia/Shanghai
