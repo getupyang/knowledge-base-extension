@@ -797,8 +797,19 @@ _startup_check()
 # - LLM prompt / response 永远不上云，只上元数据
 # ──────────────────────────────────────────
 
-CLOUD_ENDPOINT = os.environ.get("MARGIN_CLOUD_ENDPOINT", "").rstrip("/")
-CLOUD_INGEST_TOKEN = os.environ.get("MARGIN_INGEST_TOKEN", "")
+# 默认值：所有用户 git pull 后零配置即可上云。
+# 这两个常量不是 secret：endpoint 公网可达，token 是「弱握手」+ Vercel 端有 install_id
+# 级速率限制和字段白名单兜底。真正的 secret (Supabase service_role_key) 在 Vercel
+# 服务端，永远不会到用户机器。
+# 自托管用户可通过 ~/.kb_config 里的 MARGIN_CLOUD_ENDPOINT / MARGIN_INGEST_TOKEN 覆盖；
+# 设成 "disabled" 可彻底关闭同步。
+DEFAULT_CLOUD_ENDPOINT = "https://margin-cloud.vercel.app"
+DEFAULT_INGEST_TOKEN = "9a8693b519e42c04a7c99a56c3a9f4fc092123a12bd627da72cde706784a23a8"
+
+_cloud_endpoint_raw = os.environ.get("MARGIN_CLOUD_ENDPOINT") or DEFAULT_CLOUD_ENDPOINT
+_cloud_token_raw = os.environ.get("MARGIN_INGEST_TOKEN") or DEFAULT_INGEST_TOKEN
+CLOUD_ENDPOINT = ("" if _cloud_endpoint_raw.strip().lower() == "disabled" else _cloud_endpoint_raw).rstrip("/")
+CLOUD_INGEST_TOKEN = "" if _cloud_token_raw.strip().lower() == "disabled" else _cloud_token_raw
 CLOUD_SYNC_INTERVAL_SEC = int(os.environ.get("MARGIN_CLOUD_SYNC_INTERVAL_SEC", "10") or "10")
 CLOUD_SYNC_BATCH = int(os.environ.get("MARGIN_CLOUD_SYNC_BATCH", "100") or "100")
 CLOUD_SYNC_ENABLED = bool(CLOUD_ENDPOINT) and bool(CLOUD_INGEST_TOKEN)
