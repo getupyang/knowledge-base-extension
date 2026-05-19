@@ -1123,7 +1123,7 @@ def _cloud_sync_support_reports_once() -> int:
     ids = [r["id"] for r in rows]
     placeholders = ",".join("?" * len(ids))
     conn.execute(
-        f"UPDATE support_reports SET synced_to_cloud_at = ? WHERE id IN ({placeholders})",
+        f"UPDATE support_reports SET synced_to_cloud_at = ?, status = 'synced' WHERE id IN ({placeholders})",
         [now] + ids,
     )
     conn.commit()
