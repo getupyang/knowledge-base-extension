@@ -558,6 +558,84 @@ def init_db():
     conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_call_ledger_job ON llm_call_ledger(job_id, created_at DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_call_ledger_install ON llm_call_ledger(anonymous_install_id, created_at DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_call_ledger_thread ON llm_call_ledger(thread_telemetry_id, created_at DESC)")
+    # 本机私有 LLM request snapshot：保存当时实际发给模型的 system/user prompt 和返回。
+    # 默认不做 cloud sync，只服务本地 debug、可选问题报告、回归 replay。
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS llm_request_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            call_id TEXT NOT NULL UNIQUE,
+            stage TEXT NOT NULL,
+            comment_id INTEGER,
+            reply_id INTEGER,
+            job_id INTEGER,
+            role TEXT,
+            intent TEXT,
+            provider TEXT,
+            provider_config TEXT,
+            local_agent TEXT,
+            api_provider TEXT,
+            model TEXT,
+            status TEXT NOT NULL DEFAULT 'started',
+            timeout_sec INTEGER,
+            system_prompt TEXT,
+            final_prompt TEXT,
+            messages_json TEXT NOT NULL DEFAULT '[]',
+            system_prompt_sha256 TEXT,
+            final_prompt_sha256 TEXT,
+            request_sha256 TEXT,
+            response_text TEXT,
+            response_sha256 TEXT,
+            response_chars INTEGER,
+            model_config_json TEXT NOT NULL DEFAULT '{}',
+            context_pack_id INTEGER,
+            context_refs_json TEXT NOT NULL DEFAULT '{}',
+            search_results_json TEXT NOT NULL DEFAULT '{}',
+            meta_json TEXT NOT NULL DEFAULT '{}',
+            code_git_sha TEXT,
+            error_category TEXT,
+            error_code TEXT,
+            redacted_error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (comment_id) REFERENCES comments(id),
+            FOREIGN KEY (reply_id) REFERENCES replies(id),
+            FOREIGN KEY (context_pack_id) REFERENCES context_packs(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_request_snapshots_comment ON llm_request_snapshots(comment_id, created_at DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_request_snapshots_stage ON llm_request_snapshots(stage, created_at DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_request_snapshots_call ON llm_request_snapshots(call_id)")
+    # 用户明确同意后发送的问题报告。diagnostic_json 默认不含正文；attachments_json
+    # 只在用户勾选后保存评论、划线、URL、AI 回复或模型 I/O。
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS support_reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            report_id TEXT NOT NULL UNIQUE,
+            comment_id INTEGER,
+            reply_id INTEGER,
+            rating TEXT,
+            user_note TEXT,
+            anonymous_install_id TEXT,
+            app_session_id TEXT,
+            page_id TEXT,
+            thread_telemetry_id TEXT,
+            app_version TEXT,
+            include_conversation INTEGER NOT NULL DEFAULT 0,
+            include_selection INTEGER NOT NULL DEFAULT 0,
+            include_page_info INTEGER NOT NULL DEFAULT 0,
+            include_model_io INTEGER NOT NULL DEFAULT 0,
+            diagnostic_json TEXT NOT NULL DEFAULT '{}',
+            attachments_json TEXT NOT NULL DEFAULT '{}',
+            status TEXT NOT NULL DEFAULT 'local_only',
+            synced_to_cloud_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (comment_id) REFERENCES comments(id),
+            FOREIGN KEY (reply_id) REFERENCES replies(id)
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_support_reports_sync ON support_reports(synced_to_cloud_at, created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_support_reports_comment ON support_reports(comment_id, created_at DESC)")
 
     # 兼容已有数据库：如果列不存在则添加
     for col, table in [
@@ -585,6 +663,7 @@ def init_db():
         # margin-cloud 跨设备同步：null = 未推送，ISO ts = 推送成功
         ("synced_to_cloud_at TEXT", "telemetry_outbox"),
         ("synced_to_cloud_at TEXT", "llm_call_ledger"),
+        ("synced_to_cloud_at TEXT", "support_reports"),
     ]:
         try:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {col}")
@@ -990,6 +1069,68 @@ def _cloud_sync_ledger_once() -> int:
     return len(rows)
 
 
+def _cloud_sync_support_reports_once() -> int:
+    """推一批用户明确提交的问题报告到云端。
+
+    support_reports 可能包含用户勾选后的正文附件，所以它走单独 endpoint，
+    不混进默认 telemetry/ledger 隐私边界。
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """SELECT id, report_id, comment_id, reply_id, rating, user_note,
+                      anonymous_install_id, app_session_id, page_id, thread_telemetry_id,
+                      app_version, include_conversation, include_selection,
+                      include_page_info, include_model_io, diagnostic_json,
+                      attachments_json, created_at, updated_at
+               FROM support_reports
+               WHERE synced_to_cloud_at IS NULL
+               ORDER BY id ASC
+               LIMIT ?""",
+            (CLOUD_SYNC_BATCH,),
+        ).fetchall()
+    finally:
+        pass
+
+    if not rows:
+        conn.close()
+        return 0
+
+    out_rows = []
+    for r in rows:
+        item = {k: r[k] for k in r.keys()}
+        item.pop("id", None)
+        for key in ("diagnostic_json", "attachments_json"):
+            try:
+                item[key] = json.loads(item[key] or "{}")
+            except Exception:
+                item[key] = {}
+        for key in ("include_conversation", "include_selection", "include_page_info", "include_model_io"):
+            item[key] = bool(item.get(key))
+        out_rows.append(item)
+
+    ok, info = _cloud_post("/api/support-reports", {"rows": out_rows}, timeout=20)
+    if not ok:
+        conn.close()
+        _cloud_log_failure("support_reports", {
+            "batch": len(out_rows),
+            "info": info,
+        })
+        return 0
+
+    now = datetime.utcnow().isoformat() + "Z"
+    ids = [r["id"] for r in rows]
+    placeholders = ",".join("?" * len(ids))
+    conn.execute(
+        f"UPDATE support_reports SET synced_to_cloud_at = ? WHERE id IN ({placeholders})",
+        [now] + ids,
+    )
+    conn.commit()
+    conn.close()
+    return len(rows)
+
+
 def _cloud_sync_loop():
     """后台线程：定时把未同步的行推到云端。"""
     consecutive_errors = 0
@@ -997,8 +1138,9 @@ def _cloud_sync_loop():
         try:
             n_events = _cloud_sync_events_once()
             n_ledger = _cloud_sync_ledger_once()
-            if n_events or n_ledger:
-                print(f"[margin-cloud] synced events={n_events} ledger={n_ledger}")
+            n_reports = _cloud_sync_support_reports_once()
+            if n_events or n_ledger or n_reports:
+                print(f"[margin-cloud] synced events={n_events} ledger={n_ledger} reports={n_reports}")
             consecutive_errors = 0
         except Exception as e:
             consecutive_errors += 1
@@ -1346,6 +1488,184 @@ def _provider_mode_for(status: dict) -> str:
     if p == "mock":
         return "mock"
     return "unknown"
+
+
+def _sha256_text(text: str) -> str:
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+
+
+_GIT_SHA_CACHE = None
+
+
+def _current_git_sha() -> str:
+    global _GIT_SHA_CACHE
+    if _GIT_SHA_CACHE is not None:
+        return _GIT_SHA_CACHE
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=os.path.dirname(ROOT),
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        _GIT_SHA_CACHE = result.stdout.strip() if result.returncode == 0 else ""
+    except Exception:
+        _GIT_SHA_CACHE = ""
+    return _GIT_SHA_CACHE
+
+
+def _snapshot_context_refs(ctx: dict) -> dict:
+    return {
+        "identity_snapshot_id": ctx.get("identity_snapshot_id"),
+        "selected_skill_ids": ctx.get("selected_skill_ids") or [],
+        "episodic_comment_ids": ctx.get("episodic_comment_ids") or [],
+        "same_page_comment_ids": ctx.get("same_page_comment_ids") or [],
+        "exposure_page_ids": ctx.get("exposure_page_ids") or [],
+    }
+
+
+def _request_snapshot_insert_started(
+    *,
+    call_id: str,
+    stage: str,
+    prompt: str,
+    system_prompt: str,
+    timeout_sec: int,
+    ledger_ctx: Optional[dict] = None,
+) -> None:
+    ctx = ledger_ctx or {}
+    try:
+        status = get_llm_status() or {}
+    except Exception:
+        status = {}
+    messages = [
+        {"role": "system", "content": system_prompt or ""},
+        {"role": "user", "content": prompt or ""},
+    ]
+    model_config = {
+        "timeout_sec": int(timeout_sec or 0),
+        "provider_mode": _provider_mode_for(status),
+        "api_base_url": status.get("api_base_url"),
+    }
+    context_refs = ctx.get("context_refs") if isinstance(ctx.get("context_refs"), dict) else _snapshot_context_refs(ctx)
+    search_results = ctx.get("search_results") if isinstance(ctx.get("search_results"), dict) else {}
+    request_material = _json({
+        "stage": stage,
+        "system_prompt": system_prompt or "",
+        "prompt": prompt or "",
+        "model_config": model_config,
+    })
+    now = _now_shanghai_iso()
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute(
+            """INSERT OR REPLACE INTO llm_request_snapshots
+               (call_id, stage, comment_id, reply_id, job_id, role, intent,
+                provider, provider_config, local_agent, api_provider, model,
+                status, timeout_sec, system_prompt, final_prompt, messages_json,
+                system_prompt_sha256, final_prompt_sha256, request_sha256,
+                model_config_json, context_pack_id, context_refs_json, search_results_json,
+                meta_json, code_git_sha, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?,
+                       ?, ?, ?, ?, ?,
+                       'started', ?, ?, ?, ?,
+                       ?, ?, ?,
+                       ?, ?, ?, ?,
+                       '{}', ?, ?, ?)""",
+            (
+                call_id, stage,
+                ctx.get("comment_id"), ctx.get("reply_id"), ctx.get("job_id"),
+                ctx.get("role"), ctx.get("intent"),
+                status.get("selected_provider"), status.get("provider_config"),
+                status.get("local_agent"), status.get("api_provider"),
+                status.get("api_model") or "default",
+                int(timeout_sec or 0),
+                system_prompt or "", prompt or "", _json(messages),
+                _sha256_text(system_prompt or ""), _sha256_text(prompt or ""),
+                _sha256_text(request_material),
+                _json(model_config), ctx.get("context_pack_id"), _json(context_refs),
+                _json(search_results), _current_git_sha(), now, now,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _request_snapshot_finish(
+    *,
+    call_id: str,
+    status: str,
+    response: str = "",
+    meta: Optional[dict] = None,
+    error: str = "",
+    error_category: str = "",
+    error_code: str = "",
+) -> None:
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute(
+            """UPDATE llm_request_snapshots
+               SET status = ?,
+                   response_text = ?,
+                   response_sha256 = ?,
+                   response_chars = ?,
+                   meta_json = ?,
+                   error_category = ?,
+                   error_code = ?,
+                   redacted_error = ?,
+                   updated_at = ?
+               WHERE call_id = ?""",
+            (
+                status,
+                response or "",
+                _sha256_text(response or "") if response is not None else None,
+                len(response or ""),
+                _json(meta or {}),
+                error_category or None,
+                error_code or None,
+                _redact_error(error) if error else None,
+                _now_shanghai_iso(),
+                call_id,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _request_snapshot_set_reply(call_id: str, reply_id: int, context_pack_id: Optional[int] = None) -> None:
+    if not call_id or not reply_id:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute(
+            """UPDATE llm_request_snapshots
+               SET reply_id = COALESCE(reply_id, ?),
+                   context_pack_id = COALESCE(context_pack_id, ?),
+                   updated_at = ?
+               WHERE call_id = ?""",
+            (reply_id, context_pack_id, _now_shanghai_iso(), call_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _request_snapshot_set_reply_many(calls: list, reply_id: int, context_pack_id: Optional[int] = None) -> None:
+    seen = set()
+    for call in calls or []:
+        if not isinstance(call, dict):
+            continue
+        call_id = call.get("call_id")
+        if not call_id or call_id in seen:
+            continue
+        seen.add(call_id)
+        try:
+            _request_snapshot_set_reply(call_id, reply_id, context_pack_id)
+        except Exception as e:
+            print(f"[snapshot] set_reply failed: {type(e).__name__}: {e}")
 
 
 _TELEMETRY_RATE_BUCKET = {}  # install_id -> (window_start_epoch, count)
@@ -3487,6 +3807,14 @@ def _call_llm_with_meta(prompt: str, system_prompt: str, timeout: int = 1800,
     except Exception as e:
         # ledger 失败不能阻塞 LLM 调用
         print(f"[ledger] insert_started failed: {type(e).__name__}: {e}")
+    try:
+        _request_snapshot_insert_started(
+            call_id=call_id, stage=stage, prompt=prompt, system_prompt=system_prompt,
+            timeout_sec=int(timeout or 0), ledger_ctx=ledger_ctx,
+        )
+    except Exception as e:
+        # snapshot 失败不能阻塞 LLM 调用
+        print(f"[snapshot] insert_started failed: {type(e).__name__}: {e}")
 
     client = get_llm_client()
     try:
@@ -3499,6 +3827,12 @@ def _call_llm_with_meta(prompt: str, system_prompt: str, timeout: int = 1800,
             print(f"[ledger] finish(success) failed: {type(e).__name__}: {e}")
         meta = dict(client.last_call_meta or {})
         meta["call_id"] = call_id
+        try:
+            _request_snapshot_finish(
+                call_id=call_id, status="success", response=content, meta=meta,
+            )
+        except Exception as e:
+            print(f"[snapshot] finish(success) failed: {type(e).__name__}: {e}")
         return content, 0, meta
     except LLMTimeoutError as e:
         elapsed_ms = int((_time.time() - started_at) * 1000)
@@ -3511,6 +3845,13 @@ def _call_llm_with_meta(prompt: str, system_prompt: str, timeout: int = 1800,
                            error_category="timeout", error_code="llm_timeout")
         except Exception as ex:
             print(f"[ledger] finish(timeout) failed: {type(ex).__name__}: {ex}")
+        try:
+            _request_snapshot_finish(
+                call_id=call_id, status="timeout", meta=client.last_call_meta,
+                error=str(e), error_category="timeout", error_code="llm_timeout",
+            )
+        except Exception as ex:
+            print(f"[snapshot] finish(timeout) failed: {type(ex).__name__}: {ex}")
         raise subprocess.TimeoutExpired(cmd="llm_provider", timeout=timeout) from e
     except LLMError as e:
         elapsed_ms = int((_time.time() - started_at) * 1000)
@@ -3523,6 +3864,13 @@ def _call_llm_with_meta(prompt: str, system_prompt: str, timeout: int = 1800,
             print(f"[ledger] finish(error) failed: {type(ex).__name__}: {ex}")
         meta = dict(client.last_call_meta or {})
         meta["call_id"] = call_id
+        try:
+            _request_snapshot_finish(
+                call_id=call_id, status="error", meta=meta,
+                error=str(e), error_category=cat, error_code=code,
+            )
+        except Exception as ex:
+            print(f"[snapshot] finish(error) failed: {type(ex).__name__}: {ex}")
         return str(e)[:1000], 1, meta
 
 
@@ -4182,6 +4530,11 @@ def run_agent_v2(comment_id: int, intent: str, role: str, prompt: str,
     conn.execute("UPDATE comments SET updated_at = ? WHERE id = ?", (now, comment_id))
     conn.commit()
     conn.close()
+    _request_snapshot_set_reply_many(
+        [router_call, step2_call],
+        reply_id,
+        context_pack_id if "context_pack_id" in locals() else None,
+    )
     _record_memory_event(
         comment_id,
         actor="agent",
@@ -4286,6 +4639,11 @@ def run_agent_v1_fallback(comment_id: int, agent_type: str,
     conn.execute("UPDATE comments SET updated_at = ? WHERE id = ?", (now, comment_id))
     conn.commit()
     conn.close()
+    _request_snapshot_set_reply_many(
+        [llm_call],
+        reply_id,
+        context_pack_id if "context_pack_id" in locals() else None,
+    )
     _record_memory_event(
         comment_id,
         actor="agent",
@@ -4360,6 +4718,402 @@ class ExposureSeenCreate(BaseModel):
     page_content: str
     source_type: str = "seen"
     capture_reason: str = "allowlisted_reading_source"
+
+
+class ProblemReportOptions(BaseModel):
+    comment_id: int
+    reply_id: Optional[int] = None
+    rating: str = ""
+    user_note: str = ""
+    include_conversation: bool = False
+    include_selection: bool = False
+    include_page_info: bool = False
+    include_model_io: bool = False
+    client_context: dict = {}
+
+
+class ProblemReportSubmit(ProblemReportOptions):
+    confirm_consent: bool = False
+
+
+def _clip_text(value, limit: int) -> str:
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"\n...[truncated {len(text) - limit} chars]"
+
+
+def _json_or_obj(value, fallback=None):
+    fallback = {} if fallback is None else fallback
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        return json.loads(value or "")
+    except Exception:
+        return fallback
+
+
+def _recent_failure_items(limit: int = 8) -> list:
+    path = os.path.join(LOG_DIR, "failures.jsonl")
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            lines = fh.readlines()[-max(1, min(limit, 20)):]
+    except Exception:
+        return []
+    items = []
+    for line in lines:
+        try:
+            item = json.loads(line)
+        except Exception:
+            continue
+        scrubbed = {
+            "ts": item.get("ts"),
+            "kind": item.get("kind"),
+            "phase": item.get("phase") or item.get("stage"),
+            "attempt": item.get("attempt"),
+            "error": _redact_error(item.get("error") or item.get("info") or ""),
+        }
+        items.append(scrubbed)
+    return items
+
+
+def _snapshot_for_diagnostic(row: dict) -> dict:
+    meta = _json_or_obj(row.get("meta_json"), {})
+    context_refs = _json_or_obj(row.get("context_refs_json"), {})
+    search_results = _json_or_obj(row.get("search_results_json"), {})
+    search_count = 0
+    if isinstance(search_results, dict):
+        search_count = len(search_results.get("items") or search_results.get("results") or [])
+    elif isinstance(search_results, list):
+        search_count = len(search_results)
+    return {
+        "call_id": row.get("call_id"),
+        "stage": row.get("stage"),
+        "role": row.get("role"),
+        "intent": row.get("intent"),
+        "provider": row.get("provider"),
+        "provider_config": row.get("provider_config"),
+        "local_agent": row.get("local_agent"),
+        "api_provider": row.get("api_provider"),
+        "model": row.get("model"),
+        "status": row.get("status"),
+        "timeout_sec": row.get("timeout_sec"),
+        "system_prompt_sha256": row.get("system_prompt_sha256"),
+        "final_prompt_sha256": row.get("final_prompt_sha256"),
+        "request_sha256": row.get("request_sha256"),
+        "response_sha256": row.get("response_sha256"),
+        "system_prompt_chars": len(row.get("system_prompt") or ""),
+        "final_prompt_chars": len(row.get("final_prompt") or ""),
+        "response_chars": row.get("response_chars") or len(row.get("response_text") or ""),
+        "context_refs": context_refs,
+        "search_result_count": search_count,
+        "meta": {
+            k: meta.get(k)
+            for k in (
+                "call_id", "status", "provider", "provider_mode", "model",
+                "usage_source", "input_tokens", "output_tokens", "total_tokens",
+                "cache_tokens", "cost_usd", "elapsed_ms",
+            )
+            if meta.get(k) is not None
+        },
+        "code_git_sha": row.get("code_git_sha"),
+        "error_category": row.get("error_category"),
+        "error_code": row.get("error_code"),
+        "redacted_error": row.get("redacted_error"),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def _snapshot_for_attachment(row: dict) -> dict:
+    return {
+        **_snapshot_for_diagnostic(row),
+        "system_prompt": _clip_text(row.get("system_prompt"), 20000),
+        "final_prompt": _clip_text(row.get("final_prompt"), 60000),
+        "response_text": _clip_text(row.get("response_text"), 30000),
+        "messages": _json_or_obj(row.get("messages_json"), []),
+        "search_results": _json_or_obj(row.get("search_results_json"), {}),
+    }
+
+
+def _build_problem_report_packet(options: ProblemReportOptions) -> dict:
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        comment = _debug_one(conn, "SELECT * FROM comments WHERE id=?", (options.comment_id,))
+        if not comment:
+            raise HTTPException(status_code=404, detail="comment not found")
+
+        replies = _debug_rows(conn, "SELECT * FROM replies WHERE comment_id=? ORDER BY created_at ASC", (options.comment_id,))
+        replies = [_debug_parse_json_fields(row, ["debug_meta"]) for row in replies]
+        target_reply = None
+        if options.reply_id:
+            target_reply = next((r for r in replies if int(r.get("id") or 0) == int(options.reply_id)), None)
+
+        thread_id = comment.get("thread_telemetry_id")
+        telemetry_rows = []
+        if thread_id:
+            telemetry_rows = _debug_rows(
+                conn,
+                """SELECT event_name, surface, properties_json, created_at, synced_to_cloud_at
+                   FROM telemetry_outbox
+                   WHERE thread_telemetry_id=?
+                   ORDER BY created_at ASC
+                   LIMIT 80""",
+                (thread_id,),
+            )
+        telemetry_timeline = []
+        for row in telemetry_rows:
+            props = _json_or_obj(row.get("properties_json"), {})
+            props.pop("feedback_text", None)
+            telemetry_timeline.append({
+                "event_name": row.get("event_name"),
+                "surface": row.get("surface"),
+                "properties": props,
+                "created_at": row.get("created_at"),
+                "synced_to_cloud_at": row.get("synced_to_cloud_at"),
+            })
+
+        ledger_rows = _debug_rows(
+            conn,
+            """SELECT call_id, stage, role, intent, comment_id, reply_id, job_id,
+                      provider_mode, provider, provider_config, local_agent, api_provider, model,
+                      status, attempt, timeout_sec, elapsed_ms,
+                      prompt_tokens_est, input_tokens, output_tokens, total_tokens, cache_tokens,
+                      usage_source, cost_usd, error_category, error_code, redacted_error,
+                      anonymous_install_id, app_session_id, page_id, thread_telemetry_id,
+                      created_at, updated_at, synced_to_cloud_at
+               FROM llm_call_ledger
+               WHERE comment_id=? OR (? IS NOT NULL AND thread_telemetry_id=?)
+               ORDER BY created_at ASC""",
+            (options.comment_id, thread_id, thread_id),
+        )
+
+        snapshots = _debug_rows(
+            conn,
+            """SELECT id, call_id, stage, comment_id, reply_id, job_id, role, intent,
+                      provider, provider_config, local_agent, api_provider, model,
+                      status, timeout_sec, system_prompt, final_prompt, messages_json,
+                      system_prompt_sha256, final_prompt_sha256, request_sha256,
+                      response_text, response_sha256, response_chars,
+                      model_config_json, context_pack_id, context_refs_json,
+                      search_results_json, meta_json, code_git_sha,
+                      error_category, error_code, redacted_error, created_at, updated_at
+               FROM llm_request_snapshots
+               WHERE comment_id=?
+               ORDER BY created_at ASC""",
+            (options.comment_id,),
+        )
+
+        client_context = options.client_context if isinstance(options.client_context, dict) else {}
+        diagnostic = {
+            "schema_version": 1,
+            "privacy_mode": "explicit_problem_report",
+            "created_at": _now_shanghai_iso(),
+            "client_context": {
+                "app_version": client_context.get("app_version"),
+                "browser": client_context.get("browser"),
+                "os": client_context.get("os"),
+                "locale": client_context.get("locale"),
+                "extension_id": client_context.get("extension_id"),
+            },
+            "issue": {
+                "comment_id": options.comment_id,
+                "reply_id": options.reply_id,
+                "rating": options.rating or "",
+                "has_user_note": bool((options.user_note or "").strip()),
+            },
+            "comment_meta": {
+                "id": comment.get("id"),
+                "agent_type": comment.get("agent_type"),
+                "status": comment.get("status"),
+                "created_at": comment.get("created_at"),
+                "updated_at": comment.get("updated_at"),
+                "anonymous_install_id": comment.get("anonymous_install_id"),
+                "app_session_id": comment.get("app_session_id"),
+                "page_id": comment.get("page_id"),
+                "thread_telemetry_id": comment.get("thread_telemetry_id"),
+                "source_surface": comment.get("source_surface"),
+                "comment_chars": len(comment.get("comment") or ""),
+                "selected_text_chars": len(comment.get("selected_text") or ""),
+                "surrounding_text_chars": len(comment.get("surrounding_text") or ""),
+                "page_title_chars": len(comment.get("page_title") or ""),
+                "page_url_present": bool(comment.get("page_url")),
+            },
+            "reply_meta": [
+                {
+                    "id": r.get("id"),
+                    "author": r.get("author"),
+                    "agent_type": r.get("agent_type"),
+                    "is_target": bool(target_reply and r.get("id") == target_reply.get("id")),
+                    "content_chars": len(r.get("content") or ""),
+                    "created_at": r.get("created_at"),
+                    "debug_meta": r.get("debug_meta") if r.get("author") == "agent" else {},
+                }
+                for r in replies
+            ],
+            "telemetry_timeline": telemetry_timeline,
+            "llm_ledger": ledger_rows,
+            "llm_request_snapshots": [_snapshot_for_diagnostic(row) for row in snapshots],
+            "recent_failures": _recent_failure_items(),
+            "local": {
+                "db_path": DB_PATH,
+                "data_dir": DATA_DIR,
+                "cloud_sync_enabled": CLOUD_SYNC_ENABLED,
+                "cloud_endpoint": CLOUD_ENDPOINT,
+            },
+            "attachments_manifest": {
+                "include_conversation": options.include_conversation,
+                "include_selection": options.include_selection,
+                "include_page_info": options.include_page_info,
+                "include_model_io": options.include_model_io,
+            },
+        }
+
+        attachments = {}
+        if options.include_conversation:
+            attachments["conversation"] = {
+                "comment": _clip_text(comment.get("comment"), 12000),
+                "replies": [
+                    {
+                        "id": r.get("id"),
+                        "author": r.get("author"),
+                        "agent_type": r.get("agent_type"),
+                        "is_target": bool(target_reply and r.get("id") == target_reply.get("id")),
+                        "content": _clip_text(r.get("content"), 20000),
+                        "created_at": r.get("created_at"),
+                    }
+                    for r in replies
+                ],
+            }
+        if options.include_selection:
+            attachments["selection"] = {
+                "selected_text": _clip_text(comment.get("selected_text"), 20000),
+                "surrounding_text": _clip_text(comment.get("surrounding_text"), 20000),
+            }
+        if options.include_page_info:
+            attachments["page"] = {
+                "page_title": _clip_text(comment.get("page_title"), 1000),
+                "page_url": _clip_text(comment.get("page_url"), 4000),
+            }
+        if options.include_model_io:
+            attachments["model_io"] = [_snapshot_for_attachment(row) for row in snapshots]
+
+        return {
+            "diagnostic": diagnostic,
+            "attachments": attachments,
+            "preview": {
+                "default_sent": [
+                    "版本与环境",
+                    "评论/回复长度与匿名身份",
+                    "事件时间线",
+                    "LLM ledger 状态、耗时、错误码、token/cost",
+                    "request snapshot 哈希、长度、状态（不含 prompt/response 原文）",
+                    "最近失败日志摘要",
+                ],
+                "optional_sent": [
+                    label for enabled, label in [
+                        (options.include_conversation, "评论与本次对话正文"),
+                        (options.include_selection, "划线与前后文"),
+                        (options.include_page_info, "页面标题与 URL"),
+                        (options.include_model_io, "模型实际输入/输出 prompt 与 response"),
+                    ] if enabled
+                ],
+                "counts": {
+                    "telemetry_events": len(telemetry_timeline),
+                    "ledger_calls": len(ledger_rows),
+                    "request_snapshots": len(snapshots),
+                    "replies": len(replies),
+                    "attachments": list(attachments.keys()),
+                },
+            },
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/debug/problem-reports/preview")
+def problem_report_preview(body: ProblemReportOptions):
+    """Preview exactly what a user would send before a problem report is submitted."""
+    return _build_problem_report_packet(body)
+
+
+@app.post("/debug/problem-reports")
+def problem_report_submit(body: ProblemReportSubmit):
+    """Store a user-consented support report locally and queue it for cloud sync."""
+    if not body.confirm_consent:
+        raise HTTPException(status_code=400, detail="confirm_consent is required")
+    packet = _build_problem_report_packet(body)
+    diagnostic = packet["diagnostic"]
+    attachments = packet["attachments"]
+    import uuid as _uuid
+    report_id = "report_" + _uuid.uuid4().hex
+    now = _now_shanghai_iso()
+    user_note = _clip_text(body.user_note, 4000)
+    comment_meta = diagnostic.get("comment_meta") or {}
+    client_context = diagnostic.get("client_context") or {}
+
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.execute(
+            """INSERT INTO support_reports
+               (report_id, comment_id, reply_id, rating, user_note,
+                anonymous_install_id, app_session_id, page_id, thread_telemetry_id,
+                app_version, include_conversation, include_selection, include_page_info,
+                include_model_io, diagnostic_json, attachments_json, status,
+                created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?,
+                       ?, ?, ?, ?,
+                       ?, ?, ?, ?,
+                       ?, ?, ?, 'local_only',
+                       ?, ?)""",
+            (
+                report_id, body.comment_id, body.reply_id, body.rating or "", user_note,
+                comment_meta.get("anonymous_install_id"), comment_meta.get("app_session_id"),
+                comment_meta.get("page_id"), comment_meta.get("thread_telemetry_id"),
+                client_context.get("app_version"),
+                1 if body.include_conversation else 0,
+                1 if body.include_selection else 0,
+                1 if body.include_page_info else 0,
+                1 if body.include_model_io else 0,
+                _json(diagnostic), _json(attachments), now, now,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    try:
+        _telemetry_insert_event(
+            event_name="support_report_submitted",
+            anonymous_install_id=comment_meta.get("anonymous_install_id") or "unknown",
+            app_session_id=comment_meta.get("app_session_id") or "",
+            page_id=comment_meta.get("page_id") or "",
+            thread_telemetry_id=comment_meta.get("thread_telemetry_id") or "",
+            surface="sidebar",
+            properties={
+                "report_id": report_id,
+                "rating": body.rating or "",
+                "has_user_note": bool(user_note),
+                "include_conversation": bool(body.include_conversation),
+                "include_selection": bool(body.include_selection),
+                "include_page_info": bool(body.include_page_info),
+                "include_model_io": bool(body.include_model_io),
+                "ledger_calls": (packet.get("preview") or {}).get("counts", {}).get("ledger_calls", 0),
+                "request_snapshots": (packet.get("preview") or {}).get("counts", {}).get("request_snapshots", 0),
+            },
+        )
+    except Exception as e:
+        print(f"[support_report] telemetry event failed: {type(e).__name__}: {e}")
+
+    return {
+        "ok": True,
+        "report_id": report_id,
+        "queued_for_cloud_sync": CLOUD_SYNC_ENABLED,
+        "preview": packet.get("preview") or {},
+    }
+
 
 @app.post("/comments")
 def create_comment(body: CommentCreate):
@@ -5094,6 +5848,28 @@ def debug_comment_detail(comment_id: int):
             (f'%"comment_id": {comment_id}%', f'%"comment_id":{comment_id}%'),
         )
         jobs = [_debug_parse_json_fields(row, ["payload_json"]) for row in jobs]
+        llm_request_snapshots = _debug_rows(
+            conn,
+            """SELECT id, call_id, stage, comment_id, reply_id, job_id, role, intent,
+                      provider, provider_config, local_agent, api_provider, model,
+                      status, timeout_sec, system_prompt, final_prompt, messages_json,
+                      system_prompt_sha256, final_prompt_sha256, request_sha256,
+                      response_text, response_sha256, response_chars,
+                      model_config_json, context_pack_id, context_refs_json,
+                      search_results_json, meta_json, code_git_sha,
+                      error_category, error_code, redacted_error, created_at, updated_at
+               FROM llm_request_snapshots
+               WHERE comment_id=?
+               ORDER BY created_at ASC""",
+            (comment_id,),
+        )
+        llm_request_snapshots = [
+            _debug_parse_json_fields(
+                row,
+                ["messages_json", "model_config_json", "context_refs_json", "search_results_json", "meta_json"],
+            )
+            for row in llm_request_snapshots
+        ]
 
         interpretation = _debug_parse_json_fields(
             _debug_one(conn, "SELECT * FROM comment_interpretations WHERE comment_id=?", (comment_id,)),
@@ -5144,6 +5920,7 @@ def debug_comment_detail(comment_id: int):
                 "profile_signals": profile_signals,
             },
             "jobs": jobs,
+            "llm_request_snapshots": llm_request_snapshots,
             "debug_logs": _debug_logs_for_comment(comment_id),
             "db": DB_PATH,
         }

@@ -10,6 +10,18 @@ npm run regression
 
 这个命令是提交门禁，不是展示页。任一必需项失败都会返回非 0。
 
+## 2026-05-19 · Support Report Debug Packet Note
+
+- 记录时间：2026-05-19 15:10 Asia/Shanghai
+- 关联 commit：待提交
+- 分支：`codex/debug-report-packet`
+- 改了什么：新增本机私有 `llm_request_snapshots` 和用户明确同意后提交的 `support_reports`；点踩时发送“反馈 + 诊断包”，失败/超时/仍在处理的 AI 回复展示“报告问题”入口。
+- 为什么改：默认 telemetry/ledger 能定位慢和失败，但无法还原具体现场；直接默认上传评论、划线、URL、AI 回复会伤害熟人内测的隐私信任。V0 默认只上传诊断元数据，勾选后才附带正文或模型 I/O。
+- 用户如何验收：刷新 Chrome extension 并刷新目标网页；对正常 AI 回复点“踩”，应看到诊断包预览和四个可选附件；对失败或“AI 仍在处理中”的回复，应看到“报告问题”按钮；不勾选附件时，问题报告只包含版本、事件时间线、ledger、snapshot hash/长度等诊断数据。
+- 已验证：`python3 -m py_compile backend/agent_api.py`、`node --check src/content/index.js`、`scripts/kb-regression --skip-live --skip-browser`、临时 `KB_DATA_DIR=/private/tmp/kb-support-report-smoke` 的 `/debug/problem-reports/preview` 与提交 smoke。完整 `scripts/kb-regression` 未作为通过项：live health 因既有 `margin_cloud_sync` warn 返回非 0，browser smoke 因该 worktree 未安装 Playwright 失败。
+- 适用范围：`backend/agent_api.py`、`src/content/index.js`，并依赖 margin-cloud 的 `/api/support-reports` 和 `margin_support_reports` 表用于云端查看。
+- 可能过时的地方：问题报告字段会随 admin UI、LLM ledger、request snapshot schema 演进；`include_model_io` 属于高敏感授权附件，不应成为默认选项。
+
 ## 2026-05-18 · Notebook Privacy Audit Note
 
 - 记录时间：2026-05-18 21:30 Asia/Shanghai

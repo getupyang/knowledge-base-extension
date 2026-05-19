@@ -942,12 +942,13 @@ const commentSystem = (() => {
     setTimeout(updateBadge, 0);
     return c;
   }
-  function addReply(commentId, replyText, isAI, debugMeta = null) {
+  function addReply(commentId, replyText, isAI, debugMeta = null, backendReplyId = null) {
     const comments = load();
     const c = comments.find(x => x.id === commentId);
     if (!c) return;
     c.replies.push({
       id: Date.now(),
+      backendReplyId,
       text: replyText,
       isAI,
       debugMeta,
@@ -956,15 +957,16 @@ const commentSystem = (() => {
     save(comments);
     return c;
   }
-  function replaceReply(commentId, replyId, replyText, isAI, debugMeta = null) {
+  function replaceReply(commentId, replyId, replyText, isAI, debugMeta = null, backendReplyId = null) {
     const comments = load();
     const c = comments.find(x => x.id === commentId);
     if (!c) return null;
     const idx = c.replies.findIndex(r => String(r.id) === String(replyId));
-    if (idx === -1) return addReply(commentId, replyText, isAI, debugMeta);
+    if (idx === -1) return addReply(commentId, replyText, isAI, debugMeta, backendReplyId);
     c.replies[idx] = {
       ...c.replies[idx],
       id: c.replies[idx].id || Date.now(),
+      backendReplyId: backendReplyId || c.replies[idx].backendReplyId || null,
       text: replyText,
       isAI,
       debugMeta,
@@ -987,6 +989,100 @@ const commentSystem = (() => {
     updateCommentCard(commentId);
     return { comment: c, reply: r };
   }
+  function getProblemReportOptions(commentId, replyId) {
+    const comments = load();
+    const c = comments.find(x => String(x.id) === String(commentId));
+    const r = c?.replies?.find(x => String(x.id) === String(replyId));
+    const current = r?.problemReportOptions || {};
+    const readBox = (name, fallback) => {
+      const el = document.getElementById(`kb-report-${name}-${commentId}-${replyId}`);
+      return el ? Boolean(el.checked) : Boolean(fallback);
+    };
+    return {
+      include_conversation: readBox("conversation", current.include_conversation),
+      include_selection: readBox("selection", current.include_selection),
+      include_page_info: readBox("page", current.include_page_info),
+      include_model_io: readBox("model", current.include_model_io),
+    };
+  }
+
+  function problemReportPayload(commentId, replyId, rating, userNote = "") {
+    const comments = load();
+    const c = comments.find(x => String(x.id) === String(commentId));
+    const r = c?.replies?.find(x => String(x.id) === String(replyId));
+    if (!c?.agentCommentId) throw new Error("这条评论还没有后端记录，无法生成诊断包");
+    return {
+      comment_id: Number(c.agentCommentId),
+      reply_id: r?.backendReplyId ? Number(r.backendReplyId) : null,
+      rating: rating || "",
+      user_note: userNote || "",
+      ...getProblemReportOptions(commentId, replyId),
+      client_context: getTelemetryEnv(),
+    };
+  }
+
+  async function refreshProblemReportPreview(commentId, replyId, rating = "") {
+    try {
+      patchReply(commentId, replyId, { problemReportPreviewLoading: true, problemReportPreviewError: "" });
+      const comments = load();
+      const c = comments.find(x => String(x.id) === String(commentId));
+      const r = c?.replies?.find(x => String(x.id) === String(replyId));
+      const note = document.getElementById(`kb-feedback-ta-${commentId}-${replyId}`)?.value || r?.problemReportNote || "";
+      const resp = await fetch("http://localhost:8766/debug/problem-reports/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(problemReportPayload(commentId, replyId, rating || r?.problemReportRating || "", note)),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      patchReply(commentId, replyId, {
+        problemReportPreview: data.preview || {},
+        problemReportOptions: getProblemReportOptions(commentId, replyId),
+        problemReportNote: note,
+        problemReportPreviewLoading: false,
+        problemReportPreviewError: "",
+      });
+      return data;
+    } catch (e) {
+      patchReply(commentId, replyId, {
+        problemReportPreviewLoading: false,
+        problemReportPreviewError: e.message || String(e),
+      });
+      return null;
+    }
+  }
+
+  async function openProblemReportPanel(commentId, replyId, options = {}) {
+    patchReply(commentId, replyId, {
+      feedbackDraftOpen: true,
+      problemReportOnly: Boolean(options.reportOnly),
+      problemReportRating: options.rating || (options.reportOnly ? "problem" : "down"),
+      problemReportOptions: {
+        include_conversation: false,
+        include_selection: false,
+        include_page_info: false,
+        include_model_io: false,
+      },
+      problemReportPreview: null,
+      problemReportPreviewError: "",
+    });
+    await refreshProblemReportPreview(commentId, replyId, options.rating || (options.reportOnly ? "problem" : "down"));
+  }
+
+  async function submitProblemReport(commentId, replyId, rating, userNote = "") {
+    const payload = {
+      ...problemReportPayload(commentId, replyId, rating, userNote),
+      confirm_consent: true,
+    };
+    const resp = await fetch("http://localhost:8766/debug/problem-reports", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return await resp.json();
+  }
+
   async function submitAiFeedback(commentId, replyId, rating, feedbackText = "") {
     const comments = load();
     const c = comments.find(x => String(x.id) === String(commentId));
@@ -996,22 +1092,45 @@ const commentSystem = (() => {
       showToast("写一句哪里不对，再发送反馈", "error");
       return;
     }
+    let report = null;
+    if (rating === "down") {
+      try {
+        report = await submitProblemReport(commentId, replyId, rating, feedbackText.trim());
+      } catch (e) {
+        showToast("诊断包暂时没发出：本地服务未连接", "error");
+        return;
+      }
+    }
     // 字段瘦身：stage/role/model/token/cost 都查 ledger，前端事件只携带"用户视角"
-    const ok = await telemetryEvent("ai_reply_feedback_submitted", "sidebar", {
+    await telemetryEvent("ai_reply_feedback_submitted", "sidebar", {
       rating,
       feedback_text: rating === "down" ? feedbackText.trim() : "",
       reply_chars_bucket: charBucket(r.text),
+      support_report_id: report?.report_id || "",
     }, c);
-    if (!ok) {
-      showToast("反馈暂时没发出：本地服务未连接", "error");
-      return;
-    }
     patchReply(commentId, replyId, {
       feedbackRating: rating,
       feedbackSubmitted: true,
       feedbackDraftOpen: false,
+      problemReportSubmitted: Boolean(report),
+      problemReportId: report?.report_id || "",
     });
-    showToast("反馈已记录", "success");
+    showToast(rating === "down" ? "反馈和诊断包已记录" : "反馈已记录", "success");
+  }
+
+  async function submitProblemReportOnly(commentId, replyId, note = "") {
+    try {
+      const report = await submitProblemReport(commentId, replyId, "problem", note.trim());
+      patchReply(commentId, replyId, {
+        feedbackDraftOpen: false,
+        problemReportOnly: false,
+        problemReportSubmitted: true,
+        problemReportId: report?.report_id || "",
+      });
+      showToast("问题报告已记录", "success");
+    } catch (e) {
+      showToast("问题报告暂时没发出：本地服务未连接", "error");
+    }
   }
   function setAiPending(commentId, patch = {}) {
     const comments = load();
@@ -1989,8 +2108,32 @@ const commentSystem = (() => {
         color: var(--kb-ink-mute); font-size: 11px; line-height: 1.5;
         margin-top: 6px;
       }
+      .kb-report-options {
+        display: grid; grid-template-columns: 1fr;
+        gap: 5px; margin-top: 8px;
+      }
+      .kb-report-options label {
+        display: flex; align-items: center; gap: 6px;
+        color: var(--kb-ink); font-size: 11px; line-height: 1.35;
+      }
+      .kb-report-options input {
+        width: 13px; height: 13px; margin: 0; accent-color: var(--kb-brand-strong);
+      }
+      .kb-report-preview {
+        margin-top: 8px; padding: 7px 8px;
+        border: 1px solid var(--kb-line);
+        background: var(--kb-paper);
+        border-radius: 3px;
+        color: var(--kb-ink-mute);
+        font-size: 11px; line-height: 1.45;
+      }
+      .kb-report-preview.warn {
+        color: #a40;
+        border-color: color-mix(in srgb, #a40 28%, var(--kb-line));
+      }
       .kb-feedback-actions {
         display: flex; gap: 8px; margin-top: 7px; align-items: center;
+        flex-wrap: wrap;
       }
       #kb-comment-panel .kb-ai-btn {
         background: var(--kb-brand-strong) !important; color: var(--kb-paper) !important;
@@ -2529,22 +2672,62 @@ const commentSystem = (() => {
     };
     const isPendingAIReply = (r) => r?.isAI && /^AI 仍在处理中/.test(r.text || "");
     const feedbackEligible = (r) => r?.isAI && !isFailedAIReply(r) && !isPendingAIReply(r);
-    const renderFeedbackControls = (r) => feedbackEligible(r)
-      ? `<div class="kb-ai-feedback">
-          <button type="button" class="kb-feedback-chip ${r.feedbackRating === "up" ? "active" : ""}" data-ai-feedback-up="${c.id}" data-reply-id="${r.id}">赞</button>
-          <button type="button" class="kb-feedback-chip ${r.feedbackRating === "down" ? "active" : ""}" data-ai-feedback-down="${c.id}" data-reply-id="${r.id}">踩</button>
-          ${r.feedbackSubmitted ? `<span class="kb-feedback-done">已记录</span>` : ""}
-          ${r.feedbackDraftOpen ? `
-            <div class="kb-feedback-panel">
-              <textarea id="kb-feedback-ta-${c.id}-${r.id}" placeholder="哪里不对、没帮上忙，直接写一句"></textarea>
-              <div class="kb-feedback-note">这段反馈会发送给开发者；不会附带网页内容、划线原文、你的评论或 AI 回复全文。</div>
-              <div class="kb-feedback-actions">
-                <button type="button" class="kb-ai-btn" data-ai-feedback-submit="${c.id}" data-reply-id="${r.id}">发送反馈</button>
-                <button type="button" class="kb-reply-btn" data-ai-feedback-cancel="${c.id}" data-reply-id="${r.id}">取消</button>
-              </div>
-            </div>` : ""}
-        </div>`
-      : "";
+    const renderReportPanel = (r) => {
+      if (!r.feedbackDraftOpen) return "";
+      const opts = r.problemReportOptions || {};
+      const preview = r.problemReportPreview || {};
+      const counts = preview.counts || {};
+      const optional = preview.optional_sent || [];
+      const defaultSent = preview.default_sent || [];
+      const reportOnly = Boolean(r.problemReportOnly);
+      const buttonLabel = reportOnly ? "发送问题报告" : "发送反馈 + 诊断包";
+      const note = reportOnly
+        ? "默认只发送版本、事件时间线、LLM 调用状态、错误码和 request snapshot 哈希。勾选后才附带正文。"
+        : "点踩会同时发送一个诊断包；默认不含网页内容、划线、你的评论或 AI 回复全文。";
+      const previewHtml = r.problemReportPreviewLoading
+        ? `<div class="kb-report-preview">正在生成预览...</div>`
+        : r.problemReportPreviewError
+          ? `<div class="kb-report-preview warn">预览失败：${escapeHtml(String(r.problemReportPreviewError))}</div>`
+          : `<div class="kb-report-preview">
+              <div>默认发送：${escapeHtml(defaultSent.slice(0, 3).join(" / ") || "诊断元数据")}</div>
+              <div>计数：事件 ${counts.telemetry_events || 0} · LLM ${counts.ledger_calls || 0} · snapshot ${counts.request_snapshots || 0}</div>
+              <div>附加正文：${optional.length ? escapeHtml(optional.join(" / ")) : "未勾选"}</div>
+            </div>`;
+      return `
+        <div class="kb-feedback-panel">
+          <textarea id="kb-feedback-ta-${c.id}-${r.id}" placeholder="${reportOnly ? "补一句你看到的问题（可选）" : "哪里不对、没帮上忙，直接写一句"}">${escapeHtml(r.problemReportNote || "")}</textarea>
+          <div class="kb-feedback-note">${note}</div>
+          <div class="kb-report-options">
+            <label><input type="checkbox" id="kb-report-conversation-${c.id}-${r.id}" ${opts.include_conversation ? "checked" : ""}> 评论与本次对话</label>
+            <label><input type="checkbox" id="kb-report-selection-${c.id}-${r.id}" ${opts.include_selection ? "checked" : ""}> 划线与前后文</label>
+            <label><input type="checkbox" id="kb-report-page-${c.id}-${r.id}" ${opts.include_page_info ? "checked" : ""}> 页面标题与 URL</label>
+            <label><input type="checkbox" id="kb-report-model-${c.id}-${r.id}" ${opts.include_model_io ? "checked" : ""}> 模型实际输入/输出</label>
+          </div>
+          ${previewHtml}
+          <div class="kb-feedback-actions">
+            <button type="button" class="kb-reply-btn" data-ai-report-preview="${c.id}" data-reply-id="${r.id}">刷新预览</button>
+            <button type="button" class="kb-ai-btn" data-ai-feedback-submit="${c.id}" data-reply-id="${r.id}" data-report-only="${reportOnly ? "1" : "0"}">${buttonLabel}</button>
+            <button type="button" class="kb-reply-btn" data-ai-feedback-cancel="${c.id}" data-reply-id="${r.id}">取消</button>
+          </div>
+        </div>`;
+    };
+    const renderFeedbackControls = (r) => {
+      if (!r?.isAI) return "";
+      if (!feedbackEligible(r)) {
+        return `<div class="kb-ai-feedback">
+          <button type="button" class="kb-feedback-chip" data-ai-report-open="${c.id}" data-reply-id="${r.id}">报告问题</button>
+          ${r.problemReportSubmitted ? `<span class="kb-feedback-done">已记录</span>` : ""}
+          ${renderReportPanel(r)}
+        </div>`;
+      }
+      return `<div class="kb-ai-feedback">
+        <button type="button" class="kb-feedback-chip ${r.feedbackRating === "up" ? "active" : ""}" data-ai-feedback-up="${c.id}" data-reply-id="${r.id}">赞</button>
+        <button type="button" class="kb-feedback-chip ${r.feedbackRating === "down" ? "active" : ""}" data-ai-feedback-down="${c.id}" data-reply-id="${r.id}">踩</button>
+        ${r.feedbackSubmitted ? `<span class="kb-feedback-done">已记录</span>` : ""}
+        ${r.problemReportSubmitted && !r.feedbackSubmitted ? `<span class="kb-feedback-done">问题已记录</span>` : ""}
+        ${renderReportPanel(r)}
+      </div>`;
+    };
     const repliesHtml = c.replies.map(r => {
       let debugHtml = "";
       if (DEBUG_MODE && r.isAI && r.debugMeta) {
@@ -2720,7 +2903,35 @@ const commentSystem = (() => {
     }
     const feedbackDown = e.target.closest("[data-ai-feedback-down]");
     if (feedbackDown) {
-      patchReply(feedbackDown.dataset.aiFeedbackDown, feedbackDown.dataset.replyId, { feedbackDraftOpen: true });
+      openProblemReportPanel(feedbackDown.dataset.aiFeedbackDown, feedbackDown.dataset.replyId, { rating: "down" });
+      return;
+    }
+    const reportOpen = e.target.closest("[data-ai-report-open]");
+    if (reportOpen) {
+      openProblemReportPanel(reportOpen.dataset.aiReportOpen, reportOpen.dataset.replyId, { rating: "problem", reportOnly: true });
+      return;
+    }
+    const reportPreview = e.target.closest("[data-ai-report-preview]");
+    if (reportPreview) {
+      const commentId = reportPreview.dataset.aiReportPreview;
+      const replyId = reportPreview.dataset.replyId;
+      const comments = load();
+      const c = comments.find(x => String(x.id) === String(commentId));
+      const r = c?.replies?.find(x => String(x.id) === String(replyId));
+      refreshProblemReportPreview(commentId, replyId, r?.problemReportRating || (r?.problemReportOnly ? "problem" : "down"));
+      return;
+    }
+    const reportOption = e.target.closest(".kb-report-options input");
+    if (reportOption) {
+      const m = reportOption.id.match(/^kb-report-(conversation|selection|page|model)-(.+)-(.+)$/);
+      if (m) {
+        const [, , commentId, replyId] = m;
+        const ta = document.getElementById(`kb-feedback-ta-${commentId}-${replyId}`);
+        patchReply(commentId, replyId, {
+          problemReportOptions: getProblemReportOptions(commentId, replyId),
+          problemReportNote: ta?.value || "",
+        });
+      }
       return;
     }
     const feedbackSubmit = e.target.closest("[data-ai-feedback-submit]");
@@ -2728,7 +2939,11 @@ const commentSystem = (() => {
       const commentId = feedbackSubmit.dataset.aiFeedbackSubmit;
       const replyId = feedbackSubmit.dataset.replyId;
       const ta = document.getElementById(`kb-feedback-ta-${commentId}-${replyId}`);
-      submitAiFeedback(commentId, replyId, "down", ta?.value || "");
+      if (feedbackSubmit.dataset.reportOnly === "1") {
+        submitProblemReportOnly(commentId, replyId, ta?.value || "");
+      } else {
+        submitAiFeedback(commentId, replyId, "down", ta?.value || "");
+      }
       return;
     }
     const feedbackCancel = e.target.closest("[data-ai-feedback-cancel]");
@@ -3085,6 +3300,7 @@ const commentSystem = (() => {
       // 轮询等待 agent 回复（每5秒，最多360次=30分钟）
       let reply = null;
       let replyDebugMeta = null;
+      let backendReplyId = null;
       const startPoll = Date.now();
       // 根据 agent 类型和经过时间显示有意义的状态
       const agentType = (() => {
@@ -3123,6 +3339,7 @@ const commentSystem = (() => {
           const lastReply = agentReplies[agentReplies.length - 1];
           reply = lastReply.content;
           replyDebugMeta = lastReply.debug_meta || null;
+          backendReplyId = lastReply.id || null;
           break;
         }
       }
@@ -3130,9 +3347,9 @@ const commentSystem = (() => {
       if (reply) {
         const shouldNotify = !_isCommentCardVisible(commentId);
         if (options.replaceReplyId) {
-          replaceReply(commentId, options.replaceReplyId, reply, true, replyDebugMeta);
+          replaceReply(commentId, options.replaceReplyId, reply, true, replyDebugMeta, backendReplyId);
         } else {
-          addReply(commentId, reply, true, replyDebugMeta);
+          addReply(commentId, reply, true, replyDebugMeta, backendReplyId);
         }
         clearAiPending(commentId);
         if (shouldNotify) _markAiReplyReady(commentId);
