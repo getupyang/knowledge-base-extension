@@ -25,7 +25,7 @@ npm run regression
 ## 2026-05-19 · Support Report Copy Tuning
 
 - 记录时间：2026-05-19 15:58 Asia/Shanghai
-- 关联 commit：`6d6ed8e`
+- 关联 commit：`52878ed`
 - 分支：`codex/debug-report-packet`
 - 改了什么：问题报告面板默认勾选四类授权附件；把 checkbox 改成更清晰的确认项；移除“刷新预览”按钮；把 `ledger`、`snapshot`、计数等开发者文案改成用户能理解的“会发送哪些材料、为什么有助于排查”。
 - 为什么改：用户看到第一版后反馈多选框太丑、默认不勾选不符合熟人内测排查诉求，并且内部字段名不可理解。
