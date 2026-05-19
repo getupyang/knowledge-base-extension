@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Margin",
-  "version": "0.3.12",
+  "version": "0.3.13",
   "description": "划线评论，写下思考和疑问。Margin 在右侧回应，并记住项目、做事方式和想法变化。",
   "permissions": [
     "contextMenus",
     "storage",
     "activeTab",
-    "scripting"
+    "scripting",
+    "clipboardWrite"
   ],
 
   "host_permissions": [
@@ -57,6 +58,14 @@
     {
       "resources": ["src/content/weread-bridge.js"],
       "matches": ["https://weread.qq.com/*"]
+    },
+    {
+      "resources": ["assets/icons/icon128.png"],
+      "matches": ["<all_urls>"]
+    },
+    {
+      "resources": ["assets/share/*"],
+      "matches": ["<all_urls>"]
     }
   ]
 }

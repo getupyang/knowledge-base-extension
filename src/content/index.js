@@ -1,4 +1,4 @@
-const KB_CONTENT_VERSION = "0.3.16-positive-example-packet";
+const KB_CONTENT_VERSION = "0.3.18-margin-share-playground";
 console.info(`[KB] content script loaded: ${KB_CONTENT_VERSION}`);
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -817,7 +817,109 @@ const commentSystem = (() => {
   const STORAGE_KEY = () => "kb_comments_" + _storageUrl();
   let panelEl = null;
   let currentExcerpt = "";
+  let panelOpen = false;
+  let shareDialogEl = null;
+  let shareDialogState = null;
   const _aiUnreadCommentIds = new Set();
+  const PANEL_WIDTH_KEY = "kb_comment_panel_width_v1";
+  const PANEL_DEFAULT_WIDTH = 380;
+  const PANEL_MIN_WIDTH = 320;
+  const PANEL_MAX_WIDTH = 820;
+  const SHARE_CLOSER = "Keep your thinking in Margin.";
+  const SHARE_INSTALL_TEXT = "get-margin.vercel.app";
+  const SHARE_BRAND = "#1E7A3C";
+  const SHARE_INK = "#18221B";
+  const SHARE_INK_2 = "#26332A";
+  const SHARE_MUTED = "#53665A";
+  const SHARE_MUTED_2 = "#6C7C70";
+  const SHARE_HAIR = "rgba(39,86,58,0.18)";
+  const SHARE_PAPER = "#F7F8F3";
+  let panelWidth = _readPanelWidth();
+  let shareMarkPromise = null;
+  let shareQrPromise = null;
+  let panelResizeActive = false;
+
+  function _panelViewportMaxWidth() {
+    const viewport = Math.max(window.innerWidth || 0, document.documentElement?.clientWidth || 0, PANEL_DEFAULT_WIDTH);
+    return Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, viewport - 72));
+  }
+
+  function _clampPanelWidth(value) {
+    const n = Number.parseInt(value, 10);
+    const width = Number.isFinite(n) ? n : PANEL_DEFAULT_WIDTH;
+    return Math.min(Math.max(width, PANEL_MIN_WIDTH), _panelViewportMaxWidth());
+  }
+
+  function _readPanelWidth() {
+    try {
+      return _clampPanelWidth(localStorage.getItem(PANEL_WIDTH_KEY) || PANEL_DEFAULT_WIDTH);
+    } catch {
+      return _clampPanelWidth(PANEL_DEFAULT_WIDTH);
+    }
+  }
+
+  function _applyPanelWidth(value = panelWidth, options = {}) {
+    panelWidth = _clampPanelWidth(value);
+    if (options.persist) {
+      try { localStorage.setItem(PANEL_WIDTH_KEY, String(panelWidth)); } catch {}
+    }
+    if (panelEl) {
+      panelEl.style.setProperty("--kb-panel-width", `${panelWidth}px`);
+    }
+    if (panelOpen && panelEl && !panelEl.classList.contains("kb-btn-hidden")) {
+      document.body.style.marginRight = `${panelWidth}px`;
+    }
+  }
+
+  function _showPanel() {
+    if (!panelEl) buildPanel();
+    if (!panelEl) return;
+    panelOpen = true;
+    panelEl.classList.remove("kb-btn-hidden");
+    _applyPanelWidth(panelWidth);
+    updateBadge();
+  }
+
+  function _hidePanel() {
+    panelOpen = false;
+    if (panelEl) panelEl.classList.add("kb-btn-hidden");
+    document.body.style.marginRight = "";
+    updateBadge();
+  }
+
+  function _syncPanelWidthToViewport() {
+    if (!panelEl) return;
+    _applyPanelWidth(panelWidth, { persist: true });
+  }
+
+  function _startPanelResize(event) {
+    if (event.type === "mousedown" && typeof event.button === "number" && event.button > 0) return;
+    if (panelResizeActive) return;
+    panelResizeActive = true;
+    event.preventDefault();
+    document.documentElement.classList.add("kb-panel-resizing");
+    const move = (e) => {
+      const point = e.touches?.[0] || e.changedTouches?.[0] || e;
+      if (e.cancelable) e.preventDefault();
+      const viewport = window.innerWidth || document.documentElement.clientWidth || PANEL_DEFAULT_WIDTH;
+      _applyPanelWidth(viewport - point.clientX);
+    };
+    const finish = () => {
+      panelResizeActive = false;
+      document.documentElement.classList.remove("kb-panel-resizing");
+      _applyPanelWidth(panelWidth, { persist: true });
+      window.removeEventListener("mousemove", move, true);
+      window.removeEventListener("mouseup", finish, true);
+      window.removeEventListener("touchmove", move, true);
+      window.removeEventListener("touchend", finish, true);
+      window.removeEventListener("touchcancel", finish, true);
+    };
+    window.addEventListener("mousemove", move, true);
+    window.addEventListener("mouseup", finish, true);
+    window.addEventListener("touchmove", move, { capture: true, passive: false });
+    window.addEventListener("touchend", finish, true);
+    window.addEventListener("touchcancel", finish, true);
+  }
 
   function ensureThreadTelemetryId(comment) {
     if (!comment) return "";
@@ -1471,10 +1573,7 @@ const commentSystem = (() => {
       if (!panelEl) buildPanel();
       const wasPanelClosed = !panelOpen;
       if (!panelOpen) {
-        panelOpen = true;
-        panelEl.classList.remove("kb-btn-hidden");
-        document.body.style.marginRight = "360px";
-        updateBadge();
+        _showPanel();
       }
       render();
       const flashDelay = wasPanelClosed ? 350 : 80;
@@ -1748,7 +1847,6 @@ const commentSystem = (() => {
 
   // ── badge 常驻（有高亮或评论时显示，点击开关评论栏）──
   let badgeEl = null;
-  let panelOpen = false;
 
   function updateBadge() {
     const comments = load();
@@ -1782,17 +1880,13 @@ const commentSystem = (() => {
 
   function togglePanel() {
     if (!panelEl) buildPanel();
-    panelOpen = !panelOpen;
-    if (panelOpen) {
-      panelEl.classList.remove("kb-btn-hidden");
-      document.body.style.marginRight = "360px";
+    if (!panelOpen) {
+      _showPanel();
       render();
       syncVisibleCommentsFromBackend({ notify: false });
     } else {
-      panelEl.classList.add("kb-btn-hidden");
-      document.body.style.marginRight = "";
+      _hidePanel();
     }
-    updateBadge();
   }
 
   // ── 注入样式（v3 视觉系统：森林绿品牌主色 + 浅纸面 + JetBrains Mono + oklch）──
@@ -1905,8 +1999,14 @@ const commentSystem = (() => {
         border-color: var(--kb-terra) !important;
         box-shadow: 0 0 0 3px oklch(0.55 0.14 150 / 0.14) !important;
       }
+      html.kb-panel-resizing,
+      html.kb-panel-resizing * {
+        cursor: ew-resize !important;
+        user-select: none !important;
+      }
       #kb-comment-panel {
-        position: fixed; top: 0; right: 0; width: 360px; height: 100vh;
+        position: fixed; top: 0; right: 0; width: var(--kb-panel-width, 380px); height: 100vh;
+        min-width: 320px; max-width: calc(100vw - 72px);
         background: var(--kb-paper);
         border-left: 1px solid var(--kb-line);
         display: flex; flex-direction: column; z-index: 2147483645;
@@ -1918,6 +2018,36 @@ const commentSystem = (() => {
         background-image:
           radial-gradient(var(--kb-grid-dot) 0.5px, transparent 0.5px);
         background-size: 20px 20px;
+      }
+      #kb-panel-resizer {
+        position: absolute !important;
+        left: 0 !important;
+        right: auto !important;
+        top: 0 !important;
+        width: 12px !important;
+        min-width: 12px !important;
+        max-width: 12px !important;
+        height: 100% !important;
+        cursor: ew-resize !important;
+        z-index: 2 !important;
+        touch-action: none !important;
+        flex: 0 0 12px !important;
+        box-sizing: border-box !important;
+      }
+      #kb-panel-resizer::after {
+        content: "";
+        position: absolute;
+        left: 1px;
+        top: 14px;
+        bottom: 14px;
+        width: 2px;
+        border-radius: 999px;
+        background: transparent;
+        transition: background 0.16s;
+      }
+      #kb-panel-resizer:hover::after,
+      html.kb-panel-resizing #kb-panel-resizer::after {
+        background: var(--kb-brand);
       }
       #kb-comment-panel button {
         -webkit-appearance: none !important;
@@ -1974,6 +2104,7 @@ const commentSystem = (() => {
         content: ''; position: absolute; bottom: 0; left: 0; right: 0;
         height: 36px;
         background: linear-gradient(transparent, var(--kb-surface));
+        pointer-events: none;
       }
       .kb-cmt-expand {
         font-size: 11px !important; line-height: 1.25 !important; color: var(--kb-terra) !important; cursor: pointer; margin-top: 4px;
@@ -1981,6 +2112,15 @@ const commentSystem = (() => {
         font-family: inherit; letter-spacing: 0.03em;
       }
       .kb-cmt-expand:hover { text-decoration: underline; color: var(--kb-terra) !important; }
+      .kb-cmt-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+      }
       .kb-cmt-quote {
         font-size: 12px; color: var(--kb-ink-2);
         font-family: "Source Han Serif SC", "Noto Serif SC", serif;
@@ -2110,6 +2250,21 @@ const commentSystem = (() => {
       }
       .kb-feedback-done {
         color: var(--kb-ink-mute); font-size: 11px;
+      }
+      #kb-comment-panel .kb-share-btn {
+        background: var(--kb-brand-faint) !important;
+        color: var(--kb-brand-strong) !important;
+        border: 1px solid oklch(0.55 0.14 150 / 0.24) !important;
+        border-radius: 3px;
+        padding: 3px 7px !important;
+        font-size: 11px !important;
+        line-height: 1.2 !important;
+        cursor: pointer;
+        font-family: inherit;
+      }
+      #kb-comment-panel .kb-share-btn:hover {
+        border-color: var(--kb-brand) !important;
+        background: var(--kb-brand-soft) !important;
       }
       .kb-positive-example-prompt {
         margin-top: 6px;
@@ -2366,6 +2521,132 @@ const commentSystem = (() => {
         padding: 4px 0 0 8px;
         font-family: "JetBrains Mono", ui-monospace, monospace;
       }
+      #kb-share-dialog {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483647;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+        background: rgba(18, 24, 20, 0.34);
+        box-sizing: border-box;
+        font-family: "Inter Tight", "Inter", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+      }
+      .kb-share-shell {
+        width: min(640px, calc(100vw - 32px));
+        max-height: calc(100vh - 40px);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        border: 0;
+        border-radius: 16px;
+        background: #fff;
+        color: var(--kb-ink);
+        box-shadow: 0 24px 60px rgba(0,0,0,0.18), 0 4px 12px rgba(0,0,0,0.06);
+      }
+      .kb-share-header,
+      .kb-share-actions {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 18px 24px;
+        border-bottom: 1px solid #eee;
+        background: #fff;
+        flex-shrink: 0;
+      }
+      .kb-share-actions {
+        padding: 14px 24px;
+        border-top: 1px solid #eee;
+        border-bottom: 0;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        background: #fafafa;
+      }
+      .kb-share-title {
+        margin: 0;
+        font-size: 16px;
+        font-weight: 600;
+        font-family: inherit;
+      }
+      .kb-share-tabs {
+        display: flex;
+        gap: 8px;
+        padding: 0 24px;
+        border-bottom: 1px solid #eee;
+        background: #fff;
+        flex-shrink: 0;
+      }
+      .kb-share-tab {
+        background: transparent !important;
+        border: 0 !important;
+        border-bottom: 2px solid transparent !important;
+        padding: 12px 4px !important;
+        margin-bottom: -1px;
+        font-size: 14px !important;
+        line-height: 1.2 !important;
+        color: #888 !important;
+        font-family: inherit;
+        cursor: pointer;
+        border-radius: 0;
+      }
+      .kb-share-tab:hover {
+        color: var(--kb-ink) !important;
+      }
+      .kb-share-tab.is-active {
+        color: var(--kb-brand-strong) !important;
+        border-bottom-color: var(--kb-brand-strong) !important;
+        font-weight: 600;
+      }
+      .kb-share-preview {
+        min-height: 180px;
+        overflow: auto;
+        padding: 24px;
+        background: #d8d8d2;
+        display: flex;
+        justify-content: center;
+        align-items: flex-start;
+      }
+      .kb-share-preview img {
+        display: block;
+        flex: 0 0 auto;
+        width: 520px;
+        max-width: 100%;
+        height: auto;
+        border-radius: 6px;
+        box-shadow: 0 10px 28px rgba(20,30,22,0.10), 0 0 0 1px rgba(20,30,22,0.04);
+      }
+      .kb-share-loading,
+      .kb-share-status {
+        color: var(--kb-ink-mute);
+        font-size: 12px;
+        line-height: 1.5;
+      }
+      #kb-share-dialog .kb-share-copy {
+        background: var(--kb-brand-strong) !important;
+        color: var(--kb-paper) !important;
+        border: 0 !important;
+        border-radius: 3px;
+        padding: 7px 12px !important;
+        font-size: 12px !important;
+        line-height: 1.2 !important;
+        cursor: pointer;
+        font-family: inherit;
+      }
+      #kb-share-dialog .kb-share-ghost {
+        background: transparent !important;
+        color: var(--kb-ink-mute) !important;
+        border: 0 !important;
+        padding: 7px 4px !important;
+        font-size: 12px !important;
+        line-height: 1.2 !important;
+        cursor: pointer;
+        font-family: inherit;
+      }
+      #kb-share-dialog .kb-share-ghost:hover {
+        color: var(--kb-brand-strong) !important;
+      }
       .kb-expand-hidden { display: none !important; }
     `;
     document.head.appendChild(s);
@@ -2381,6 +2662,7 @@ const commentSystem = (() => {
       panelEl.classList.add("kb-btn-hidden");
     }
     panelEl.innerHTML = `
+      <div id="kb-panel-resizer" title="拖动调整评注栏宽度"></div>
       <div id="kb-cp-header">
         <h3>评注<span class="kb-cp-count" id="kb-cp-count"></span></h3>
         <div style="display:flex;gap:8px;align-items:center;">
@@ -2400,12 +2682,12 @@ const commentSystem = (() => {
       </div>
     `;
     document.body.appendChild(panelEl);
+    _applyPanelWidth(panelWidth);
 
+    document.getElementById("kb-panel-resizer").addEventListener("mousedown", _startPanelResize);
+    document.getElementById("kb-panel-resizer").addEventListener("touchstart", _startPanelResize, { passive: false });
     document.getElementById("kb-cp-close").addEventListener("click", () => {
-      panelOpen = false;
-      panelEl.classList.add("kb-btn-hidden");
-      document.body.style.marginRight = "";
-      updateBadge();
+      _hidePanel();
     });
     document.getElementById("kb-cp-send-btn").addEventListener("click", submitComment);
     document.getElementById("kb-cp-textarea").addEventListener("keydown", (e) => {
@@ -2422,6 +2704,11 @@ const commentSystem = (() => {
     });
     // 事件委托：处理评论卡片里的按钮（避免 onclick 属性跨 world 问题）
     document.getElementById("kb-cp-body").addEventListener("click", (e) => {
+      const shareBtn = e.target.closest("[data-share-reply]");
+      if (shareBtn) {
+        openShareDialog(shareBtn.dataset.shareReply, shareBtn.dataset.replyId);
+        return;
+      }
       const readyBtn = e.target.closest("[data-jump-ai]");
       if (readyBtn) {
         jumpToAiReply(parseInt(readyBtn.dataset.jumpAi, 10));
@@ -2610,6 +2897,716 @@ const commentSystem = (() => {
     `;
   }
 
+  function _normalizeShareText(value) {
+    return String(value || "")
+      .replace(/\r\n?/g, "\n")
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+
+  function _shareDisplayText(value) {
+    let text = _normalizeShareText(value);
+    if (!text) return "";
+    text = text
+      .replace(/```[^\n]*\n([\s\S]*?)```/g, (_, code) => _normalizeShareText(code))
+      .replace(/`([^`]+)`/g, "$1")
+      .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+      .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+      .replace(/^\s{0,3}>\s?/gm, "")
+      .replace(/^\s*[-*+]\s+/gm, "• ")
+      .replace(/^\s*(\d+)[.)]\s+/gm, "$1. ")
+      .replace(/^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/gm, "")
+      .replace(/^\s*\|(.+)\|\s*$/gm, (_, row) => row.split("|").map(cell => cell.trim()).filter(Boolean).join(" · "))
+      .replace(/\*\*([^*\n]+)\*\*/g, "$1")
+      .replace(/__([^_\n]+)__/g, "$1")
+      .replace(/(^|[^\*])\*([^*\n]+)\*/g, "$1$2")
+      .replace(/(^|[^_])_([^_\n]+)_/g, "$1$2")
+      .replace(/~~([^~\n]+)~~/g, "$1")
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/p>\s*<p>/gi, "\n\n")
+      .replace(/<[^>]+>/g, "");
+    return _normalizeShareText(text);
+  }
+
+  function _shareVariantKey(variant) {
+    if (variant === "min" || variant === "min_comment") return "min_comment";
+    if (variant === "min_quote") return "min_quote";
+    return "full";
+  }
+
+  function _shareMinSource(payload, variant) {
+    const key = _shareVariantKey(variant);
+    const raw = key === "min_quote" ? payload.excerpt : (payload.userText || payload.excerpt);
+    const text = _shareDisplayText(raw);
+    return text ? `“${text}”` : "";
+  }
+
+  function _roundRect(ctx, x, y, width, height, radius) {
+    const r = Math.min(radius, width / 2, height / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + width - r, y);
+    ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+    ctx.lineTo(x + width, y + height - r);
+    ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+    ctx.lineTo(x + r, y + height);
+    ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  }
+
+  function _wrapCanvasText(ctx, text, maxWidth, maxLines = Infinity) {
+    const paragraphs = _normalizeShareText(text).split(/\n{2,}/).filter(Boolean);
+    const lines = [];
+    let truncated = false;
+    for (let pi = 0; pi < paragraphs.length; pi++) {
+      const hardLines = paragraphs[pi].split("\n");
+      for (let hi = 0; hi < hardLines.length; hi++) {
+        let line = "";
+        for (const ch of Array.from(hardLines[hi])) {
+          const next = line + ch;
+          if (line && ctx.measureText(next).width > maxWidth) {
+            lines.push(line);
+            line = ch;
+            if (lines.length >= maxLines) {
+              truncated = true;
+              break;
+            }
+          } else {
+            line = next;
+          }
+        }
+        if (truncated) break;
+        if (line) lines.push(line);
+        if (lines.length >= maxLines) {
+          truncated = hi < hardLines.length - 1 || pi < paragraphs.length - 1;
+          break;
+        }
+      }
+      if (truncated) break;
+      if (pi < paragraphs.length - 1) lines.push("");
+    }
+    if (truncated && lines.length) {
+      lines[lines.length - 1] = lines[lines.length - 1].replace(/[，。！？、；：,.!?;:\s]*$/, "") + "…";
+    }
+    return { lines, truncated };
+  }
+
+  function _canvasLinesHeight(lines, lineHeight) {
+    return lines.reduce((sum, line) => sum + (line ? lineHeight : Math.round(lineHeight * 0.55)), 0);
+  }
+
+  function _drawCanvasLines(ctx, lines, x, y, lineHeight) {
+    let nextY = y;
+    lines.forEach(line => {
+      if (line) ctx.fillText(line, x, nextY);
+      nextY += line ? lineHeight : Math.round(lineHeight * 0.55);
+    });
+    return nextY;
+  }
+
+  function _loadShareImage(relPath, cacheKey) {
+    if (cacheKey === "mark" && shareMarkPromise) return shareMarkPromise;
+    if (cacheKey === "qr" && shareQrPromise) return shareQrPromise;
+    const promise = (async () => {
+      try {
+        const resp = await fetch(chrome.runtime.getURL(relPath));
+        if (!resp.ok) return null;
+        const blobUrl = URL.createObjectURL(await resp.blob());
+        const img = new Image();
+        return await new Promise((resolve) => {
+          img.onload = () => resolve(img);
+          img.onerror = () => resolve(null);
+          img.src = blobUrl;
+        });
+      } catch {
+        return null;
+      }
+    })();
+    if (cacheKey === "mark") shareMarkPromise = promise;
+    if (cacheKey === "qr") shareQrPromise = promise;
+    return promise;
+  }
+
+  function _loadShareMark() { return _loadShareImage("assets/share/margin-mark.png", "mark"); }
+  function _loadShareQr() { return _loadShareImage("assets/share/qr-install.png", "qr"); }
+
+  function _drawMarginLogoFallback(ctx, x, y, size) {
+    _roundRect(ctx, x, y, size, size, 12);
+    ctx.fillStyle = "#2F6D47";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.68)";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(x + size * 0.26, y + size * 0.36);
+    ctx.lineTo(x + size * 0.74, y + size * 0.36);
+    ctx.moveTo(x + size * 0.26, y + size * 0.56);
+    ctx.lineTo(x + size * 0.58, y + size * 0.56);
+    ctx.stroke();
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.beginPath();
+    ctx.arc(x + size * 0.73, y + size * 0.62, size * 0.055, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function _sharePayload(commentId, replyId) {
+    const comments = load();
+    const comment = comments.find(x => String(x.id) === String(commentId));
+    const reply = comment?.replies?.find(x => String(x.id) === String(replyId));
+    if (!comment || !reply || !reply.isAI) return null;
+    const userMessages = [_normalizeShareText(comment.text)];
+    for (const item of comment.replies || []) {
+      if (String(item.id) === String(reply.id)) break;
+      if (!item.isAI && item.text) userMessages.push(_normalizeShareText(item.text));
+    }
+    return {
+      comment,
+      reply,
+      excerpt: _normalizeShareText(comment.excerpt || ""),
+      userText: userMessages.filter(Boolean).join("\n\n"),
+      aiText: _normalizeShareText(reply.text || ""),
+      title: document.title || "",
+      url: location.href,
+    };
+  }
+
+  function _shareFallbackText(payload, variant = "full") {
+    const key = _shareVariantKey(variant);
+    if (key === "min_quote" || key === "min_comment") {
+      const sourceLabel = key === "min_quote" ? "网页划线" : "我说";
+      const sourceText = key === "min_quote" ? _shareDisplayText(payload.excerpt) : _shareDisplayText(payload.userText);
+      return [
+        "Margin",
+        sourceText ? `${sourceLabel}：\n${sourceText}` : "",
+        payload.aiText ? `Margin 的评注：\n${_shareDisplayText(payload.aiText)}` : "",
+        SHARE_CLOSER,
+        SHARE_INSTALL_TEXT,
+      ].filter(Boolean).join("\n\n");
+    }
+    return [
+      "Margin",
+      payload.excerpt ? `网页划线：\n${_shareDisplayText(payload.excerpt)}` : "",
+      payload.userText ? `我说：\n${_shareDisplayText(payload.userText)}` : "",
+      payload.aiText ? `Margin 的评注：\n${_shareDisplayText(payload.aiText)}` : "",
+      SHARE_CLOSER,
+      SHARE_INSTALL_TEXT,
+    ].filter(Boolean).join("\n\n");
+  }
+
+  const SHARE_FONTS = {
+    serif: `"Source Han Serif SC", "Noto Serif SC", "Songti SC", "PingFang SC", serif`,
+    sans: `"Inter Tight", "Inter", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif`,
+    mono: `"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace`,
+  };
+  const SHARE_LAYOUT = {
+    width: 520,
+    radius: 6,
+    padX: 36,
+    headerTop: 28,
+    headerIcon: 32,
+    headerGap: 10,
+    headerBottom: 14,
+    dividerH: 1,
+    bodyTop: 22,
+    bodyBottom: 8,
+    labelH: 13,
+    quoteLineH: 28.8,
+    askLineH: 24.8,
+    aiLineH: 24.75,
+    aiCardPadX: 20,
+    aiCardTopPad: 18,
+    aiCardLabelTop: 12,
+    aiCardTextTop: 10,
+    aiCardBottomPad: 22,
+    aiCardBottom: 26,
+    footerTop: 22,
+    footerBottom: 32,
+    qrOuter: 74,
+    qrImage: 66,
+    qrGap: 10,
+  };
+  const SHARE_HEADER_H = SHARE_LAYOUT.headerTop + SHARE_LAYOUT.headerIcon + SHARE_LAYOUT.headerBottom + SHARE_LAYOUT.dividerH;
+  const SHARE_FOOTER_H = SHARE_LAYOUT.footerTop + SHARE_LAYOUT.qrOuter + SHARE_LAYOUT.footerBottom;
+
+  function _shareDateStamp() {
+    const d = new Date();
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${yyyy} · ${mm} · ${dd}`;
+  }
+
+  function _setCanvasLetterSpacing(ctx, value) {
+    try { ctx.letterSpacing = value; } catch {}
+  }
+
+  function _drawRoundedImage(ctx, img, x, y, width, height, radius) {
+    ctx.save();
+    _roundRect(ctx, x, y, width, height, radius);
+    ctx.clip();
+    ctx.drawImage(img, x, y, width, height);
+    ctx.restore();
+  }
+
+  async function _drawShareHeader(ctx, x, y, width) {
+    const { sans, mono } = SHARE_FONTS;
+    const pad = SHARE_LAYOUT.padX;
+    const iconSize = SHARE_LAYOUT.headerIcon;
+    const iconX = x + pad;
+    const iconY = y + SHARE_LAYOUT.headerTop;
+    const centerY = iconY + iconSize / 2;
+    const mark = await _loadShareMark();
+    if (mark) {
+      _drawRoundedImage(ctx, mark, iconX, iconY, iconSize, iconSize, 7);
+    } else {
+      _drawMarginLogoFallback(ctx, iconX, iconY, iconSize);
+    }
+    ctx.font = `700 17px ${sans}`;
+    ctx.fillStyle = SHARE_INK;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    _setCanvasLetterSpacing(ctx, "0.1px");
+    ctx.fillText("Margin", iconX + iconSize + SHARE_LAYOUT.headerGap, centerY);
+
+    ctx.font = `400 11.5px ${mono}`;
+    ctx.fillStyle = SHARE_MUTED_2;
+    ctx.textAlign = "right";
+    _setCanvasLetterSpacing(ctx, "0.4px");
+    ctx.fillText(_shareDateStamp(), x + width - pad, centerY);
+    ctx.textAlign = "left";
+    _setCanvasLetterSpacing(ctx, "0px");
+
+    ctx.fillStyle = SHARE_HAIR;
+    ctx.fillRect(x + pad, y + SHARE_LAYOUT.headerTop + iconSize + SHARE_LAYOUT.headerBottom, width - pad * 2, SHARE_LAYOUT.dividerH);
+    ctx.textBaseline = "alphabetic";
+  }
+
+  async function _drawShareFooter(ctx, x, y, width) {
+    const { sans, serif } = SHARE_FONTS;
+    const pad = SHARE_LAYOUT.padX;
+    const qrOuter = SHARE_LAYOUT.qrOuter;
+    const qrX = x + width - pad - qrOuter;
+    const qrY = y + SHARE_LAYOUT.footerTop;
+    const centerY = qrY + qrOuter / 2;
+
+    ctx.fillStyle = SHARE_HAIR;
+    ctx.fillRect(x + pad, y, width - pad * 2, 1);
+
+    const qr = await _loadShareQr();
+    _roundRect(ctx, qrX, qrY, qrOuter, qrOuter, 6);
+    ctx.fillStyle = "#FFFFFF";
+    ctx.fill();
+    ctx.strokeStyle = SHARE_HAIR;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    if (qr) {
+      ctx.drawImage(qr, qrX + 4, qrY + 4, SHARE_LAYOUT.qrImage, SHARE_LAYOUT.qrImage);
+    } else {
+      _drawQrFallback(ctx, qrX + 4, qrY + 4, SHARE_LAYOUT.qrImage);
+    }
+
+    ctx.font = `400 16px ${serif}`;
+    ctx.fillStyle = SHARE_MUTED;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(SHARE_CLOSER, x + pad, centerY);
+
+    ctx.font = `400 10.5px ${sans}`;
+    ctx.fillStyle = SHARE_MUTED;
+    ctx.textAlign = "right";
+    ctx.textBaseline = "top";
+    const hintX = qrX - SHARE_LAYOUT.qrGap;
+    const hintY = centerY - 14.7;
+    ctx.fillText("扫码安装", hintX, hintY);
+    ctx.fillText("Chrome 扩展", hintX, hintY + 14.7);
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+  }
+
+  function _drawQrFallback(ctx, x, y, size) {
+    const cells = 29;
+    const cell = size / cells;
+    ctx.fillStyle = "#FFFFFF";
+    ctx.fillRect(x, y, size, size);
+    ctx.fillStyle = "#111111";
+    function finder(cx, cy) {
+      ctx.fillRect(x + cx * cell, y + cy * cell, cell * 7, cell * 7);
+      ctx.fillStyle = "#FFFFFF";
+      ctx.fillRect(x + (cx + 1) * cell, y + (cy + 1) * cell, cell * 5, cell * 5);
+      ctx.fillStyle = "#111111";
+      ctx.fillRect(x + (cx + 2) * cell, y + (cy + 2) * cell, cell * 3, cell * 3);
+    }
+    finder(1, 1);
+    finder(21, 1);
+    finder(1, 21);
+    for (let row = 1; row < cells - 1; row++) {
+      for (let col = 1; col < cells - 1; col++) {
+        const inFinder = (row < 9 && col < 9) || (row < 9 && col > 19) || (row > 19 && col < 9);
+        if (inFinder) continue;
+        if (((row * 7 + col * 11 + row * col) % 5) < 2) {
+          ctx.fillRect(x + col * cell, y + row * cell, Math.ceil(cell), Math.ceil(cell));
+        }
+      }
+    }
+  }
+
+  function _measureFullCardBody(payload) {
+    const measure = document.createElement("canvas").getContext("2d");
+    const contentW = SHARE_LAYOUT.width - SHARE_LAYOUT.padX * 2;
+    measure.font = `400 18px ${SHARE_FONTS.serif}`;
+    const quote = _wrapCanvasText(measure, _shareDisplayText(payload.excerpt), contentW);
+    measure.font = `400 15.5px ${SHARE_FONTS.serif}`;
+    const userLines = _wrapCanvasText(measure, _shareDisplayText(payload.userText) || "想请 Margin 帮我看这段。", contentW);
+    measure.font = `400 15px ${SHARE_FONTS.serif}`;
+    const aiLines = _wrapCanvasText(measure, _shareDisplayText(payload.aiText), contentW - SHARE_LAYOUT.aiCardPadX * 2);
+    const quoteH = _canvasLinesHeight(quote.lines, SHARE_LAYOUT.quoteLineH);
+    const userH = _canvasLinesHeight(userLines.lines, SHARE_LAYOUT.askLineH);
+    const aiTextH = _canvasLinesHeight(aiLines.lines, SHARE_LAYOUT.aiLineH);
+    const aiCardH = SHARE_LAYOUT.aiCardTopPad + SHARE_LAYOUT.aiCardLabelTop + SHARE_LAYOUT.labelH
+      + SHARE_LAYOUT.aiCardTextTop + aiTextH + SHARE_LAYOUT.aiCardBottomPad;
+    const bodyH = SHARE_LAYOUT.bodyTop
+      + SHARE_LAYOUT.labelH + 8 + quoteH + 24
+      + SHARE_LAYOUT.labelH + 6 + userH + 24
+      + aiCardH + SHARE_LAYOUT.aiCardBottom
+      + SHARE_LAYOUT.bodyBottom;
+    return { quote, userLines, aiLines, quoteH, userH, aiTextH, aiCardH, bodyH, truncated: false };
+  }
+
+  function _drawFullCardBody(ctx, x, yStart, m) {
+    const { sans, serif } = SHARE_FONTS;
+    const pad = SHARE_LAYOUT.padX;
+    const contentW = SHARE_LAYOUT.width - pad * 2;
+    let y = yStart + SHARE_LAYOUT.bodyTop;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+
+    ctx.font = `600 11px ${sans}`;
+    ctx.fillStyle = SHARE_BRAND;
+    _setCanvasLetterSpacing(ctx, "1.3px");
+    ctx.fillText("网页划线", x + pad, y);
+    _setCanvasLetterSpacing(ctx, "0px");
+    y += SHARE_LAYOUT.labelH + 8;
+    ctx.font = `400 18px ${serif}`;
+    ctx.fillStyle = SHARE_INK;
+    y = _drawCanvasLines(ctx, m.quote.lines, x + pad, y, SHARE_LAYOUT.quoteLineH);
+
+    y += 24;
+    ctx.font = `600 11px ${sans}`;
+    ctx.fillStyle = SHARE_BRAND;
+    _setCanvasLetterSpacing(ctx, "1.3px");
+    ctx.fillText("我说", x + pad, y);
+    _setCanvasLetterSpacing(ctx, "0px");
+    y += SHARE_LAYOUT.labelH + 6;
+    ctx.font = `400 15.5px ${serif}`;
+    ctx.fillStyle = SHARE_INK_2;
+    y = _drawCanvasLines(ctx, m.userLines.lines, x + pad, y, SHARE_LAYOUT.askLineH);
+
+    y += 24;
+    _roundRect(ctx, x + pad, y, contentW, m.aiCardH, 12);
+    ctx.fillStyle = "#FFFFFF";
+    ctx.fill();
+    ctx.strokeStyle = SHARE_HAIR;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = SHARE_BRAND;
+    _roundRect(ctx, x + pad + SHARE_LAYOUT.aiCardPadX, y, 42, 3, 2);
+    ctx.fill();
+    ctx.font = `600 11px ${sans}`;
+    ctx.fillStyle = SHARE_BRAND;
+    _setCanvasLetterSpacing(ctx, "1.3px");
+    ctx.fillText("Margin 的评注", x + pad + SHARE_LAYOUT.aiCardPadX, y + SHARE_LAYOUT.aiCardTopPad + SHARE_LAYOUT.aiCardLabelTop);
+    _setCanvasLetterSpacing(ctx, "0px");
+    ctx.font = `400 15px ${serif}`;
+    ctx.fillStyle = SHARE_INK;
+    _drawCanvasLines(
+      ctx,
+      m.aiLines.lines,
+      x + pad + SHARE_LAYOUT.aiCardPadX,
+      y + SHARE_LAYOUT.aiCardTopPad + SHARE_LAYOUT.aiCardLabelTop + SHARE_LAYOUT.labelH + SHARE_LAYOUT.aiCardTextTop,
+      SHARE_LAYOUT.aiLineH
+    );
+    ctx.textBaseline = "alphabetic";
+  }
+
+  function _measureMinCardBody(payload, variant) {
+    const measure = document.createElement("canvas").getContext("2d");
+    const contentW = SHARE_LAYOUT.width - 80;
+    const sourceText = _shareMinSource(payload, variant);
+    const sourceLabel = _shareVariantKey(variant) === "min_quote" ? "网页划线 · MARGIN 的评注" : "我说 · MARGIN 的评注";
+    measure.font = `400 17px ${SHARE_FONTS.serif}`;
+    const quote = _wrapCanvasText(measure, sourceText, contentW);
+    measure.font = `500 22px ${SHARE_FONTS.serif}`;
+    const aiLines = _wrapCanvasText(measure, _shareDisplayText(payload.aiText), contentW);
+    const quoteH = _canvasLinesHeight(quote.lines, 27.2);
+    const aiTextH = _canvasLinesHeight(aiLines.lines, 34.1);
+    const bodyH = 32 + SHARE_LAYOUT.labelH + 12 + quoteH + 26 + aiTextH + 10 + 24;
+    return { sourceLabel, quote, aiLines, quoteH, aiTextH, bodyH, truncated: false };
+  }
+
+  function _drawMinCardBody(ctx, x, yStart, m) {
+    const { sans, serif } = SHARE_FONTS;
+    const totalH = m.bodyH;
+
+    ctx.strokeStyle = SHARE_BRAND;
+    ctx.globalAlpha = 0.42;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x + 18, yStart + 32);
+    ctx.lineTo(x + 18, yStart + totalH - 24);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = 1;
+
+    let y = yStart + 32;
+    ctx.textBaseline = "top";
+    ctx.font = `600 11px ${sans}`;
+    ctx.fillStyle = SHARE_BRAND;
+    _setCanvasLetterSpacing(ctx, "1.4px");
+    ctx.fillText(m.sourceLabel, x + 40, y);
+    _setCanvasLetterSpacing(ctx, "0px");
+    y += SHARE_LAYOUT.labelH + 12;
+    ctx.font = `400 17px ${serif}`;
+    ctx.fillStyle = SHARE_MUTED;
+    y = _drawCanvasLines(ctx, m.quote.lines, x + 40, y, 27.2);
+
+    y += 26;
+    ctx.font = `500 22px ${serif}`;
+    ctx.fillStyle = SHARE_INK;
+    _drawCanvasLines(ctx, m.aiLines.lines, x + 40, y, 34.1);
+    ctx.textBaseline = "alphabetic";
+  }
+
+  async function _createShareCardCanvas(payload, variant = "full") {
+    const key = _shareVariantKey(variant);
+    const { width } = SHARE_LAYOUT;
+    const measured = key === "full"
+      ? _measureFullCardBody(payload)
+      : _measureMinCardBody(payload, key);
+    const height = Math.ceil(SHARE_HEADER_H + measured.bodyH + SHARE_FOOTER_H);
+
+    const dpr = 2;
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.ceil(width * dpr);
+    canvas.height = Math.ceil(height * dpr);
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+    const ctx = canvas.getContext("2d");
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, width, height);
+    ctx.save();
+    _roundRect(ctx, 0, 0, width, height, SHARE_LAYOUT.radius);
+    ctx.clip();
+    ctx.fillStyle = SHARE_PAPER;
+    ctx.fillRect(0, 0, width, height);
+    ctx.textBaseline = "alphabetic";
+
+    await _drawShareHeader(ctx, 0, 0, width);
+    if (key === "full") {
+      _drawFullCardBody(ctx, 0, SHARE_HEADER_H, measured);
+    } else {
+      _drawMinCardBody(ctx, 0, SHARE_HEADER_H, measured);
+    }
+    await _drawShareFooter(ctx, 0, SHARE_HEADER_H + measured.bodyH, width);
+    ctx.restore();
+
+    canvas.dataset.truncated = "0";
+    canvas.dataset.variant = key;
+    return canvas;
+  }
+
+  async function _copyTextToClipboard(text) {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0;";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    if (!ok) throw new Error("copy command failed");
+  }
+
+  async function _copyShareImageOrText(state) {
+    const blob = await new Promise(resolve => state.canvas.toBlob(resolve, "image/png"));
+    if (blob && navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
+      try {
+        await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+        return "image";
+      } catch (err) {
+        console.warn("[KB] image clipboard failed, falling back to text:", err);
+      }
+    }
+    await _copyTextToClipboard(state.text);
+    return "text";
+  }
+
+  function _closeShareDialog() {
+    if (shareDialogState?.closeOnEsc) {
+      document.removeEventListener("keydown", shareDialogState.closeOnEsc, true);
+    }
+    if (shareDialogEl) shareDialogEl.remove();
+    shareDialogEl = null;
+    shareDialogState = null;
+  }
+
+  async function openShareDialog(commentId, replyId) {
+    const payload = _sharePayload(commentId, replyId);
+    if (!payload?.aiText) {
+      showToast("这条还没有可分享的 AI 评注", "error");
+      return;
+    }
+    _closeShareDialog();
+    const shareId = kbRandomId("share");
+    shareDialogEl = document.createElement("div");
+    shareDialogEl.id = "kb-share-dialog";
+    shareDialogEl.dataset.shareId = shareId;
+    shareDialogEl.innerHTML = `
+      <div class="kb-share-shell" role="dialog" aria-modal="true" aria-label="Margin 分享图">
+        <div class="kb-share-header">
+          <h4 class="kb-share-title">分享 Margin 评注</h4>
+          <button type="button" class="kb-share-ghost" data-share-close="1">关闭</button>
+        </div>
+        <div class="kb-share-tabs" role="tablist">
+          <button type="button" class="kb-share-tab is-active" role="tab" data-share-tab="full" aria-selected="true">完整版</button>
+          <button type="button" class="kb-share-tab" role="tab" data-share-tab="min_quote" aria-selected="false">划线 + AI</button>
+          <button type="button" class="kb-share-tab" role="tab" data-share-tab="min_comment" aria-selected="false">评论 + AI</button>
+        </div>
+        <div class="kb-share-preview" data-share-preview>
+          <div class="kb-share-loading">正在生成分享图...</div>
+        </div>
+        <div class="kb-share-actions">
+          <span class="kb-share-status" data-share-status></span>
+          <button type="button" class="kb-share-ghost" data-share-copy-text="1">复制文字</button>
+          <button type="button" class="kb-share-copy" data-share-copy-image="1">复制图片</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(shareDialogEl);
+    const closeOnEsc = (e) => {
+      if (e.key === "Escape") _closeShareDialog();
+    };
+    document.addEventListener("keydown", closeOnEsc, true);
+    shareDialogState = {
+      id: shareId,
+      payload,
+      variant: "full",
+      canvases: { full: null, min_quote: null, min_comment: null },
+      get canvas() { return this.canvases[this.variant] || null; },
+      get text() { return _shareFallbackText(this.payload, this.variant); },
+      rendering: { full: false, min_quote: false, min_comment: false },
+      closeOnEsc,
+    };
+
+    async function _renderVariant(variant) {
+      if (!shareDialogEl || shareDialogEl.dataset.shareId !== shareId) return;
+      const preview = shareDialogEl.querySelector("[data-share-preview]");
+      const status = shareDialogEl.querySelector("[data-share-status]");
+      if (status) status.textContent = "";
+      if (shareDialogState.canvases[variant]) {
+        const canvas = shareDialogState.canvases[variant];
+        const img = document.createElement("img");
+        img.alt = "Margin 分享图";
+        img.src = canvas.toDataURL("image/png");
+        preview.innerHTML = "";
+        preview.appendChild(img);
+        if (canvas.dataset.truncated === "1" && status) {
+          status.textContent = "图片已为可读性截取，文字版保留完整内容";
+        }
+        return;
+      }
+      if (shareDialogState.rendering[variant]) return;
+      shareDialogState.rendering[variant] = true;
+      preview.innerHTML = `<div class="kb-share-loading">正在生成分享图...</div>`;
+      try {
+        const canvas = await _createShareCardCanvas(payload, variant);
+        if (!shareDialogEl || shareDialogEl.dataset.shareId !== shareId) return;
+        shareDialogState.canvases[variant] = canvas;
+        if (shareDialogState.variant !== variant) return;
+        const img = document.createElement("img");
+        img.alt = "Margin 分享图";
+        img.src = canvas.toDataURL("image/png");
+        preview.innerHTML = "";
+        preview.appendChild(img);
+        if (canvas.dataset.truncated === "1" && status) {
+          status.textContent = "图片已为可读性截取，文字版保留完整内容";
+        }
+      } catch (err) {
+        console.error("[KB] share card render failed:", err);
+        if (preview) preview.innerHTML = `<div class="kb-share-loading">生成分享图失败，可以先复制文字版。</div>`;
+      } finally {
+        shareDialogState.rendering[variant] = false;
+      }
+    }
+
+    shareDialogEl.addEventListener("click", async (e) => {
+      if (e.target === shareDialogEl || e.target.closest("[data-share-close]")) {
+        _closeShareDialog();
+        return;
+      }
+      const tabBtn = e.target.closest("[data-share-tab]");
+      if (tabBtn) {
+        const variant = tabBtn.dataset.shareTab;
+        if (variant && variant !== shareDialogState.variant) {
+          shareDialogState.variant = variant;
+          shareDialogEl.querySelectorAll("[data-share-tab]").forEach(btn => {
+            const isActive = btn.dataset.shareTab === variant;
+            btn.classList.toggle("is-active", isActive);
+            btn.setAttribute("aria-selected", isActive ? "true" : "false");
+          });
+          _renderVariant(variant);
+        }
+        return;
+      }
+      const status = shareDialogEl?.querySelector("[data-share-status]");
+      if (e.target.closest("[data-share-copy-text]")) {
+        try {
+          await _copyTextToClipboard(shareDialogState.text);
+          if (status) status.textContent = "已复制文字版";
+          showToast("已复制文字版分享内容", "success");
+        } catch {
+          if (status) status.textContent = "复制失败";
+          showToast("复制失败，请手动选中文字", "error");
+        }
+        return;
+      }
+      if (e.target.closest("[data-share-copy-image]")) {
+        if (!shareDialogState?.canvas) {
+          if (status) status.textContent = "分享图还在生成";
+          return;
+        }
+        try {
+          const result = await _copyShareImageOrText(shareDialogState);
+          if (result === "image") {
+            if (status) status.textContent = "已复制图片";
+            showToast("已复制分享图，可以粘贴到微信或聊天窗口", "success");
+          } else {
+            if (status) status.textContent = "已复制文字版";
+            showToast("浏览器暂不支持复制图片，已复制文字版", "success");
+          }
+          telemetryEvent("share_card_copied", "sidebar", {
+            copy_result: result,
+            share_variant: shareDialogState.variant,
+            ai_reply_chars_bucket: charBucket(payload.aiText),
+          }, payload.comment);
+        } catch {
+          if (status) status.textContent = "复制失败";
+          showToast("复制失败，请检查浏览器剪贴板权限", "error");
+        }
+      }
+    });
+    telemetryEvent("share_card_opened", "sidebar", {
+      ai_reply_chars_bucket: charBucket(payload.aiText),
+    }, payload.comment);
+    _renderVariant("full");
+  }
+
   function _markAiReplyReady(commentId) {
     if (_isCommentCardVisible(commentId)) return;
     _aiUnreadCommentIds.add(commentId);
@@ -2717,10 +3714,7 @@ const commentSystem = (() => {
   function jumpToAiReply(commentId) {
     if (!panelEl) buildPanel();
     if (!panelOpen) {
-      panelOpen = true;
-      panelEl.classList.remove("kb-btn-hidden");
-      document.body.style.marginRight = "360px";
-      updateBadge();
+      _showPanel();
     }
     _clearAiReplyReady(commentId);
     const card = document.getElementById("kb-cmt-" + commentId);
@@ -2734,10 +3728,7 @@ const commentSystem = (() => {
   function debugMarkUnreadAiReply() {
     buildPanel();
     if (!panelOpen) {
-      panelOpen = true;
-      panelEl.classList.remove("kb-btn-hidden");
-      document.body.style.marginRight = "360px";
-      updateBadge();
+      _showPanel();
     }
     const comments = load();
     if (!comments.length) {
@@ -2946,15 +3937,19 @@ const commentSystem = (() => {
     }).join("");
     const aiReplies = c.replies.filter(r => r.isAI);
     const hasAnyAI = aiReplies.length > 0;
+    const shareableAiReply = [...c.replies].reverse().find(r => r.isAI && feedbackEligible(r));
+    const shareHtml = shareableAiReply
+      ? `<button type="button" class="kb-share-btn" data-share-reply="${c.id}" data-reply-id="${shareableAiReply.id}">分享图</button>`
+      : "";
     let actionHtml = "";
     if (_askAIRunning.has(c.id) || c.aiPending) {
-      actionHtml = `<span style="color:var(--kb-blue);font-size:11px;font-family:'JetBrains Mono',monospace;letter-spacing:0.04em;">AI 思考中…</span>`;
+      actionHtml = `${shareHtml}<span style="color:var(--kb-blue);font-size:11px;font-family:'JetBrains Mono',monospace;letter-spacing:0.04em;">AI 思考中…</span>`;
     } else if (_aiUnreadCommentIds.has(c.id)) {
-      actionHtml = `<button class="kb-ai-ready-btn" data-jump-ai="${c.id}">AI 已回复 · 查看</button>`;
+      actionHtml = `${shareHtml}<button class="kb-ai-ready-btn" data-jump-ai="${c.id}">AI 已回复 · 查看</button>`;
     } else if (!hasAnyAI) {
       actionHtml = `<button class="kb-ai-btn" data-ask-ai="${c.id}">请 AI 回复</button>`;
     } else {
-      actionHtml = `<button class="kb-reply-btn" data-open-reply="${c.id}">继续追问</button>`;
+      actionHtml = `${shareHtml}<button class="kb-reply-btn" data-open-reply="${c.id}">继续追问</button>`;
     }
     return `
       <div class="kb-cmt-card ${_aiUnreadCommentIds.has(c.id) ? "kb-ai-unread" : ""}" id="kb-cmt-${c.id}">
@@ -2965,7 +3960,7 @@ const commentSystem = (() => {
           ${repliesHtml}
         </div>
         <button class="kb-cmt-expand kb-expand-hidden" id="kb-cmt-expand-${c.id}" data-expand="${c.id}">展开全部 ↓</button>
-        <div style="display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap;">
+        <div class="kb-cmt-actions">
           ${actionHtml}
         </div>
         <div class="kb-inline-reply kb-expand-hidden" id="kb-inline-reply-${c.id}">
@@ -3271,10 +4266,7 @@ const commentSystem = (() => {
     btn.disabled = false;
     // 确保面板可见（用户可能在面板关闭时提交了评论）
     if (panelEl && !panelOpen) {
-      panelOpen = true;
-      panelEl.classList.remove("kb-btn-hidden");
-      document.body.style.marginRight = "360px";
-      updateBadge();
+      _showPanel();
     }
     render();
     // 评论已发送 → 收回底部输入区，避免常驻挡视线
@@ -3609,11 +4601,8 @@ const commentSystem = (() => {
       requested_via: "better_question",
       thread_turn_count_before: 0,
     }, c);
-    panelOpen = true;
-    panelEl.classList.remove("kb-btn-hidden");
-    document.body.style.marginRight = "360px";
+    _showPanel();
     render();
-    updateBadge();
     setTimeout(() => _anchorCardForExcerpt(excerpt, { scroll: true, flash: true }), 120);
     askAI(c.id, {
       selectedText: excerpt,
@@ -3647,13 +4636,10 @@ const commentSystem = (() => {
       // 清空输入框
       const ta = document.getElementById("kb-cp-textarea");
       if (ta) ta.value = "";
-      panelOpen = true;
-      panelEl.classList.remove("kb-btn-hidden");
-      document.body.style.marginRight = "360px";
+      _showPanel();
       render();
       syncVisibleCommentsFromBackend({ notify: false });
       startPendingAiResumeLoop();
-      updateBadge();
       // 展开输入区 + 聚焦（这是划线触发的）
       expandInputArea(true);
     } catch (err) {
@@ -3669,6 +4655,7 @@ const commentSystem = (() => {
     initialized = true;
     // 关键：stylesheet 必须先注入，否则 restoreHighlights 重建出来的 mark 会失去 .kb-comment-highlight 的样式（绿色高亮底）
     injectStyles();
+    window.addEventListener("resize", _syncPanelWidthToViewport, { passive: true });
     restoreHighlights();
     restoreCommentHighlights();
     const comments = load();
@@ -3677,6 +4664,8 @@ const commentSystem = (() => {
       if (!panelOpen) {
         panelEl.classList.add("kb-btn-hidden");
         document.body.style.marginRight = "";
+      } else {
+        _applyPanelWidth(panelWidth);
       }
       render();
       syncVisibleCommentsFromBackend({ notify: true });
