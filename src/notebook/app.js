@@ -19,18 +19,40 @@ function nbRandomId(prefix) {
     : `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
   return `${prefix}_${raw}`;
 }
+// install_id 必须跨刷新稳定。优先级：chrome.storage.local (跨扩展页共享) →
+// localStorage (per-origin 持久) → 兜底新 UUID 并写回 localStorage。
+// 重要：chrome.storage 不可用时一定要回退到 localStorage，不能直接生成随机 id —
+// 否则每次刷新都产生新"用户"，把 admin 的 DAU 污染成假数据。
 async function getNotebookInstallId() {
   return new Promise((resolve) => {
+    let storageAvailable = true;
     try {
       chrome.storage.local.get([NB_TELEMETRY_INSTALL_KEY], (r) => {
         let id = r && r[NB_TELEMETRY_INSTALL_KEY];
         if (!id) {
-          id = nbRandomId("install");
-          chrome.storage.local.set({ [NB_TELEMETRY_INSTALL_KEY]: id });
+          // chrome.storage 里没有，先看 localStorage 有没有迁移过来的
+          let legacy = "";
+          try { legacy = localStorage.getItem(NB_TELEMETRY_INSTALL_KEY) || ""; } catch {}
+          id = legacy || nbRandomId("install");
+          try { chrome.storage.local.set({ [NB_TELEMETRY_INSTALL_KEY]: id }); } catch {}
         }
+        try { localStorage.setItem(NB_TELEMETRY_INSTALL_KEY, id); } catch {}
         resolve(id);
       });
-    } catch { resolve(nbRandomId("install")); }
+    } catch {
+      storageAvailable = false;
+    }
+    if (!storageAvailable) {
+      // chrome.storage 整个不可用（极端 case，比如 notebook 被错误地以非扩展上下文打开）
+      // 回退到 localStorage，保持跨刷新稳定
+      let id = "";
+      try { id = localStorage.getItem(NB_TELEMETRY_INSTALL_KEY) || ""; } catch {}
+      if (!id) {
+        id = nbRandomId("install");
+        try { localStorage.setItem(NB_TELEMETRY_INSTALL_KEY, id); } catch {}
+      }
+      resolve(id);
+    }
   });
 }
 function getNotebookSessionId() {
