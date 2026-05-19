@@ -869,7 +869,7 @@ def _cloud_sync_events_once() -> int:
     try:
         rows = conn.execute(
             """SELECT id, event_id, event_name, anonymous_install_id, app_session_id,
-                      page_id, page_view_id, thread_telemetry_id, surface,
+                      page_id, thread_telemetry_id, surface,
                       properties_json, created_at
                FROM telemetry_outbox
                WHERE synced_to_cloud_at IS NULL
@@ -897,7 +897,6 @@ def _cloud_sync_events_once() -> int:
             "anonymous_install_id": r["anonymous_install_id"],
             "app_session_id": r["app_session_id"],
             "page_id": r["page_id"],
-            "page_view_id": r["page_view_id"],
             "thread_telemetry_id": r["thread_telemetry_id"],
             "surface": r["surface"],
             "properties": props,
@@ -943,7 +942,7 @@ def _cloud_sync_ledger_once() -> int:
                       prompt_tokens_est, input_tokens, output_tokens, total_tokens, cache_tokens,
                       actual_usage_json, usage_source, cost_usd,
                       error_category, error_code, redacted_error,
-                      anonymous_install_id, app_session_id, page_id, page_view_id, thread_telemetry_id,
+                      anonymous_install_id, app_session_id, page_id, thread_telemetry_id,
                       created_at, updated_at
                FROM llm_call_ledger
                WHERE synced_to_cloud_at IS NULL
