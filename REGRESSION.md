@@ -22,6 +22,18 @@ npm run regression
 - 适用范围：`backend/agent_api.py`、`src/content/index.js`，并依赖 margin-cloud 的 `/api/support-reports` 和 `margin_support_reports` 表用于云端查看。
 - 可能过时的地方：问题报告字段会随 admin UI、LLM ledger、request snapshot schema 演进；`include_model_io` 属于高敏感授权附件，不应成为默认选项。
 
+## 2026-05-19 · Support Report Copy Tuning
+
+- 记录时间：2026-05-19 15:58 Asia/Shanghai
+- 关联 commit：`6d6ed8e`
+- 分支：`codex/debug-report-packet`
+- 改了什么：问题报告面板默认勾选四类授权附件；把 checkbox 改成更清晰的确认项；移除“刷新预览”按钮；把 `ledger`、`snapshot`、计数等开发者文案改成用户能理解的“会发送哪些材料、为什么有助于排查”。
+- 为什么改：用户看到第一版后反馈多选框太丑、默认不勾选不符合熟人内测排查诉求，并且内部字段名不可理解。
+- 用户如何验收：重新加载 Chrome extension 并刷新目标网页；点踩或报告问题时，应看到四项默认勾选的发送内容确认，不再出现“刷新预览”按钮，也不再显示 `snapshot` / `LLM` 计数行。
+- 已验证：`node --check src/content/index.js`、`git diff --check`、`scripts/kb-regression --skip-live --skip-browser`。
+- 适用范围：仅影响 content script 的问题报告面板呈现和默认附件勾选，不改变后端 report schema。
+- 可能过时的地方：如果后续把问题报告改成独立 modal 或更细的隐私 preset，需要重新评估默认勾选策略，特别是 `include_model_io`。
+
 ## 2026-05-18 · Notebook Privacy Audit Note
 
 - 记录时间：2026-05-18 21:30 Asia/Shanghai

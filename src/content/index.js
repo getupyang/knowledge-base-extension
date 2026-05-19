@@ -1,4 +1,4 @@
-const KB_CONTENT_VERSION = "0.3.14-weread-selection";
+const KB_CONTENT_VERSION = "0.3.15-support-report-human-copy";
 console.info(`[KB] content script loaded: ${KB_CONTENT_VERSION}`);
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -999,10 +999,10 @@ const commentSystem = (() => {
       return el ? Boolean(el.checked) : Boolean(fallback);
     };
     return {
-      include_conversation: readBox("conversation", current.include_conversation),
-      include_selection: readBox("selection", current.include_selection),
-      include_page_info: readBox("page", current.include_page_info),
-      include_model_io: readBox("model", current.include_model_io),
+      include_conversation: readBox("conversation", current.include_conversation ?? true),
+      include_selection: readBox("selection", current.include_selection ?? true),
+      include_page_info: readBox("page", current.include_page_info ?? true),
+      include_model_io: readBox("model", current.include_model_io ?? true),
     };
   }
 
@@ -1058,10 +1058,10 @@ const commentSystem = (() => {
       problemReportOnly: Boolean(options.reportOnly),
       problemReportRating: options.rating || (options.reportOnly ? "problem" : "down"),
       problemReportOptions: {
-        include_conversation: false,
-        include_selection: false,
-        include_page_info: false,
-        include_model_io: false,
+        include_conversation: true,
+        include_selection: true,
+        include_page_info: true,
+        include_model_io: true,
       },
       problemReportPreview: null,
       problemReportPreviewError: "",
@@ -2110,22 +2110,81 @@ const commentSystem = (() => {
       }
       .kb-report-options {
         display: grid; grid-template-columns: 1fr;
-        gap: 5px; margin-top: 8px;
+        gap: 6px; margin-top: 8px;
       }
-      .kb-report-options label {
-        display: flex; align-items: center; gap: 6px;
-        color: var(--kb-ink); font-size: 11px; line-height: 1.35;
+      .kb-report-option {
+        position: relative;
+        display: grid; grid-template-columns: 16px 1fr; gap: 8px;
+        align-items: start;
+        padding: 7px 8px;
+        border: 1px solid var(--kb-line-2);
+        border-radius: 4px;
+        background: var(--kb-paper);
+        cursor: pointer;
       }
-      .kb-report-options input {
-        width: 13px; height: 13px; margin: 0; accent-color: var(--kb-brand-strong);
+      .kb-report-option:hover {
+        border-color: var(--kb-line);
+        background: var(--kb-brand-faint);
+      }
+      .kb-report-option input {
+        position: absolute;
+        opacity: 0;
+        pointer-events: none;
+      }
+      .kb-report-check {
+        width: 14px; height: 14px;
+        border: 1px solid var(--kb-line);
+        border-radius: 3px;
+        background: var(--kb-surface);
+        box-sizing: border-box;
+        margin-top: 1px;
+        position: relative;
+      }
+      .kb-report-option input:checked + .kb-report-check {
+        background: var(--kb-brand-strong);
+        border-color: var(--kb-brand-strong);
+      }
+      .kb-report-option input:checked + .kb-report-check::after {
+        content: "";
+        position: absolute;
+        left: 4px; top: 1px;
+        width: 4px; height: 8px;
+        border: solid var(--kb-paper);
+        border-width: 0 2px 2px 0;
+        transform: rotate(45deg);
+      }
+      .kb-report-copy {
+        min-width: 0;
+      }
+      .kb-report-title {
+        display: block;
+        color: var(--kb-ink);
+        font-size: 11px; line-height: 1.35;
+      }
+      .kb-report-desc {
+        display: block;
+        color: var(--kb-ink-mute);
+        font-size: 10px; line-height: 1.4;
+        margin-top: 2px;
       }
       .kb-report-preview {
         margin-top: 8px; padding: 7px 8px;
         border: 1px solid var(--kb-line);
         background: var(--kb-paper);
         border-radius: 3px;
-        color: var(--kb-ink-mute);
+        color: var(--kb-ink-2);
         font-size: 11px; line-height: 1.45;
+      }
+      .kb-report-preview b {
+        color: var(--kb-ink);
+        font-weight: 500;
+      }
+      .kb-report-preview ul {
+        margin: 4px 0 0 16px;
+        padding: 0;
+      }
+      .kb-report-preview li {
+        margin: 2px 0;
       }
       .kb-report-preview.warn {
         color: #a40;
@@ -2674,38 +2733,69 @@ const commentSystem = (() => {
     const feedbackEligible = (r) => r?.isAI && !isFailedAIReply(r) && !isPendingAIReply(r);
     const renderReportPanel = (r) => {
       if (!r.feedbackDraftOpen) return "";
-      const opts = r.problemReportOptions || {};
+      const rawOpts = r.problemReportOptions || {};
+      const opts = {
+        include_conversation: rawOpts.include_conversation ?? true,
+        include_selection: rawOpts.include_selection ?? true,
+        include_page_info: rawOpts.include_page_info ?? true,
+        include_model_io: rawOpts.include_model_io ?? true,
+      };
       const preview = r.problemReportPreview || {};
       const counts = preview.counts || {};
-      const optional = preview.optional_sent || [];
-      const defaultSent = preview.default_sent || [];
       const reportOnly = Boolean(r.problemReportOnly);
       const buttonLabel = reportOnly ? "发送问题报告" : "发送反馈 + 诊断包";
       const note = reportOnly
-        ? "默认只发送版本、事件时间线、LLM 调用状态、错误码和 request snapshot 哈希。勾选后才附带正文。"
-        : "点踩会同时发送一个诊断包；默认不含网页内容、划线、你的评论或 AI 回复全文。";
+        ? "我会把这次问题需要的材料发给开发者排查。你可以取消不想发送的部分。"
+        : "点踩会一起发送诊断材料，帮助开发者还原这次 AI 为什么没答好。你可以取消不想发送的部分。";
+      const selectedLabels = [
+        [opts.include_conversation, "这条评论和 AI 回答"],
+        [opts.include_selection, "你划线的内容"],
+        [opts.include_page_info, "网页标题和链接"],
+        [opts.include_model_io, "模型输入和输出"],
+      ].filter(([enabled]) => enabled).map(([, label]) => label);
+      const selectedHtml = selectedLabels.length
+        ? `<ul>${selectedLabels.map(label => `<li>${escapeHtml(label)}</li>`).join("")}</ul>`
+        : `<div>只发送排查所需的基础信息，不发送正文。</div>`;
+      const callTraceText = (counts.ledger_calls || counts.request_snapshots)
+        ? "已找到这次 AI 调用记录，可以排查是否超时、失败、走错模型或拿错上下文。"
+        : "还没找到这次 AI 调用记录；仍会保存你勾选的页面和对话线索。";
       const previewHtml = r.problemReportPreviewLoading
-        ? `<div class="kb-report-preview">正在生成预览...</div>`
+        ? `<div class="kb-report-preview">正在检查这次问题能否还原...</div>`
         : r.problemReportPreviewError
-          ? `<div class="kb-report-preview warn">预览失败：${escapeHtml(String(r.problemReportPreviewError))}</div>`
+          ? `<div class="kb-report-preview warn">暂时没法生成发送确认：${escapeHtml(String(r.problemReportPreviewError))}</div>`
           : `<div class="kb-report-preview">
-              <div>默认发送：${escapeHtml(defaultSent.slice(0, 3).join(" / ") || "诊断元数据")}</div>
-              <div>计数：事件 ${counts.telemetry_events || 0} · LLM ${counts.ledger_calls || 0} · snapshot ${counts.request_snapshots || 0}</div>
-              <div>附加正文：${optional.length ? escapeHtml(optional.join(" / ")) : "未勾选"}</div>
+              <div><b>会发送：</b></div>
+              ${selectedHtml}
+              <div style="margin-top:6px">${escapeHtml(callTraceText)}</div>
             </div>`;
       return `
         <div class="kb-feedback-panel">
           <textarea id="kb-feedback-ta-${c.id}-${r.id}" placeholder="${reportOnly ? "补一句你看到的问题（可选）" : "哪里不对、没帮上忙，直接写一句"}">${escapeHtml(r.problemReportNote || "")}</textarea>
           <div class="kb-feedback-note">${note}</div>
           <div class="kb-report-options">
-            <label><input type="checkbox" id="kb-report-conversation-${c.id}-${r.id}" ${opts.include_conversation ? "checked" : ""}> 评论与本次对话</label>
-            <label><input type="checkbox" id="kb-report-selection-${c.id}-${r.id}" ${opts.include_selection ? "checked" : ""}> 划线与前后文</label>
-            <label><input type="checkbox" id="kb-report-page-${c.id}-${r.id}" ${opts.include_page_info ? "checked" : ""}> 页面标题与 URL</label>
-            <label><input type="checkbox" id="kb-report-model-${c.id}-${r.id}" ${opts.include_model_io ? "checked" : ""}> 模型实际输入/输出</label>
+            <label class="kb-report-option">
+              <input type="checkbox" id="kb-report-conversation-${c.id}-${r.id}" ${opts.include_conversation ? "checked" : ""}>
+              <span class="kb-report-check" aria-hidden="true"></span>
+              <span class="kb-report-copy"><span class="kb-report-title">这条评论和 AI 回答</span><span class="kb-report-desc">用于看清你问了什么、AI 哪里没接住。</span></span>
+            </label>
+            <label class="kb-report-option">
+              <input type="checkbox" id="kb-report-selection-${c.id}-${r.id}" ${opts.include_selection ? "checked" : ""}>
+              <span class="kb-report-check" aria-hidden="true"></span>
+              <span class="kb-report-copy"><span class="kb-report-title">你划线的内容</span><span class="kb-report-desc">用于还原 AI 当时应该理解的上下文。</span></span>
+            </label>
+            <label class="kb-report-option">
+              <input type="checkbox" id="kb-report-page-${c.id}-${r.id}" ${opts.include_page_info ? "checked" : ""}>
+              <span class="kb-report-check" aria-hidden="true"></span>
+              <span class="kb-report-copy"><span class="kb-report-title">网页标题和链接</span><span class="kb-report-desc">用于定位发生问题的页面。</span></span>
+            </label>
+            <label class="kb-report-option">
+              <input type="checkbox" id="kb-report-model-${c.id}-${r.id}" ${opts.include_model_io ? "checked" : ""}>
+              <span class="kb-report-check" aria-hidden="true"></span>
+              <span class="kb-report-copy"><span class="kb-report-title">模型输入和输出</span><span class="kb-report-desc">最敏感；用于排查 prompt、检索和超时问题。</span></span>
+            </label>
           </div>
           ${previewHtml}
           <div class="kb-feedback-actions">
-            <button type="button" class="kb-reply-btn" data-ai-report-preview="${c.id}" data-reply-id="${r.id}">刷新预览</button>
             <button type="button" class="kb-ai-btn" data-ai-feedback-submit="${c.id}" data-reply-id="${r.id}" data-report-only="${reportOnly ? "1" : "0"}">${buttonLabel}</button>
             <button type="button" class="kb-reply-btn" data-ai-feedback-cancel="${c.id}" data-reply-id="${r.id}">取消</button>
           </div>
