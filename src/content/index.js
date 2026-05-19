@@ -1,4 +1,4 @@
-const KB_CONTENT_VERSION = "0.3.15-support-report-human-copy";
+const KB_CONTENT_VERSION = "0.3.16-positive-example-packet";
 console.info(`[KB] content script loaded: ${KB_CONTENT_VERSION}`);
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -1055,8 +1055,10 @@ const commentSystem = (() => {
   async function openProblemReportPanel(commentId, replyId, options = {}) {
     patchReply(commentId, replyId, {
       feedbackDraftOpen: true,
+      positiveExamplePromptOpen: false,
+      positiveExampleDraftOpen: Boolean(options.positiveExample),
       problemReportOnly: Boolean(options.reportOnly),
-      problemReportRating: options.rating || (options.reportOnly ? "problem" : "down"),
+      problemReportRating: options.rating || (options.positiveExample ? "positive_example" : (options.reportOnly ? "problem" : "down")),
       problemReportOptions: {
         include_conversation: true,
         include_selection: true,
@@ -1112,6 +1114,7 @@ const commentSystem = (() => {
       feedbackRating: rating,
       feedbackSubmitted: true,
       feedbackDraftOpen: false,
+      positiveExamplePromptOpen: rating === "up" && !r.positiveExampleSubmitted && !r.positiveExampleDismissed,
       problemReportSubmitted: Boolean(report),
       problemReportId: report?.report_id || "",
     });
@@ -1130,6 +1133,23 @@ const commentSystem = (() => {
       showToast("问题报告已记录", "success");
     } catch (e) {
       showToast("问题报告暂时没发出：本地服务未连接", "error");
+    }
+  }
+
+  async function submitPositiveExampleReport(commentId, replyId, note = "") {
+    try {
+      const report = await submitProblemReport(commentId, replyId, "positive_example", note.trim());
+      patchReply(commentId, replyId, {
+        feedbackDraftOpen: false,
+        positiveExampleDraftOpen: false,
+        positiveExamplePromptOpen: false,
+        positiveExampleSubmitted: true,
+        problemReportSubmitted: true,
+        problemReportId: report?.report_id || "",
+      });
+      showToast("好例子已发送", "success");
+    } catch (e) {
+      showToast("好例子暂时没发出：本地服务未连接", "error");
     }
   }
   function setAiPending(commentId, patch = {}) {
@@ -2091,6 +2111,22 @@ const commentSystem = (() => {
       .kb-feedback-done {
         color: var(--kb-ink-mute); font-size: 11px;
       }
+      .kb-positive-example-prompt {
+        margin-top: 6px;
+        padding: 7px 8px;
+        border: 1px solid var(--kb-line-2);
+        background: var(--kb-brand-faint);
+        border-radius: 4px;
+        color: var(--kb-ink-2);
+        font-size: 11px;
+        line-height: 1.45;
+      }
+      .kb-positive-example-actions {
+        display: flex;
+        gap: 6px;
+        margin-top: 6px;
+        flex-wrap: wrap;
+      }
       .kb-feedback-panel {
         width: 100%; margin-top: 6px;
         border: 1px solid var(--kb-line-2);
@@ -2743,22 +2779,38 @@ const commentSystem = (() => {
       const preview = r.problemReportPreview || {};
       const counts = preview.counts || {};
       const reportOnly = Boolean(r.problemReportOnly);
-      const buttonLabel = reportOnly ? "发送问题报告" : "发送反馈 + 诊断包";
-      const note = reportOnly
-        ? "我会把这次问题需要的材料发给开发者排查。你可以取消不想发送的部分。"
-        : "点踩会一起发送诊断材料，帮助开发者还原这次 AI 为什么没答好。你可以取消不想发送的部分。";
+      const positiveExample = Boolean(r.positiveExampleDraftOpen || r.problemReportRating === "positive_example");
+      const buttonLabel = positiveExample ? "发送好例子" : (reportOnly ? "发送问题报告" : "发送反馈 + 诊断包");
+      const note = positiveExample
+        ? "会把这次答得好的现场发给开发者，帮助我们保留有效的回答方式。你可以取消不想发送的部分。"
+        : (reportOnly
+            ? "我会把这次问题需要的材料发给开发者排查。你可以取消不想发送的部分。"
+            : "点踩会一起发送诊断材料，帮助开发者还原这次 AI 为什么没答好。你可以取消不想发送的部分。");
       const selectedLabels = [
         [opts.include_conversation, "这条评论和 AI 回答"],
         [opts.include_selection, "你划线的内容"],
         [opts.include_page_info, "网页标题和链接"],
         [opts.include_model_io, "模型输入和输出"],
       ].filter(([enabled]) => enabled).map(([, label]) => label);
+      const conversationDesc = positiveExample
+        ? "用于看清你问了什么、AI 这次哪里答得好。"
+        : "用于看清你问了什么、AI 哪里没接住。";
+      const selectionDesc = positiveExample
+        ? "用于还原 AI 这次正确理解的上下文。"
+        : "用于还原 AI 当时应该理解的上下文。";
+      const modelIoDesc = positiveExample
+        ? "最敏感；用于保留这次有效的 prompt、检索和回答方式。"
+        : "最敏感；用于排查 prompt、检索和超时问题。";
       const selectedHtml = selectedLabels.length
         ? `<ul>${selectedLabels.map(label => `<li>${escapeHtml(label)}</li>`).join("")}</ul>`
         : `<div>只发送排查所需的基础信息，不发送正文。</div>`;
-      const callTraceText = (counts.ledger_calls || counts.request_snapshots)
-        ? "已找到这次 AI 调用记录，可以排查是否超时、失败、走错模型或拿错上下文。"
-        : "还没找到这次 AI 调用记录；仍会保存你勾选的页面和对话线索。";
+      const callTraceText = positiveExample
+        ? ((counts.ledger_calls || counts.request_snapshots)
+            ? "已找到这次 AI 调用记录，可以把有效的上下文、模型和回答方式留作好例子。"
+            : "还没找到这次 AI 调用记录；仍会保存你勾选的页面和对话线索。")
+        : ((counts.ledger_calls || counts.request_snapshots)
+            ? "已找到这次 AI 调用记录，可以排查是否超时、失败、走错模型或拿错上下文。"
+            : "还没找到这次 AI 调用记录；仍会保存你勾选的页面和对话线索。");
       const previewHtml = r.problemReportPreviewLoading
         ? `<div class="kb-report-preview">正在检查这次问题能否还原...</div>`
         : r.problemReportPreviewError
@@ -2770,18 +2822,18 @@ const commentSystem = (() => {
             </div>`;
       return `
         <div class="kb-feedback-panel">
-          <textarea id="kb-feedback-ta-${c.id}-${r.id}" placeholder="${reportOnly ? "补一句你看到的问题（可选）" : "哪里不对、没帮上忙，直接写一句"}">${escapeHtml(r.problemReportNote || "")}</textarea>
+          <textarea id="kb-feedback-ta-${c.id}-${r.id}" placeholder="${positiveExample ? "补一句这次为什么有用（可选）" : (reportOnly ? "补一句你看到的问题（可选）" : "哪里不对、没帮上忙，直接写一句")}">${escapeHtml(r.problemReportNote || "")}</textarea>
           <div class="kb-feedback-note">${note}</div>
           <div class="kb-report-options">
             <label class="kb-report-option">
               <input type="checkbox" id="kb-report-conversation-${c.id}-${r.id}" ${opts.include_conversation ? "checked" : ""}>
               <span class="kb-report-check" aria-hidden="true"></span>
-              <span class="kb-report-copy"><span class="kb-report-title">这条评论和 AI 回答</span><span class="kb-report-desc">用于看清你问了什么、AI 哪里没接住。</span></span>
+              <span class="kb-report-copy"><span class="kb-report-title">这条评论和 AI 回答</span><span class="kb-report-desc">${conversationDesc}</span></span>
             </label>
             <label class="kb-report-option">
               <input type="checkbox" id="kb-report-selection-${c.id}-${r.id}" ${opts.include_selection ? "checked" : ""}>
               <span class="kb-report-check" aria-hidden="true"></span>
-              <span class="kb-report-copy"><span class="kb-report-title">你划线的内容</span><span class="kb-report-desc">用于还原 AI 当时应该理解的上下文。</span></span>
+              <span class="kb-report-copy"><span class="kb-report-title">你划线的内容</span><span class="kb-report-desc">${selectionDesc}</span></span>
             </label>
             <label class="kb-report-option">
               <input type="checkbox" id="kb-report-page-${c.id}-${r.id}" ${opts.include_page_info ? "checked" : ""}>
@@ -2791,15 +2843,25 @@ const commentSystem = (() => {
             <label class="kb-report-option">
               <input type="checkbox" id="kb-report-model-${c.id}-${r.id}" ${opts.include_model_io ? "checked" : ""}>
               <span class="kb-report-check" aria-hidden="true"></span>
-              <span class="kb-report-copy"><span class="kb-report-title">模型输入和输出</span><span class="kb-report-desc">最敏感；用于排查 prompt、检索和超时问题。</span></span>
+              <span class="kb-report-copy"><span class="kb-report-title">模型输入和输出</span><span class="kb-report-desc">${modelIoDesc}</span></span>
             </label>
           </div>
           ${previewHtml}
           <div class="kb-feedback-actions">
-            <button type="button" class="kb-ai-btn" data-ai-feedback-submit="${c.id}" data-reply-id="${r.id}" data-report-only="${reportOnly ? "1" : "0"}">${buttonLabel}</button>
+            <button type="button" class="kb-ai-btn" data-ai-feedback-submit="${c.id}" data-reply-id="${r.id}" data-report-only="${reportOnly ? "1" : "0"}" data-positive-example="${positiveExample ? "1" : "0"}">${buttonLabel}</button>
             <button type="button" class="kb-reply-btn" data-ai-feedback-cancel="${c.id}" data-reply-id="${r.id}">取消</button>
           </div>
         </div>`;
+    };
+    const renderPositiveExamplePrompt = (r) => {
+      if (!r.positiveExamplePromptOpen || r.positiveExampleSubmitted || r.feedbackDraftOpen) return "";
+      return `<div class="kb-positive-example-prompt">
+        <div>已记录赞。愿意把这次作为一个好例子发给开发者吗？</div>
+        <div class="kb-positive-example-actions">
+          <button type="button" class="kb-reply-btn" data-ai-positive-example-open="${c.id}" data-reply-id="${r.id}">发送好例子</button>
+          <button type="button" class="kb-reply-btn" data-ai-positive-example-dismiss="${c.id}" data-reply-id="${r.id}">不用</button>
+        </div>
+      </div>`;
     };
     const renderFeedbackControls = (r) => {
       if (!r?.isAI) return "";
@@ -2814,7 +2876,9 @@ const commentSystem = (() => {
         <button type="button" class="kb-feedback-chip ${r.feedbackRating === "up" ? "active" : ""}" data-ai-feedback-up="${c.id}" data-reply-id="${r.id}">赞</button>
         <button type="button" class="kb-feedback-chip ${r.feedbackRating === "down" ? "active" : ""}" data-ai-feedback-down="${c.id}" data-reply-id="${r.id}">踩</button>
         ${r.feedbackSubmitted ? `<span class="kb-feedback-done">已记录</span>` : ""}
+        ${r.positiveExampleSubmitted ? `<span class="kb-feedback-done">好例子已发送</span>` : ""}
         ${r.problemReportSubmitted && !r.feedbackSubmitted ? `<span class="kb-feedback-done">问题已记录</span>` : ""}
+        ${renderPositiveExamplePrompt(r)}
         ${renderReportPanel(r)}
       </div>`;
     };
@@ -3001,6 +3065,22 @@ const commentSystem = (() => {
       openProblemReportPanel(reportOpen.dataset.aiReportOpen, reportOpen.dataset.replyId, { rating: "problem", reportOnly: true });
       return;
     }
+    const positiveExampleOpen = e.target.closest("[data-ai-positive-example-open]");
+    if (positiveExampleOpen) {
+      openProblemReportPanel(positiveExampleOpen.dataset.aiPositiveExampleOpen, positiveExampleOpen.dataset.replyId, {
+        rating: "positive_example",
+        positiveExample: true,
+      });
+      return;
+    }
+    const positiveExampleDismiss = e.target.closest("[data-ai-positive-example-dismiss]");
+    if (positiveExampleDismiss) {
+      patchReply(positiveExampleDismiss.dataset.aiPositiveExampleDismiss, positiveExampleDismiss.dataset.replyId, {
+        positiveExamplePromptOpen: false,
+        positiveExampleDismissed: true,
+      });
+      return;
+    }
     const reportPreview = e.target.closest("[data-ai-report-preview]");
     if (reportPreview) {
       const commentId = reportPreview.dataset.aiReportPreview;
@@ -3029,7 +3109,9 @@ const commentSystem = (() => {
       const commentId = feedbackSubmit.dataset.aiFeedbackSubmit;
       const replyId = feedbackSubmit.dataset.replyId;
       const ta = document.getElementById(`kb-feedback-ta-${commentId}-${replyId}`);
-      if (feedbackSubmit.dataset.reportOnly === "1") {
+      if (feedbackSubmit.dataset.positiveExample === "1") {
+        submitPositiveExampleReport(commentId, replyId, ta?.value || "");
+      } else if (feedbackSubmit.dataset.reportOnly === "1") {
         submitProblemReportOnly(commentId, replyId, ta?.value || "");
       } else {
         submitAiFeedback(commentId, replyId, "down", ta?.value || "");
@@ -3038,7 +3120,10 @@ const commentSystem = (() => {
     }
     const feedbackCancel = e.target.closest("[data-ai-feedback-cancel]");
     if (feedbackCancel) {
-      patchReply(feedbackCancel.dataset.aiFeedbackCancel, feedbackCancel.dataset.replyId, { feedbackDraftOpen: false });
+      patchReply(feedbackCancel.dataset.aiFeedbackCancel, feedbackCancel.dataset.replyId, {
+        feedbackDraftOpen: false,
+        positiveExampleDraftOpen: false,
+      });
       return;
     }
     // 打开追问框

@@ -46,6 +46,18 @@ npm run regression
 - 适用范围：仅影响本地 support report 同步状态，不改变上传内容或云端 schema。
 - 可能过时的地方：如果未来引入 retry/error 状态机，需要把 `status` 从简单字符串升级成更完整的同步状态。
 
+## 2026-05-19 · Positive Example Feedback Packet
+
+- 记录时间：2026-05-19 16:35 Asia/Shanghai
+- 关联 commit：`7f842c6`
+- 分支：`codex/positive-feedback-packet`
+- 改了什么：点赞仍先记录轻量 `rating=up` 反馈；随后单独询问用户是否把这次作为“好例子”发给开发者。用户确认后复用诊断包发送确认，保存为 `rating=positive_example`。
+- 为什么改：正反馈也有产品迭代价值，但不应让每次点赞默认上传 transcript；采用 Claude Code 类似的“两步”做法，先 rating-only，再单独征求 transcript/上下文授权。
+- 用户如何验收：重新加载 Chrome extension 并刷新网页；对正常 AI 回复点“赞”，应先看到“已记录”，随后出现“愿意把这次作为一个好例子发给开发者吗？”；点“发送好例子”后出现可取消勾选的发送确认，提交后云端 reports 中 `rating` 应为 `positive_example`。
+- 已验证：`node --check src/content/index.js`、`git diff --check`、`scripts/kb-regression --skip-live --skip-browser`。
+- 适用范围：仅影响 content script 中赞后的可选正样本上传流程；不改变踩和报告问题的路径，也不改变云端 schema。
+- 可能过时的地方：如果未来把 `/admin/reports` 改名为更通用的 feedback packets，需要同步调整本节验收入口。
+
 ## 2026-05-18 · Notebook Privacy Audit Note
 
 - 记录时间：2026-05-18 21:30 Asia/Shanghai
