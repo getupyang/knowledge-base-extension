@@ -34,6 +34,18 @@ npm run regression
 - 适用范围：仅影响 content script 的问题报告面板呈现和默认附件勾选，不改变后端 report schema。
 - 可能过时的地方：如果后续把问题报告改成独立 modal 或更细的隐私 preset，需要重新评估默认勾选策略，特别是 `include_model_io`。
 
+## 2026-05-19 · Support Report Sync Status
+
+- 记录时间：2026-05-19 15:52 Asia/Shanghai
+- 关联 commit：`65d4495`
+- 分支：`codex/debug-report-packet`
+- 改了什么：问题报告同步到云端成功后，本地 `support_reports.status` 从 `local_only` 更新为 `synced`，避免本地排查时误以为报告没有回传。
+- 为什么改：用户提交报告后需要确认“回传数据是否符合预期”；之前 `synced_to_cloud_at` 已写入但 status 文案没同步，容易造成误判。
+- 用户如何验收：提交问题报告后查询本地 `support_reports`，应看到 `synced_to_cloud_at` 有时间且 `status='synced'`；云端 `/admin/reports` 能看到同一个 `report_id`。
+- 已验证：`python3 -m py_compile backend/agent_api.py`、`scripts/kb-regression --skip-live --skip-browser`、重启服务后 `scripts/kb-health` 核心项为 ✓。
+- 适用范围：仅影响本地 support report 同步状态，不改变上传内容或云端 schema。
+- 可能过时的地方：如果未来引入 retry/error 状态机，需要把 `status` 从简单字符串升级成更完整的同步状态。
+
 ## 2026-05-18 · Notebook Privacy Audit Note
 
 - 记录时间：2026-05-18 21:30 Asia/Shanghai
