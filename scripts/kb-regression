@@ -806,6 +806,134 @@ class Regression:
                 assert_true(len(detail_json["growth"]["project_signals"]) == 1, "project signals missing")
                 assert_true(len(detail_json["growth"]["profile_signals"]) == 1, "profile signals missing")
 
+                # Privacy/growth regression: local private context is trusted by provenance,
+                # not rejected because synthetic text mentions the product domain.
+                Path(agent_api.LEARNED_RULES_PATH).write_text(
+                    json.dumps(
+                        {
+                            "rules": [
+                                {
+                                    "id": "rule_001",
+                                    "rule": "Synthetic local user discusses mem-ai launch context.",
+                                    "scope": "all",
+                                    "source": "synthetic",
+                                    "created_at": now,
+                                    "active": True,
+                                },
+                                {
+                                    "id": "rule_002",
+                                    "rule": "Synthetic local user wants evidence before conclusions.",
+                                    "scope": "all",
+                                    "source": "synthetic",
+                                    "created_at": now,
+                                    "active": True,
+                                },
+                                {
+                                    "id": "rule_003",
+                                    "rule": "Synthetic local user asks for explicit tradeoffs.",
+                                    "scope": "all",
+                                    "source": "synthetic",
+                                    "created_at": now,
+                                    "active": True,
+                                },
+                            ]
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+                loaded_rules = agent_api._load_learned_rules_data()["rules"]
+                assert_true(len(loaded_rules) == 3, "local learned_rules should not be filtered by keywords")
+                repo_provenance = agent_api._private_context_provenance(str(ROOT / "backend" / "learned_rules.json"))
+                assert_true(repo_provenance["trusted"] is False, "repo private context path must not be trusted")
+
+                conn = sqlite3.connect(db_path)
+                try:
+                    for idx in range(2):
+                        conn.execute(
+                            "INSERT INTO rule_candidates "
+                            "(comment_id, event_id, rule_text, behavior_type, applies_to, confidence, decision, produced_by_job_id, created_at) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            (
+                                comment_id,
+                                event_id,
+                                f"Synthetic behavior candidate {idx + 2}: preserve evidence chains.",
+                                "workflow",
+                                "research",
+                                0.82,
+                                decision_json,
+                                job_id,
+                                now,
+                            ),
+                        )
+                    candidate_rows = conn.execute(
+                        "SELECT id FROM rule_candidates ORDER BY id ASC LIMIT 3"
+                    ).fetchall()
+                    conn.commit()
+                finally:
+                    conn.close()
+                candidate_ids = [f"candidate_{row[0]}" for row in candidate_rows]
+                original_call = agent_api._call_claude
+
+                def fake_curated_call(prompt, system_prompt, timeout=180):
+                    assert_true(candidate_ids[0] in prompt, "curated prompt must use rule_candidates as evidence")
+                    return (
+                        json.dumps(
+                            {
+                                "skills": [
+                                    {
+                                        "name": "证据方式",
+                                        "description": "我会先保留证据链，再把可复用的行为习惯整理成可检查的版本。",
+                                        "evidence_rule_ids": candidate_ids[:2],
+                                    }
+                                ],
+                                "uncategorized_rule_ids": candidate_ids[2:],
+                            },
+                            ensure_ascii=False,
+                        ),
+                        0,
+                    )
+
+                agent_api._call_claude = fake_curated_call
+                try:
+                    curated = client.post("/notebook/rules/curated", json={})
+                finally:
+                    agent_api._call_claude = original_call
+                assert_true(curated.status_code == 200, curated.text)
+                curated_json = curated.json()
+                assert_true(curated_json["_refresh_status"] == "generated_new", "candidate distillation should generate a new version")
+                assert_true(curated_json["_source_kind"] == "rule_candidates", "skills source should be rule_candidates")
+                assert_true(curated_json["_new_items_since_generation"] == 0, "fresh generation should have no new candidate backlog")
+                active_skill = qone("SELECT * FROM working_skills WHERE status='active' ORDER BY id DESC LIMIT 1")
+                assert_true(active_skill and candidate_ids[0] in active_skill["evidence_rule_ids"], "working skill should cite candidate ids")
+
+                conn = sqlite3.connect(db_path)
+                try:
+                    conn.execute(
+                        "INSERT INTO rule_candidates "
+                        "(comment_id, event_id, rule_text, behavior_type, applies_to, confidence, decision, produced_by_job_id, created_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            comment_id,
+                            event_id,
+                            "Synthetic later candidate should make notebook stale without claiming success.",
+                            "workflow",
+                            "research",
+                            0.8,
+                            decision_json,
+                            job_id,
+                            now,
+                        ),
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+                skills_state = client.get("/notebook/skills")
+                assert_true(skills_state.status_code == 200, skills_state.text)
+                skills_json = skills_state.json()
+                assert_true(skills_json["_new_items_since_generation"] == 1, "new candidate backlog should be visible")
+                assert_true(skills_json["_stale_reason"] == "new_candidates_available", "stale reason should be explicit")
+
                 return "\n".join(
                     [
                         f"temp DB: {db_path}",
@@ -814,6 +942,7 @@ class Regression:
                         "covered: exposure page cache, seen/commented evidence events, p# context retrieval",
                         "covered: follow-up records then triggers growth; PATCH does not duplicate behavior events",
                         "covered: context pack and growth artifacts visible in debug detail",
+                        "covered: provenance-first private context, rule_candidate skills distillation, explicit stale state",
                         "covered: empty/missing resource boundaries return 400/404",
                     ]
                 )

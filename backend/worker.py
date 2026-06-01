@@ -35,6 +35,7 @@ from llm_client import LLMError, LLMTimeoutError, get_llm_client, get_llm_status
 
 # ── 路径与 agent_api.py 一致 ──
 BACKEND_DIR = Path(__file__).resolve().parent
+REPO_ROOT = BACKEND_DIR.parent.resolve()
 
 _config_file = Path.home() / ".kb_config"
 _CONFIG_MTIME = None
@@ -115,34 +116,61 @@ _PRIVATE_CONTEXT_LEAK_PATTERNS = [
 ]
 
 
-def _looks_like_bundled_private_context(text: str) -> bool:
-    if os.environ.get("KB_TRUST_PRIVATE_CONTEXT_FILES") == "1":
+def _path_is_within(path: str, parent: Path) -> bool:
+    try:
+        return Path(path).expanduser().resolve().is_relative_to(parent.resolve())
+    except AttributeError:
+        try:
+            abs_path = os.path.abspath(os.path.expanduser(path))
+            abs_parent = os.path.abspath(os.path.expanduser(str(parent)))
+            return os.path.commonpath([abs_path, abs_parent]) == abs_parent
+        except Exception:
+            return False
+    except Exception:
         return False
-    return any(p in (text or "") for p in _PRIVATE_CONTEXT_LEAK_PATTERNS)
+
+
+def _private_context_provenance(path: str) -> dict:
+    abs_path = str(Path(path).expanduser().resolve())
+    if os.environ.get("KB_TRUST_PRIVATE_CONTEXT_FILES") == "1":
+        return {"trusted": True, "reason": "explicit_override", "path": abs_path}
+    if _path_is_within(abs_path, REPO_ROOT):
+        return {"trusted": False, "reason": "PRIVATE_CONTEXT_FROM_REPO_PATH", "path": abs_path}
+    if _path_is_within(abs_path, DATA_DIR):
+        return {"trusted": True, "reason": "current_data_dir", "path": abs_path}
+    return {"trusted": False, "reason": "MISSING_LOCAL_PROVENANCE", "path": abs_path}
+
+
+def _private_context_content_warnings(text: str) -> list:
+    return [p for p in _PRIVATE_CONTEXT_LEAK_PATTERNS if p in (text or "")]
 
 
 def _load_private_context(path: str, default: str = "") -> str:
     text = _load_file(path, default)
-    if _looks_like_bundled_private_context(text):
-        log(f"ignoring suspicious private context file: {path}")
+    provenance = _private_context_provenance(path)
+    if not provenance.get("trusted"):
+        log(f"ignoring private context file: {path} reason={provenance.get('reason')}")
         return default
+    warnings = _private_context_content_warnings(text)
+    if warnings:
+        log(f"private context content warning: {path} matches={warnings[:3]}")
     return text
 
 
 def _load_learned_rules_data() -> dict:
     raw = _load_file(LEARNED_RULES_PATH, '{"rules":[]}')
-    if _looks_like_bundled_private_context(raw):
-        log(f"ignoring suspicious learned rules file: {LEARNED_RULES_PATH}")
+    provenance = _private_context_provenance(LEARNED_RULES_PATH)
+    if not provenance.get("trusted"):
+        log(f"ignoring learned rules file: {LEARNED_RULES_PATH} reason={provenance.get('reason')}")
         return {"rules": []}
+    warnings = _private_context_content_warnings(raw)
+    if warnings:
+        log(f"learned rules content warning: {LEARNED_RULES_PATH} matches={warnings[:3]}")
     try:
         data = json.loads(raw or '{"rules":[]}')
     except Exception:
         return {"rules": []}
-    safe = []
-    for rule in data.get("rules", []):
-        if not _looks_like_bundled_private_context(rule.get("rule", "")):
-            safe.append(rule)
-    return {"rules": safe}
+    return {"rules": data.get("rules", [])}
 
 
 # ──────────────────────────────────────────
@@ -563,6 +591,106 @@ def _load_active_rules() -> list:
     return [r for r in data.get("rules", []) if r.get("active", True)]
 
 
+def _rule_candidate_to_source_item(row: sqlite3.Row) -> dict:
+    created_at = row["created_at"] or ""
+    behavior_type = row["behavior_type"] or "behavior"
+    return {
+        "id": f"candidate_{row['id']}",
+        "rule": row["rule_text"] or "",
+        "scope": row["applies_to"] or "all",
+        "source": f"candidate c#{row['comment_id']} · {behavior_type} · {created_at}",
+        "created_at": created_at,
+        "last_used_at": created_at,
+        "active": True,
+        "source_kind": "rule_candidates",
+        "candidate_id": row["id"],
+        "comment_id": row["comment_id"],
+        "event_id": row["event_id"],
+        "confidence": row["confidence"],
+    }
+
+
+def _load_rule_candidate_source_items(conn: sqlite3.Connection, limit: int = 80) -> list:
+    old_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT id, comment_id, event_id, rule_text, behavior_type, applies_to, "
+            "confidence, decision, status, produced_by_job_id, created_at "
+            "FROM rule_candidates "
+            "WHERE COALESCE(status, 'candidate') != 'rejected' "
+            "AND rule_text IS NOT NULL AND TRIM(rule_text) != '' "
+            "ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [_rule_candidate_to_source_item(r) for r in rows]
+    finally:
+        conn.row_factory = old_factory
+
+
+def _load_skill_source_items(conn: sqlite3.Connection) -> tuple:
+    candidates = _load_rule_candidate_source_items(conn)
+    if len(candidates) >= 3:
+        return "rule_candidates", candidates
+    return "legacy_rules", _load_active_rules()
+
+
+def _current_max_candidate_id(conn: sqlite3.Connection) -> int:
+    row = conn.execute("SELECT COALESCE(MAX(id), 0) FROM rule_candidates").fetchone()
+    return int(row[0] or 0)
+
+
+_SKILLS_CANDIDATE_AUTO_TRIGGER_THRESHOLD = 5
+
+
+def _last_skills_generation_max_candidate_id(conn: sqlite3.Connection) -> int:
+    row = conn.execute(
+        "SELECT trigger_payload FROM skill_generations WHERE kind='skills' "
+        "ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    if not row or not row[0]:
+        return 0
+    try:
+        payload = json.loads(row[0])
+    except Exception:
+        return 0
+    if payload.get("source_kind") != "rule_candidates":
+        return 0
+    return int(payload.get("max_candidate_id_at_distill") or 0)
+
+
+def _has_pending_skills_job(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM jobs WHERE kind='synthesize_skills' AND status IN ('queued','running') LIMIT 1"
+    ).fetchone()
+    return row is not None
+
+
+def _maybe_enqueue_skills_distillation_from_candidates(conn: sqlite3.Connection):
+    current_max_id = _current_max_candidate_id(conn)
+    last_max_id = _last_skills_generation_max_candidate_id(conn)
+    delta = current_max_id - last_max_id
+    if delta < _SKILLS_CANDIDATE_AUTO_TRIGGER_THRESHOLD:
+        return
+    if _has_pending_skills_job(conn):
+        log(f"synthesize_skills candidate threshold hit (+{delta}) but a job is already pending")
+        return
+    payload = {
+        "trigger_reason": "rule_candidate_threshold",
+        "source_kind": "rule_candidates",
+        "max_candidate_id_at_distill": current_max_id,
+        "last_max_candidate_id": last_max_id,
+        "delta": delta,
+        "threshold": _SKILLS_CANDIDATE_AUTO_TRIGGER_THRESHOLD,
+    }
+    conn.execute(
+        "INSERT INTO jobs (kind, payload_json, status, max_attempts, created_at) "
+        "VALUES ('synthesize_skills', ?, 'queued', 3, ?)",
+        (json.dumps(payload, ensure_ascii=False), datetime.now().isoformat()),
+    )
+    log(f"enqueued synthesize_skills from rule candidates (delta={delta})")
+
+
 def _load_curated_skills_prompt() -> str:
     """读 agent_prompts/curated_skills.md"""
     p = BACKEND_DIR / "agent_prompts" / "curated_skills.md"
@@ -644,7 +772,7 @@ def _persist_skills_generation_in_worker(conn: sqlite3.Connection, distilled: di
 
 
 def handle_synthesize_skills(conn: sqlite3.Connection, job: dict):
-    """蒸馏 active rules → working_skills（M3.0 范围 B 自动触发路径）。"""
+    """蒸馏本机 growth source → working_skills。"""
     payload = job.get("payload") or job.get("payload_json") or {}
     if isinstance(payload, str):
         try:
@@ -652,15 +780,15 @@ def handle_synthesize_skills(conn: sqlite3.Connection, job: dict):
         except Exception:
             payload = {}
 
-    rules = _load_active_rules()
-    if len(rules) < 3:
-        log(f"job#{job['id']} synthesize_skills: insufficient rules ({len(rules)} active)")
+    source_kind, source_items = _load_skill_source_items(conn)
+    if len(source_items) < 3:
+        log(f"job#{job['id']} synthesize_skills: insufficient source items ({len(source_items)} active)")
         return
 
     user_profile = _load_private_context(USER_PROFILE_PATH, "")[:3000]
 
     rules_dump_lines = []
-    for r in rules:
+    for r in source_items:
         rid = r.get("id", "?")
         text = r.get("rule", "")
         scope = r.get("scope", "all")
@@ -672,11 +800,11 @@ def handle_synthesize_skills(conn: sqlite3.Connection, job: dict):
     prompt = template.format(
         user_profile=user_profile,
         rules_dump=rules_dump,
-        rule_count=len(rules),
-        remaining_count=max(0, len(rules) - 3),
+        rule_count=len(source_items),
+        remaining_count=max(0, len(source_items) - 3),
     )
 
-    log(f"job#{job['id']} synthesize_skills: calling LLM with {len(rules)} rules")
+    log(f"job#{job['id']} synthesize_skills: calling LLM with {len(source_items)} {source_kind}")
     content, llm_meta = call_llm_with_meta(prompt, timeout_sec=180)
     _update_job_runtime_meta(conn, job["id"], {"llm_call": llm_meta})
     log(
@@ -685,7 +813,7 @@ def handle_synthesize_skills(conn: sqlite3.Connection, job: dict):
     )
     parsed = _safe_parse_curated_json(content)
 
-    valid_ids = {r.get("id") for r in rules}
+    valid_ids = {r.get("id") for r in source_items}
     seen_ids = set()
     skills_clean = []
     for s in parsed.get("skills", []) or []:
@@ -705,16 +833,19 @@ def handle_synthesize_skills(conn: sqlite3.Connection, job: dict):
     uncategorized = [rid for rid in (parsed.get("uncategorized_rule_ids") or [])
                      if rid in valid_ids and rid not in seen_ids]
     covered = set(seen_ids) | set(uncategorized)
-    for r in rules:
+    for r in source_items:
         rid = r.get("id")
         if rid and rid not in covered:
             uncategorized.append(rid)
 
     distilled = {"skills": skills_clean, "uncategorized_rule_ids": uncategorized}
+    payload.setdefault("source_kind", source_kind)
+    payload.setdefault("source_item_ids", [item.get("id") for item in source_items])
+    payload.setdefault("max_candidate_id_at_distill", _current_max_candidate_id(conn))
     gen_id = _persist_skills_generation_in_worker(
         conn=conn,
         distilled=distilled,
-        source_rules=rules,
+        source_rules=source_items,
         trigger_reason=payload.get("trigger_reason", "unknown"),
         trigger_payload=payload,
         job_id=job["id"],
@@ -1023,6 +1154,7 @@ def handle_memory_growth_for_comment(conn: sqlite3.Connection, job: dict):
                 now,
             ),
         )
+        _maybe_enqueue_skills_distillation_from_candidates(conn)
 
     question = _dict_value(parsed, "active_question_signal", {}) or {}
     if (question.get("question") or "").strip():

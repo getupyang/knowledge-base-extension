@@ -559,15 +559,21 @@ function renderRulesCurated(data, ts) {
 
   const uncategorizedCount = (data.uncategorized_rule_ids || []).length;
   const skillCount = skills.length;
-  const statusHtml = data._message
-    ? `<p class="kb-nb-curated-status">${escapeHtml(data._message)}</p>`
+  const newItems = Number(data._new_items_since_generation || 0);
+  let statusText = data._message || "";
+  if (!statusText && data._stale_reason && newItems > 0) {
+    statusText = `又有 ${newItems} 条新反馈可整理，当前仍显示上一版。`;
+  }
+  const statusHtml = statusText
+    ? `<p class="kb-nb-curated-status">${escapeHtml(statusText)}</p>`
     : "";
+  const sourceCount = data._source_count ?? data._total_rules ?? 0;
   box.innerHTML = `
     <div class="kb-nb-skills-header">
       <h3 class="kb-nb-skills-title">我正在养成的 ${skillCount} 个工作方式</h3>
       <button class="kb-nb-profile-oneliner-refresh" id="kb-nb-rules-recurate">重新提炼 · 上次 ${ageStr}</button>
     </div>
-    <p class="kb-nb-skills-subtitle">这是我作为你的协作者在长出的能力 — 来自你 ${data._total_rules || 0} 条具体反馈。</p>
+    <p class="kb-nb-skills-subtitle">这是我作为你的协作者在长出的能力 — 来自你 ${sourceCount} 条具体反馈。</p>
     ${statusHtml}
     <div class="kb-nb-skills-list">${skillsHtml || '<div class="kb-nb-empty">还没识别出工作方式，再批注几次让我学到更多</div>'}</div>
     ${uncategorizedCount > 0 ? `
@@ -661,7 +667,11 @@ async function triggerRulesCurated(isRefresh) {
       ? new Date(data._generation_created_at).getTime()
       : Date.now();
     renderRulesCurated(data, ts);
-    toast(data._stale_rules_source ? "可信原始规则不足，已保留上一版" : (isRefresh ? "重新提炼完成" : "提炼完成"));
+    const refreshStatus = data._refresh_status || (data._stale_rules_source ? "kept_previous" : "generated_new");
+    const toastText = refreshStatus === "generated_new"
+      ? (isRefresh ? "已整理成新版" : "已整理一版")
+      : "新证据不足，已保留上一版";
+    toast(toastText);
   } catch (e) {
     box.innerHTML = `
       <div class="kb-nb-curated-failed">

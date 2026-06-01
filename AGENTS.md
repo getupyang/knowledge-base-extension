@@ -52,7 +52,24 @@
 - 公开外部知识可以用于研究、解释和补充背景；但外部资料不能自动变成“用户自己的项目/关注点/记忆”，除非本机证据明确支持。
 - “对你项目的关联”“你 & 项目”“思考地图”等结论必须可追溯到本机证据；没有证据时展示空状态、低置信候选或外部背景，不要硬编。
 
+开发者作为用户的规则：
+
+- 开发者本机也是一个正常用户环境。开发者应该能在自己的本机数据目录里看到真实记忆笔记本成长，不能因为内容提到项目名、产品名或开发者偏好就被误判为空库。
+- 开发者记忆不能进入代码层。真实 `comments`、`selected_text`、`page_url`、`profile`、`project_context`、`learned_rules`、`working_skills`、`rule_candidates`、`thinking_summaries`、真实 replay 和截图，禁止写入源码、prompt 默认示例、公开 fixture、测试快照、README 示例或仓库默认 fallback。
+- 隐私保护应基于来源和 provenance，而不是内容关键词。可信判断优先看数据是否来自当前 `KB_DATA_DIR`、当前 install/user、用户显式授权 connector、DB 记录来源、迁移记录和打包状态；不要因为文本里出现 `mem-ai`、`Margin`、项目名或类似开发者工作内容就直接过滤本机私有数据。
+- 发布安全网仍必须存在：如果检测到私有上下文文件位于 Git 仓库、打包目录、公开 fixture、默认模板或无法证明属于当前 install，应拒绝作为用户记忆装载，并展示可解释的降级原因。
+
 提交前必须检查 `.gitignore` 和 `git status --short`。只 stage 本次相关文件；发现私有数据进入 Git 时，先停下并清理，不继续叠加提交。
+
+## 健康记忆生长与 Notebook 展示
+
+运行时代码必须支持所有用户拥有独立、可成长、可审计的记忆笔记本：
+
+- 记忆生长的主链路应是 `comments / replies -> memory_events -> rule_candidates / profile_signals / project_signals -> working_skills / snapshots -> notebook / context loader`。不要让 notebook 的核心模块长期依赖旧的静态 `learned_rules.json` 文件。
+- `rule_candidates` 等候选信号不能直接冒充已生效习惯。进入 `working_skills` 前必须有 promotion 机制，记录证据、状态、置信度、scope、生成时间和来源。
+- “重新提炼”必须真实说明发生了什么：生成新版、没有足够新证据、保留上一版、LLM 失败、隐私降级、还是 worker 未运行。禁止静默返回旧结果并给用户“已更新”的错觉。
+- Notebook 每个记忆模块都要显示最小可验证元信息：版本时间、证据数量、新候选数量、当前是否 stale、以及用户能采取的下一步。
+- 离线模拟和测试只能使用合成 fixture 或脱敏 fixture。测试不得从开发者真实 `KB_DATA_DIR` 读取内容，不得把开发者真实记忆写进断言、快照或 mock response。
 
 ## 动手前健康检查
 

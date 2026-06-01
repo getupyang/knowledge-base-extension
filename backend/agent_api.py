@@ -25,6 +25,7 @@ from pydantic import BaseModel
 from llm_client import LLMError, LLMTimeoutError, get_llm_client, get_llm_status
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.abspath(os.path.join(ROOT, os.pardir))
 
 # 启动时读取 ~/.kb_config，让 uvicorn 子进程也能拿到配置
 _config_file = os.path.expanduser("~/.kb_config")
@@ -1186,25 +1187,39 @@ _PRIVATE_CONTEXT_LEAK_PATTERNS = [
     "记忆赛道",
 ]
 
-def _looks_like_bundled_private_context(text: str) -> bool:
-    """Detect old maintainer-specific context that may have leaked to installs.
-
-    Newer releases never track user_profile.md/project_context.md/learned_rules.json,
-    but old local installs can still have copied files. The safest default for a
-    public product is to ignore suspicious static context and learn from local
-    user behavior instead.
-    """
-    if os.environ.get("KB_TRUST_PRIVATE_CONTEXT_FILES") == "1":
+def _path_is_within(path: str, parent: str) -> bool:
+    try:
+        abs_path = os.path.abspath(os.path.expanduser(path))
+        abs_parent = os.path.abspath(os.path.expanduser(parent))
+        return os.path.commonpath([abs_path, abs_parent]) == abs_parent
+    except Exception:
         return False
-    return any(p in (text or "") for p in _PRIVATE_CONTEXT_LEAK_PATTERNS)
+
+def _private_context_provenance(path: str) -> dict:
+    """Trust private context by local provenance, not by words in the content."""
+    abs_path = os.path.abspath(os.path.expanduser(path))
+    if os.environ.get("KB_TRUST_PRIVATE_CONTEXT_FILES") == "1":
+        return {"trusted": True, "reason": "explicit_override", "path": abs_path}
+    if _path_is_within(abs_path, REPO_ROOT):
+        return {"trusted": False, "reason": "PRIVATE_CONTEXT_FROM_REPO_PATH", "path": abs_path}
+    if _path_is_within(abs_path, DATA_DIR):
+        return {"trusted": True, "reason": "current_data_dir", "path": abs_path}
+    return {"trusted": False, "reason": "MISSING_LOCAL_PROVENANCE", "path": abs_path}
+
+def _private_context_content_warnings(text: str) -> list:
+    return [p for p in _PRIVATE_CONTEXT_LEAK_PATTERNS if p in (text or "")]
 
 def _load_private_context(path: str, empty_message: str) -> str:
     content = _load_file(path, "")
     if not content.strip():
         return empty_message
-    if _looks_like_bundled_private_context(content):
-        print(f"[privacy] ignoring suspicious private context file: {path}")
+    provenance = _private_context_provenance(path)
+    if not provenance.get("trusted"):
+        print(f"[privacy] ignoring private context file: {path} reason={provenance.get('reason')}")
         return empty_message
+    warnings = _private_context_content_warnings(content)
+    if warnings:
+        print(f"[privacy] private context content warning: {path} matches={warnings[:3]}")
     return content
 
 def load_project_context() -> str:
@@ -1227,20 +1242,18 @@ def load_user_profile() -> str:
 
 def _load_learned_rules_data() -> dict:
     raw = _load_file(LEARNED_RULES_PATH, '{"rules": []}')
-    if _looks_like_bundled_private_context(raw):
-        print(f"[privacy] ignoring suspicious learned rules file: {LEARNED_RULES_PATH}")
+    provenance = _private_context_provenance(LEARNED_RULES_PATH)
+    if not provenance.get("trusted"):
+        print(f"[privacy] ignoring learned rules file: {LEARNED_RULES_PATH} reason={provenance.get('reason')}")
         return {"rules": []}
+    warnings = _private_context_content_warnings(raw)
+    if warnings:
+        print(f"[privacy] learned rules content warning: {LEARNED_RULES_PATH} matches={warnings[:3]}")
     try:
         data = json.loads(raw or '{"rules": []}')
     except Exception:
         return {"rules": []}
-    safe_rules = []
-    for rule in data.get("rules", []):
-        rule_text = rule.get("rule", "")
-        if _looks_like_bundled_private_context(rule_text):
-            continue
-        safe_rules.append(rule)
-    return {"rules": safe_rules}
+    return {"rules": data.get("rules", [])}
 
 def load_learned_rules() -> str:
     return json.dumps(_load_learned_rules_data(), ensure_ascii=False)
@@ -6957,13 +6970,12 @@ def notebook_thought_map(days: Optional[int] = None):
 
 @app.get("/notebook/rules")
 def notebook_rules():
-    """C 类记忆：learned_rules.json（M3 后切到 working_rules 表）"""
-    data = _load_learned_rules_data()
-    rules = data.get("rules", [])
-    # 按 last_used_at desc 排序，未使用的放后面
-    rules.sort(key=lambda r: (r.get("last_used_at") or r.get("created_at") or ""), reverse=True)
-    active = [r for r in rules if r.get("active", True)]
-    archived = [r for r in rules if not r.get("active", True)]
+    """C 类记忆原料：优先展示 DB growth 候选，旧 JSON 仅作 legacy source。"""
+    source_kind, source_items = _load_skill_source_items()
+    active = [r for r in source_items if r.get("active", True)]
+    archived = []
+    if source_kind == "legacy_rules":
+        archived = [r for r in _load_learned_rules_data().get("rules", []) if not r.get("active", True)]
     # 本周新增数（粗算：created_at 在最近 7 天）
     from datetime import timedelta
     one_week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
@@ -6971,6 +6983,7 @@ def notebook_rules():
     return {
         "active": active,
         "archived": archived,
+        "_source_kind": source_kind,
         "stats": {
             "active_count": len(active),
             "week_new": week_new,
@@ -7375,6 +7388,86 @@ CURATED_RULES_PROMPT = load_prompt_template("curated_skills") or """你是一个
 """
 
 
+def _rule_candidate_to_source_item(row: sqlite3.Row) -> dict:
+    applies_to = row["applies_to"] or "all"
+    behavior_type = row["behavior_type"] or "behavior"
+    created_at = row["created_at"] or ""
+    return {
+        "id": f"candidate_{row['id']}",
+        "rule": row["rule_text"] or "",
+        "scope": applies_to,
+        "source": f"candidate c#{row['comment_id']} · {behavior_type} · {created_at}",
+        "created_at": created_at,
+        "last_used_at": created_at,
+        "active": True,
+        "source_kind": "rule_candidates",
+        "candidate_id": row["id"],
+        "comment_id": row["comment_id"],
+        "event_id": row["event_id"],
+        "confidence": row["confidence"],
+    }
+
+
+def _load_rule_candidate_source_items(limit: int = 80) -> list:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT id, comment_id, event_id, rule_text, behavior_type, applies_to, "
+            "confidence, decision, status, produced_by_job_id, created_at "
+            "FROM rule_candidates "
+            "WHERE COALESCE(status, 'candidate') != 'rejected' "
+            "AND rule_text IS NOT NULL AND TRIM(rule_text) != '' "
+            "ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [_rule_candidate_to_source_item(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def _load_skill_source_items() -> tuple:
+    candidates = _load_rule_candidate_source_items()
+    if len(candidates) >= 3:
+        return "rule_candidates", candidates
+    return "legacy_rules", _load_active_rules()
+
+
+def _current_max_candidate_id() -> int:
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        row = conn.execute("SELECT COALESCE(MAX(id), 0) FROM rule_candidates").fetchone()
+        return int(row[0] or 0)
+    finally:
+        conn.close()
+
+
+def _skill_source_stats(latest_generation: dict = None) -> dict:
+    source_kind, source_items = _load_skill_source_items()
+    latest_payload = (latest_generation or {}).get("trigger_payload") or {}
+    if not isinstance(latest_payload, dict):
+        latest_payload = {}
+    current_max_candidate_id = _current_max_candidate_id()
+    current_max_rule_id = _current_max_rule_id()
+    if source_kind == "rule_candidates":
+        last_max = int(latest_payload.get("max_candidate_id_at_distill") or 0)
+        if latest_payload.get("source_kind") != "rule_candidates":
+            last_max = 0
+        new_count = sum(1 for item in source_items if int(item.get("candidate_id") or 0) > last_max)
+    else:
+        last_max = int(latest_payload.get("max_rule_id_at_distill") or 0)
+        if latest_payload.get("source_kind") not in (None, "legacy_rules"):
+            last_max = 0
+        new_count = max(0, current_max_rule_id - last_max)
+    return {
+        "source_kind": source_kind,
+        "source_count": len(source_items),
+        "new_items_since_generation": new_count,
+        "current_max_candidate_id": current_max_candidate_id,
+        "current_max_rule_id": current_max_rule_id,
+    }
+
+
 def _llm_distill_skills(rules: list) -> dict:
     """跑 LLM 蒸馏，返回校验后的 {skills, uncategorized_rule_ids}。供同步端点 + worker 复用。
 
@@ -7385,7 +7478,7 @@ def _llm_distill_skills(rules: list) -> dict:
     if len(rules) < 3:
         raise RuntimeError(f"insufficient_rules: only {len(rules)} active rules")
 
-    user_profile = _load_file(USER_PROFILE_PATH, "[空白]")[:3000]
+    user_profile = _load_private_context(USER_PROFILE_PATH, "[空白]")[:3000]
     rules_dump_lines = []
     for r in rules:
         rid = r.get("id", "?")
@@ -7526,17 +7619,22 @@ def _read_active_skills() -> dict:
         latest_gen = None
         if gen_ids:
             cur.execute(
-                "SELECT id, trigger_reason, source_rules_count, created_at FROM skill_generations "
+                "SELECT id, trigger_reason, trigger_payload, source_rules_count, created_at FROM skill_generations "
                 "WHERE id = ? LIMIT 1",
                 (max(gen_ids),),
             )
             row = cur.fetchone()
             if row:
+                try:
+                    payload = json.loads(row[2] or "{}")
+                except Exception:
+                    payload = {}
                 latest_gen = {
                     "id": row[0],
                     "trigger_reason": row[1],
-                    "source_rules_count": row[2],
-                    "created_at": row[3],
+                    "trigger_payload": payload,
+                    "source_rules_count": row[3],
+                    "created_at": row[4],
                 }
         return {"skills": skills, "latest_generation": latest_gen}
     finally:
@@ -7634,49 +7732,67 @@ def _load_active_rules() -> list:
 
 @app.post("/notebook/rules/curated")
 def notebook_rules_curated():
-    """蒸馏 active rules 成 N 个工作方式。
-    手动触发：跑 LLM → 写 4 张表 → 返回新 generation 的 active skills
+    """蒸馏本机 growth source 成 N 个工作方式。
+    手动触发：跑 LLM → 写 generation/working_skills → 返回新 generation 的 active skills
     """
-    rules = _load_active_rules()
-    if len(rules) < 3:
+    source_kind, source_items = _load_skill_source_items()
+    source_stats = _skill_source_stats()
+    if len(source_items) < 3:
         active = _read_active_skills()
         if active.get("skills"):
             generation = active.get("latest_generation") or {}
+            kept_stats = _skill_source_stats(generation)
             return {
                 "skills": [{"name": s["name"], "description": s["description"],
                             "evidence_rule_ids": s["evidence_rule_ids"]} for s in active["skills"]],
                 "uncategorized_rule_ids": [],
                 "_status": "ok",
-                "_message": "当前可重新提炼的可信原始规则不足，先保留上一次已提炼的工作方式。",
-                "_total_rules": generation.get("source_rules_count") or len(rules),
+                "_refresh_status": "kept_previous",
+                "_message": "当前可整理的新证据不足，先保留上一次已提炼的工作方式。",
+                "_total_rules": generation.get("source_rules_count") or len(source_items),
+                "_source_kind": kept_stats["source_kind"],
+                "_source_count": kept_stats["source_count"],
+                "_new_items_since_generation": kept_stats["new_items_since_generation"],
                 "_generation_id": generation.get("id"),
                 "_generation_created_at": generation.get("created_at"),
                 "_persisted": True,
                 "_stale_rules_source": True,
             }
         return {"skills": [], "uncategorized_rule_ids": [], "_status": "insufficient_data",
-                "_message": f"当前只有 {len(rules)} 条 active 规则，先批注几次让 AI 学到东西",
-                "_total_rules": len(rules)}
+                "_refresh_status": "insufficient_new_evidence",
+                "_message": f"当前只有 {len(source_items)} 条可整理证据，先批注几次让 AI 学到东西",
+                "_source_kind": source_kind,
+                "_source_count": len(source_items),
+                "_total_rules": len(source_items)}
 
     try:
-        distilled = _llm_distill_skills(rules)
+        distilled = _llm_distill_skills(source_items)
+        source_ids = [item.get("id") for item in source_items]
         gen_id = _persist_skills_generation(
             distilled=distilled,
-            source_rules=rules,
+            source_rules=source_items,
             trigger_reason='manual',
             trigger_payload={
                 "endpoint": "/notebook/rules/curated",
+                "source_kind": source_kind,
+                "source_item_ids": source_ids,
+                "max_candidate_id_at_distill": source_stats["current_max_candidate_id"],
                 "max_rule_id_at_distill": _current_max_rule_id(),
             },
         )
         active = _read_active_skills()
         generation = active.get("latest_generation") or {}
+        fresh_stats = _skill_source_stats(generation)
         return {
             "skills": [{"name": s["name"], "description": s["description"],
                         "evidence_rule_ids": s["evidence_rule_ids"]} for s in active["skills"]],
             "uncategorized_rule_ids": distilled.get("uncategorized_rule_ids") or [],
             "_status": "ok",
-            "_total_rules": len(rules),
+            "_refresh_status": "generated_new",
+            "_total_rules": len(source_items),
+            "_source_kind": fresh_stats["source_kind"],
+            "_source_count": fresh_stats["source_count"],
+            "_new_items_since_generation": fresh_stats["new_items_since_generation"],
             "_generation_id": gen_id,
             "_generation_created_at": generation.get("created_at"),
             "_persisted": True,
@@ -7695,14 +7811,21 @@ def notebook_skills_get():
     """读当前 active 的 skills + latest generation 元数据。
     无 LLM 调用，<200ms 返回。笔记本默认入口。
     """
-    rules = _load_active_rules()
     active = _read_active_skills()
+    source_stats = _skill_source_stats(active.get("latest_generation"))
+    stale_reason = None
+    if active["skills"] and source_stats["new_items_since_generation"] > 0:
+        stale_reason = "new_candidates_available" if source_stats["source_kind"] == "rule_candidates" else "new_legacy_rules_available"
     return {
         "skills": [{"name": s["name"], "description": s["description"],
                     "evidence_rule_ids": s["evidence_rule_ids"]} for s in active["skills"]],
         "uncategorized_rule_ids": [],  # M3.0：未蒸馏的 rules 暂不分类，未来 worker 加
         "latest_generation": active["latest_generation"],
-        "_total_rules": len(rules),
+        "_total_rules": source_stats["source_count"],
+        "_source_kind": source_stats["source_kind"],
+        "_source_count": source_stats["source_count"],
+        "_new_items_since_generation": source_stats["new_items_since_generation"],
+        "_stale_reason": stale_reason,
         "_status": "ok" if active["skills"] else "no_generation_yet",
     }
 
