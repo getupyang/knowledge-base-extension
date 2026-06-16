@@ -3831,7 +3831,9 @@ def _call_llm_with_meta(prompt: str, system_prompt: str, timeout: int = 1800,
 
     client = get_llm_client()
     try:
-        content = client.generate_text(prompt, system_prompt=system_prompt, timeout=timeout)
+        # Always enable search tools, let the model decide when to use them
+        content = client.generate_text(prompt, system_prompt=system_prompt, timeout=timeout,
+                                        search_mode="provider_auto")
         elapsed_ms = int((_time.time() - started_at) * 1000)
         try:
             _ledger_finish(call_id=call_id, status="success",
