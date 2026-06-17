@@ -8,6 +8,7 @@ let aiDraft = {
   apiProvider: "qwen",
   model: "qwen3.5-plus",
   qwenEndpoint: "qwen_cn",
+  claudeBaseUrl: "",
 };
 
 function $(id) {
@@ -139,6 +140,9 @@ function currentAiProvider() {
   if (provider === "api") {
     return { provider: "api", apiProvider: ai.apiProvider || "qwen", model: ai.apiModel || "" };
   }
+  if (provider === "claude_code") {
+    return { provider, claudeBaseUrl: ai.claudeBaseUrl || "" };
+  }
   return { provider };
 }
 
@@ -147,6 +151,9 @@ function draftMatchesCurrent() {
   if (aiDraft.provider !== current.provider) return false;
   if (aiDraft.provider === "api") {
     return aiDraft.apiProvider === current.apiProvider && (aiDraft.model || "") === (current.model || "");
+  }
+  if (aiDraft.provider === "claude_code") {
+    return (aiDraft.claudeBaseUrl || "") === (current.claudeBaseUrl || "");
   }
   return true;
 }
@@ -159,11 +166,13 @@ function syncDraftFromRuntime(ai) {
       apiProvider: ai.apiProvider === "openrouter" ? "openrouter" : "qwen",
       model: ai.apiModel || defaultApiModel(ai.apiProvider),
       qwenEndpoint: ai.apiProvider === "openrouter" ? "qwen_cn" : "qwen_cn",
+      claudeBaseUrl: ai.claudeBaseUrl || "",
     };
   } else {
     aiDraft = {
       ...aiDraft,
       provider: provider === "claude_code" ? "claude_code" : "codex_cli",
+      claudeBaseUrl: ai.claudeBaseUrl || "",
     };
   }
   syncAiDraftUi();
@@ -175,6 +184,8 @@ function setAiDraftProvider(provider) {
     aiDraft.apiProvider = $("apiProvider").value;
     aiDraft.model = $("apiModel").value.trim() || defaultApiModel(aiDraft.apiProvider);
     aiDraft.qwenEndpoint = $("qwenEndpoint").value;
+  } else if (provider === "claude_code") {
+    aiDraft.claudeBaseUrl = $("claudeBaseUrl").value.trim();
   }
   syncAiDraftUi();
 }
@@ -183,7 +194,9 @@ function syncAiDraftUi() {
   $("useCodexBtn").classList.toggle("is-selected", aiDraft.provider === "codex_cli");
   $("useClaudeBtn").classList.toggle("is-selected", aiDraft.provider === "claude_code");
   $("useApiBtn").classList.toggle("is-selected", aiDraft.provider === "api");
+  $("claudeConfigFields").hidden = aiDraft.provider !== "claude_code";
   $("apiConfigFields").hidden = aiDraft.provider !== "api";
+  $("claudeBaseUrl").value = aiDraft.claudeBaseUrl || "";
   $("apiProvider").value = aiDraft.apiProvider || "qwen";
   $("qwenEndpoint").value = aiDraft.qwenEndpoint || "qwen_cn";
   $("apiModel").value = aiDraft.model || defaultApiModel($("apiProvider").value);
@@ -194,11 +207,13 @@ function syncAiDraftUi() {
   $("saveAiBtn").disabled = draftMatchesCurrent();
   $("aiDraftHint").textContent = aiDraft.provider === "api"
     ? "API Key 只保存在这台电脑；已保存过 Key 时，留空会继续使用原来的 Key。"
-    : "保存后，新的 AI 请求会使用这个服务。";
+    : aiDraft.provider === "claude_code"
+      ? "保存后，新的 Claude Code 请求会使用这个 Base URL。留空则使用默认配置。"
+      : "保存后，新的 AI 请求会使用这个服务。";
 }
 
 function setAiSaving(isSaving) {
-  for (const id of ["useCodexBtn", "useClaudeBtn", "useApiBtn", "apiProvider", "qwenEndpoint", "apiModel", "apiKey", "saveAiBtn"]) {
+  for (const id of ["useCodexBtn", "useClaudeBtn", "useApiBtn", "claudeBaseUrl", "apiProvider", "qwenEndpoint", "apiModel", "apiKey", "saveAiBtn"]) {
     $(id).disabled = isSaving || (id === "saveAiBtn" && draftMatchesCurrent());
   }
   if (!isSaving) {
@@ -216,6 +231,8 @@ async function saveAiConfig() {
     payload.apiKey = $("apiKey").value.trim();
     payload.model = $("apiModel").value.trim() || defaultApiModel(payload.apiProvider);
     payload.qwenEndpoint = $("qwenEndpoint").value;
+  } else if (aiDraft.provider === "claude_code") {
+    payload.claudeBaseUrl = $("claudeBaseUrl").value.trim();
   }
   const label = aiLabel({ ...aiDraft, ...payload });
   setStatus(`正在切换到 ${label}...`, "neutral");
@@ -333,6 +350,11 @@ document.addEventListener("DOMContentLoaded", () => {
     syncAiDraftUi();
   });
   $("apiKey").addEventListener("input", () => setAiDraftProvider("api"));
+  $("claudeBaseUrl").addEventListener("input", () => {
+    aiDraft.provider = "claude_code";
+    aiDraft.claudeBaseUrl = $("claudeBaseUrl").value.trim();
+    syncAiDraftUi();
+  });
   $("saveAiBtn").addEventListener("click", saveAiConfig);
   $("saveNotionBtn").addEventListener("click", saveNotionConfig);
   $("disableNotionBtn").addEventListener("click", disableNotionConfig);

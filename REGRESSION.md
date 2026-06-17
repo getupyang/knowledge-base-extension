@@ -10,6 +10,18 @@ npm run regression
 
 这个命令是提交门禁，不是展示页。任一必需项失败都会返回非 0。
 
+## 2026-06-17 · Claude Code Direct Env
+
+- 记录时间：2026-06-17 08:55 Asia/Shanghai
+- 关联 commit：本次 `codex/claude-code-env` 分支提交；具体 hash 见最终交付记录
+- 分支：`codex/claude-code-env`
+- 改了什么：Claude Code 直连现在可以保存并传递 Claude 专用 Base URL；popup、setup、choose_ai_service 和后端子进程环境保持一致。
+- 为什么改：用户终端里的 `claude` 可能依赖 `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` 等环境配置；旧路径会清空或丢失这些变量，导致 Margin 后端调用 `claude -p` 时走错认证路径并返回 401。
+- 用户如何验收：在 popup 选择 Claude Code 直连，确认状态详情显示“自定义 Base URL”；发起一次评论区 Agent 回复，预期不再出现 `Invalid authentication credentials` / `Please run /login`。
+- 已验证：`python3 backend/test_llm_client.py`、`python3 -m py_compile ...`、`node --check src/popup/popup.js`、`bash -n ...`、`scripts/kb-regression --skip-live --skip-browser`、`scripts/kb-health`、真实 `llm_client` Claude Code smoke。
+- 适用范围：本地 Margin 后端通过 Claude Code CLI 直连时有效；不改变 Codex CLI、千问 / OpenRouter API 的调用路径。
+- 可能过时的地方：如果 Claude Code 后续改名或弃用 `ANTHROPIC_BASE_URL`，需要同步更新 `backend/llm_client.py` 的环境映射和 popup 文案。
+
 ## 2026-05-19 · Margin Share Card Export
 
 - 记录时间：2026-05-19 21:56 Asia/Shanghai

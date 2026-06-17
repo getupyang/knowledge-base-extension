@@ -6092,6 +6092,8 @@ def _public_ai_status(llm: dict) -> dict:
         detail = "使用这台电脑上的 Codex CLI"
     elif selected == "claude_code":
         detail = "使用这台电脑上的 Claude Code"
+        if llm.get("claude_base_url_configured"):
+            detail = f"{detail} · 自定义 Base URL"
     elif error:
         display = "未配置"
         detail = error
@@ -6106,6 +6108,8 @@ def _public_ai_status(llm: dict) -> dict:
         "apiProvider": api_provider,
         "apiModel": api_model,
         "apiKeySet": bool(llm.get("api_key_configured")),
+        "claudeBaseUrl": llm.get("claude_base_url") or "",
+        "claudeBaseUrlSet": bool(llm.get("claude_base_url_configured")),
         "available": {
             "codex_cli": bool((llm.get("codex_cli") or {}).get("available")),
             "claude_code": bool((llm.get("claude_code") or {}).get("available")),
@@ -6161,6 +6165,7 @@ class AiConfigUpdate(BaseModel):
     apiKey: str = ""
     model: str = ""
     qwenEndpoint: str = "qwen_cn"
+    claudeBaseUrl: Optional[str] = None
 
 
 @app.post("/config/ai")
@@ -6212,11 +6217,16 @@ def update_ai_config(payload: AiConfigUpdate, request: Request):
         label = "Codex CLI" if provider == "codex_cli" else "Claude Code"
         raise HTTPException(status_code=400, detail=f"这台电脑还没有安装 {label}")
 
-    _write_config_values({
+    updates = {
         "MEMAI_LLM_PROVIDER": provider,
         "MEMAI_LOCAL_AGENT": provider,
         "MEMAI_LLM_FALLBACK": "fail",
-    })
+    }
+    if provider == "claude_code" and payload.claudeBaseUrl is not None:
+        claude_base_url = (payload.claudeBaseUrl or "").strip().rstrip("/")
+        updates["MEMAI_CLAUDE_BASE_URL"] = claude_base_url
+        updates["ANTHROPIC_BASE_URL"] = claude_base_url
+    _write_config_values(updates)
     return {"ok": True, "ai": _public_ai_status(get_llm_status())}
 
 

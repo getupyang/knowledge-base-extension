@@ -202,6 +202,32 @@ def _child_env() -> dict[str, str]:
     return env
 
 
+def _claude_base_url() -> str:
+    return (
+        os.environ.get("MEMAI_CLAUDE_BASE_URL")
+        or os.environ.get("ANTHROPIC_BASE_URL")
+        or ""
+    ).rstrip("/")
+
+
+def _claude_child_env() -> dict[str, str]:
+    env = _child_env()
+    aliases = {
+        "MEMAI_CLAUDE_API_KEY": "ANTHROPIC_API_KEY",
+        "MEMAI_CLAUDE_AUTH_TOKEN": "ANTHROPIC_AUTH_TOKEN",
+        "MEMAI_CLAUDE_BASE_URL": "ANTHROPIC_BASE_URL",
+        "MEMAI_CLAUDE_CODE_OAUTH_TOKEN": "CLAUDE_CODE_OAUTH_TOKEN",
+    }
+    for source, target in aliases.items():
+        value = os.environ.get(source)
+        if value:
+            env[target] = value
+    base_url = _claude_base_url()
+    if base_url:
+        env["ANTHROPIC_BASE_URL"] = base_url
+    return env
+
+
 def _combine_prompt(prompt: str, system_prompt: str = "") -> str:
     if not system_prompt:
         return prompt
@@ -279,7 +305,7 @@ class ClaudeCodeProvider(BaseProvider):
                 capture_output=True,
                 text=True,
                 timeout=timeout,
-                env=_child_env(),
+                env=_claude_child_env(),
             )
         except subprocess.TimeoutExpired as e:
             raise LLMTimeoutError(f"claude_code timeout after {timeout}s") from e
@@ -658,6 +684,8 @@ def get_llm_status() -> dict[str, Any]:
         "api_model": os.environ.get("MEMAI_LLM_MODEL", ""),
         "api_key_configured": bool(_api_key()),
         "api_base_url": _api_base_url() if _api_key() else None,
+        "claude_base_url": _claude_base_url(),
+        "claude_base_url_configured": bool(_claude_base_url()),
         "claude_code": {"available": bool(claude_bin), "bin": claude_bin},
         "codex_cli": {
             "available": bool(codex_bin),

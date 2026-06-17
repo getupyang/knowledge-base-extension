@@ -88,6 +88,10 @@ print_llm_runtime_summary() {
     claude_code)
       echo "  服务：Claude Code 直连"
       echo "  模型：${MEMAI_CLAUDE_MODEL:-Claude Code 默认模型}"
+      claude_base_url="${MEMAI_CLAUDE_BASE_URL:-${ANTHROPIC_BASE_URL:-}}"
+      if [ -n "$claude_base_url" ]; then
+        echo "  Claude Base URL：已设置"
+      fi
       if [ -n "${MEMAI_CLAUDE_BIN:-${CLAUDE_BIN:-}}" ]; then
         echo "  路径：${MEMAI_CLAUDE_BIN:-${CLAUDE_BIN:-}}"
       fi
@@ -99,6 +103,10 @@ print_llm_runtime_summary() {
       elif [ "$local_agent" = "claude_code" ]; then
         echo "  服务：自动模式（优先 Claude Code 直连）"
         echo "  模型：${MEMAI_CLAUDE_MODEL:-Claude Code 默认模型}"
+        claude_base_url="${MEMAI_CLAUDE_BASE_URL:-${ANTHROPIC_BASE_URL:-}}"
+        if [ -n "$claude_base_url" ]; then
+          echo "  Claude Base URL：已设置"
+        fi
       elif [ -n "${MEMAI_LLM_API_KEY:-}" ] || [ -n "${OPENROUTER_API_KEY:-}" ] || [ -n "${OPENAI_API_KEY:-}" ] || [ -n "${DASHSCOPE_API_KEY:-}" ] || [ -n "${QWEN_API_KEY:-}" ] || [ -n "${BAILIAN_API_KEY:-}" ]; then
         echo "  服务：自动模式（使用已配置的 API 服务）"
         echo "  API Provider：${MEMAI_LLM_API_PROVIDER:-custom}"
