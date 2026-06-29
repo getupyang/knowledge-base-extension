@@ -196,10 +196,9 @@ def run_version(command: str) -> tuple[bool, str]:
 def run_claude_probe(claude_bin: str, mode: str, anthropic_key: str = "") -> tuple[bool, str]:
     env = os.environ.copy()
     if mode == "account":
-        for key in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"):
-            env.pop(key, None)
+        pass
     elif mode == "api_key":
-        for key in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN"):
+        for key in ("ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"):
             env.pop(key, None)
         env["ANTHROPIC_API_KEY"] = anthropic_key
     cmd = [
@@ -398,6 +397,10 @@ def configure_ai(existing_config: dict[str, str]) -> dict[str, str]:
         "ANTHROPIC_AUTH_TOKEN": "",
         "ANTHROPIC_BASE_URL": "",
         "CLAUDE_CODE_OAUTH_TOKEN": "",
+        "MEMAI_CLAUDE_API_KEY": "",
+        "MEMAI_CLAUDE_AUTH_TOKEN": "",
+        "MEMAI_CLAUDE_BASE_URL": "",
+        "MEMAI_CLAUDE_CODE_OAUTH_TOKEN": "",
         "MEMAI_CODEX_BIN": codex_bin or "",
         "MEMAI_CODEX_SANDBOX": "read-only",
     }
@@ -428,8 +431,15 @@ def configure_ai(existing_config: dict[str, str]) -> dict[str, str]:
                 "  请先确认这个命令在同一个终端里能跑通：\n"
                 '  claude -p "Reply with exactly OK." --output-format json'
             )
+        result["ANTHROPIC_AUTH_TOKEN"] = os.environ.get("ANTHROPIC_AUTH_TOKEN", "")
+        result["ANTHROPIC_BASE_URL"] = os.environ.get("ANTHROPIC_BASE_URL", "")
+        result["CLAUDE_CODE_OAUTH_TOKEN"] = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
+        result["MEMAI_CLAUDE_AUTH_TOKEN"] = os.environ.get("ANTHROPIC_AUTH_TOKEN", "")
+        result["MEMAI_CLAUDE_BASE_URL"] = os.environ.get("ANTHROPIC_BASE_URL", "")
+        result["MEMAI_CLAUDE_CODE_OAUTH_TOKEN"] = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
         if auth_mode == "api_key":
             result["ANTHROPIC_API_KEY"] = anthropic_key
+            result["MEMAI_CLAUDE_API_KEY"] = anthropic_key
         say("  ✓ Claude Code 可以使用。")
     elif provider == "codex_cli":
         say("  正在测试 Codex CLI...")

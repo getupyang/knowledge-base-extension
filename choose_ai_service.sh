@@ -174,11 +174,10 @@ run_claude_probe() {
   probe_out="$(mktemp "${TMPDIR:-/tmp}/memai-claude-probe.XXXXXX")" || return 1
   case "$probe_mode" in
     account)
-      env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_BASE_URL -u CLAUDE_CODE_OAUTH_TOKEN \
-        "$claude_bin" -p "Reply with exactly OK." --output-format json --dangerously-skip-permissions > "$probe_out" 2>&1
+      "$claude_bin" -p "Reply with exactly OK." --output-format json --dangerously-skip-permissions > "$probe_out" 2>&1
       ;;
     api_key)
-      env -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_BASE_URL -u CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+      env -u ANTHROPIC_AUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
         "$claude_bin" -p "Reply with exactly OK." --output-format json --dangerously-skip-permissions > "$probe_out" 2>&1
       ;;
     *)
@@ -217,12 +216,37 @@ clear_claude_direct_auth_config() {
   upsert_config "ANTHROPIC_AUTH_TOKEN" ""
   upsert_config "ANTHROPIC_BASE_URL" ""
   upsert_config "CLAUDE_CODE_OAUTH_TOKEN" ""
+  upsert_config "MEMAI_CLAUDE_API_KEY" ""
+  upsert_config "MEMAI_CLAUDE_AUTH_TOKEN" ""
+  upsert_config "MEMAI_CLAUDE_BASE_URL" ""
+  upsert_config "MEMAI_CLAUDE_CODE_OAUTH_TOKEN" ""
+}
+
+save_claude_current_env_config() {
+  clear_claude_direct_auth_config
+  if [ -n "${ANTHROPIC_BASE_URL:-}" ]; then
+    upsert_config "ANTHROPIC_BASE_URL" "$ANTHROPIC_BASE_URL"
+    upsert_config "MEMAI_CLAUDE_BASE_URL" "$ANTHROPIC_BASE_URL"
+  fi
+  if [ -n "${ANTHROPIC_AUTH_TOKEN:-}" ]; then
+    upsert_config "ANTHROPIC_AUTH_TOKEN" "$ANTHROPIC_AUTH_TOKEN"
+    upsert_config "MEMAI_CLAUDE_AUTH_TOKEN" "$ANTHROPIC_AUTH_TOKEN"
+  fi
+  if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+    upsert_config "CLAUDE_CODE_OAUTH_TOKEN" "$CLAUDE_CODE_OAUTH_TOKEN"
+    upsert_config "MEMAI_CLAUDE_CODE_OAUTH_TOKEN" "$CLAUDE_CODE_OAUTH_TOKEN"
+  fi
 }
 
 save_claude_api_key_config() {
   api_key_value="$1"
   clear_claude_direct_auth_config
   upsert_config "ANTHROPIC_API_KEY" "$api_key_value"
+  upsert_config "MEMAI_CLAUDE_API_KEY" "$api_key_value"
+  if [ -n "${ANTHROPIC_BASE_URL:-}" ]; then
+    upsert_config "ANTHROPIC_BASE_URL" "$ANTHROPIC_BASE_URL"
+    upsert_config "MEMAI_CLAUDE_BASE_URL" "$ANTHROPIC_BASE_URL"
+  fi
 }
 
 configure_claude_code_auth() {
@@ -246,8 +270,11 @@ configure_claude_code_auth() {
         echo "  claude -p \"Reply with exactly OK.\" --output-format json"
         exit 1
       fi
-      clear_claude_direct_auth_config
+      save_claude_current_env_config
       echo "✓ Claude Code 账号登录/本机配置可用，不需要保存 API Key。"
+      if [ -n "${ANTHROPIC_BASE_URL:-}" ]; then
+        echo "✓ 已保存当前终端的 Claude Base URL 供后台复用。"
+      fi
       ;;
     2)
       if [ -n "${ANTHROPIC_API_KEY:-}" ]; then

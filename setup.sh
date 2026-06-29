@@ -235,9 +235,9 @@ read_optional_secret_for_setup() {
 
 configure_claude_auth_for_setup() {
   ANTHROPIC_API_KEY_FOR_CONFIG="${ANTHROPIC_API_KEY:-}"
-  ANTHROPIC_BASE_URL_FOR_CONFIG=""
-  ANTHROPIC_AUTH_TOKEN_FOR_CONFIG=""
-  CLAUDE_CODE_OAUTH_TOKEN_FOR_CONFIG=""
+  ANTHROPIC_BASE_URL_FOR_CONFIG="${ANTHROPIC_BASE_URL:-}"
+  ANTHROPIC_AUTH_TOKEN_FOR_CONFIG="${ANTHROPIC_AUTH_TOKEN:-}"
+  CLAUDE_CODE_OAUTH_TOKEN_FOR_CONFIG="${CLAUDE_CODE_OAUTH_TOKEN:-}"
 
   echo ""
   echo "  请选择 Claude Code 怎么登录："
@@ -260,6 +260,9 @@ configure_claude_auth_for_setup() {
       fi
       ANTHROPIC_API_KEY_FOR_CONFIG=""
       echo "  ✓ Claude Code 可以使用，不需要保存 API Key。"
+      if [ -n "$ANTHROPIC_BASE_URL_FOR_CONFIG" ]; then
+        echo "  ✓ 已保存当前终端的 Claude Base URL 供后台复用。"
+      fi
       ;;
     2)
       if [ -n "$ANTHROPIC_API_KEY_FOR_CONFIG" ]; then
@@ -296,11 +299,10 @@ run_claude_probe_for_setup() {
   probe_out="$(mktemp "${TMPDIR:-/tmp}/memai-claude-probe.XXXXXX")" || return 1
   case "$probe_mode" in
     account)
-      env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_BASE_URL -u CLAUDE_CODE_OAUTH_TOKEN \
-        "$CLAUDE_BIN" -p "Reply with exactly OK." --output-format json --dangerously-skip-permissions > "$probe_out" 2>&1
+      "$CLAUDE_BIN" -p "Reply with exactly OK." --output-format json --dangerously-skip-permissions > "$probe_out" 2>&1
       ;;
     api_key)
-      env -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_BASE_URL -u CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+      env -u ANTHROPIC_AUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
         "$CLAUDE_BIN" -p "Reply with exactly OK." --output-format json --dangerously-skip-permissions > "$probe_out" 2>&1
       ;;
     *)
@@ -617,6 +619,10 @@ ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY_FOR_CONFIG}
 ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN_FOR_CONFIG}
 ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL_FOR_CONFIG}
 CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN_FOR_CONFIG}
+MEMAI_CLAUDE_API_KEY=${ANTHROPIC_API_KEY_FOR_CONFIG}
+MEMAI_CLAUDE_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN_FOR_CONFIG}
+MEMAI_CLAUDE_BASE_URL=${ANTHROPIC_BASE_URL_FOR_CONFIG}
+MEMAI_CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN_FOR_CONFIG}
 MEMAI_CODEX_BIN=${CODEX_BIN}
 MEMAI_CODEX_SANDBOX=read-only
 KB_DATA_DIR=${DATA_DIR}
