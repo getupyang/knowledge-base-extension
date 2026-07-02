@@ -386,6 +386,27 @@ class ClaudeCodeProvider(BaseProvider):
             if data.get("is_error") is True:
                 detail = data.get("result") or data.get("message") or result.stdout
                 raise LLMCallError(f"claude_code error: {str(detail)[:1000]}")
+            # 搜索可观测性：从 CLI JSON 的 usage/modelUsage 里挖 web search 次数。
+            # 拿不到就保持 None（诚实的「未知」），绝不猜。
+            try:
+                ws = None
+                usage = data.get("usage") or {}
+                if isinstance(usage, dict):
+                    stu = usage.get("server_tool_use") or {}
+                    if isinstance(stu, dict) and stu.get("web_search_requests") is not None:
+                        ws = int(stu["web_search_requests"])
+                if ws is None:
+                    mu = data.get("modelUsage") or {}
+                    if isinstance(mu, dict):
+                        counts = [int(v.get("webSearchRequests", 0)) for v in mu.values()
+                                  if isinstance(v, dict) and v.get("webSearchRequests") is not None]
+                        if counts:
+                            ws = sum(counts)
+                if ws is not None:
+                    self.last_provider_meta["actual_search_called"] = bool(ws)
+                    self.last_provider_meta["web_search_requests"] = ws
+            except Exception:
+                pass  # 观测失败不影响回复本身
             return data.get("result", result.stdout)
         except json.JSONDecodeError:
             return result.stdout
