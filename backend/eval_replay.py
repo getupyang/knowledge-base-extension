@@ -35,6 +35,16 @@ from pydantic import BaseModel
 # import 本分支的 llm_client（进程隔离保证是本分支的代码）
 from llm_client import get_llm_client, get_llm_status
 
+# ── 策略钩子（参评分支协议）──────────────────────────────────────────
+# 分支若带 reply_strategy.py（本分支的策略代码），回放时自动应用其 transform：
+#   def transform(system_prompt, final_prompt, search_mode="") -> (system_prompt, final_prompt)
+# 冻结的 case 输入保持不变（integrity 按收到的 frozen prompt 校验），
+# transform 属于 C 段（回复策略层）的合法改动——这正是被测对象本身。
+try:
+    from reply_strategy import transform as _strategy_transform  # type: ignore
+except ImportError:
+    _strategy_transform = None
+
 eval_router = APIRouter(prefix="/eval", tags=["eval"])
 
 
@@ -109,18 +119,27 @@ def replay(req: ReplayRequest) -> ReplayResponse:
     else:
         integrity = "unchecked"
 
+    # 应用本分支的策略 transform（若有）—— 被测策略对 C 段的真实改动
+    send_system, send_prompt = req.system_prompt, req.final_prompt
+    transformed = False
+    if _strategy_transform is not None:
+        send_system, send_prompt = _strategy_transform(
+            send_system, send_prompt, search_mode=req.search_mode)
+        transformed = True
+
     client = get_llm_client()
     started = time.time()
     try:
         # 直接调 generate_text，绕过产品 _call_llm_with_meta 里硬编的 provider_auto，
         # 让被测策略的 search_mode 真正生效。不写任何线上日志。
         content = client.generate_text(
-            req.final_prompt,
-            system_prompt=req.system_prompt,
+            send_prompt,
+            system_prompt=send_system,
             timeout=req.timeout,
             search_mode=req.search_mode,
         )
         meta = dict(client.last_call_meta or {})
+        meta["strategy_transform_applied"] = transformed
         return ReplayResponse(
             ok=True,
             strategy_id=req.strategy_id,
