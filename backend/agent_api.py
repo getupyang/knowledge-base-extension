@@ -3802,11 +3802,14 @@ def _llm_no_call_meta(reason: str) -> dict:
 
 
 def _call_llm_with_meta(prompt: str, system_prompt: str, timeout: int = 1800,
-                         ledger_ctx: Optional[dict] = None) -> tuple:
+                         ledger_ctx: Optional[dict] = None,
+                         search_mode: str = "provider_auto") -> tuple:
     """Call the configured LLM provider and return content, rc, and provider metadata.
 
     ledger_ctx：把 stage/role/intent + identity 传进来，本函数负责写 llm_call_ledger 一行。
-    失败、超时、成功都写。call_id 用 uuid。"""
+    失败、超时、成功都写。call_id 用 uuid。
+    search_mode：默认 provider_auto（router 等其他调用方保持原行为）；
+    回复路径（step2 / v1_fallback）显式传 "required"——search-directive-v1 的上线组合。"""
     import time as _time
     import uuid as _uuid
     call_id = _uuid.uuid4().hex
@@ -3831,9 +3834,8 @@ def _call_llm_with_meta(prompt: str, system_prompt: str, timeout: int = 1800,
 
     client = get_llm_client()
     try:
-        # Always enable search tools, let the model decide when to use them
         content = client.generate_text(prompt, system_prompt=system_prompt, timeout=timeout,
-                                        search_mode="provider_auto")
+                                        search_mode=search_mode)
         elapsed_ms = int((_time.time() - started_at) * 1000)
         try:
             _ledger_finish(call_id=call_id, status="success",
@@ -4425,6 +4427,19 @@ def _trigger_learning_layer(comment_id: int, user_comment: str, agent_reply: str
 # v2: 后台 Agent 调用
 # ──────────────────────────────────────────
 
+# 回复策略（search-directive-v1）：分支带 reply_strategy.py 时自动生效于
+# 真实回复路径（step2 + v1_fallback）。router 不受影响。
+try:
+    from reply_strategy import transform as _reply_strategy_transform
+    from reply_strategy import STRATEGY_ID as REPLY_STRATEGY_ID
+except ImportError:
+    _reply_strategy_transform = None
+    REPLY_STRATEGY_ID = ""
+
+# 回复路径的 search_mode：带策略时用测过的组合 required，否则保持原 provider_auto
+_REPLY_SEARCH_MODE = "required" if _reply_strategy_transform else "provider_auto"
+
+
 def run_agent_v2(comment_id: int, intent: str, role: str, prompt: str,
                  plan: str = "", quick_response: str = "", learned: list = None,
                  user_comment: str = "", context_pack: dict = None,
@@ -4455,12 +4470,16 @@ def run_agent_v2(comment_id: int, intent: str, role: str, prompt: str,
             "默认写成简洁的评论区回复：先给结论，少铺垫；除非用户明确要求深度调研或长文，"
             "否则控制在 300-500 字以内，最多 5 个要点。不要为了显得全面而展开所有分支。"
         )
+        # 应用回复策略（search-directive-v1：system prompt 注入强制检索指令）
+        if _reply_strategy_transform:
+            system_prompt, prompt = _reply_strategy_transform(system_prompt, prompt)
         try:
             ledger_ctx = {**(identity_ctx or {}),
                           "stage": "answer", "role": role, "intent": intent,
                           "comment_id": comment_id}
             content, rc, step2_call = _call_llm_with_meta(prompt, system_prompt, timeout=1800,
-                                                          ledger_ctx=ledger_ctx)
+                                                          ledger_ctx=ledger_ctx,
+                                                          search_mode=_REPLY_SEARCH_MODE)
             print(
                 f"[agent_api] v2 Step 2 provider={step2_call.get('provider')} "
                 f"model={step2_call.get('model')} comment_id={comment_id}"
@@ -4495,6 +4514,7 @@ def run_agent_v2(comment_id: int, intent: str, role: str, prompt: str,
     # 构建 debug_meta
     debug_meta = json.dumps({
         "version": "v2",
+        "reply_strategy": REPLY_STRATEGY_ID,
         "intent": intent,
         "role": role,
         "llm_provider": answer_call.get("provider"),
@@ -4584,6 +4604,9 @@ def run_agent_v1_fallback(comment_id: int, agent_type: str,
         "你是 Margin 的评论区 agent。直接回答用户的问题，不要执行任何 session 初始化流程。"
         "默认简洁：先给结论，控制在 300-500 字以内，最多 5 个要点。"
     )
+    # 应用回复策略（v1_fallback 是 claude 用户的实际线上路径，必须同样生效）
+    if _reply_strategy_transform:
+        system_prompt, prompt = _reply_strategy_transform(system_prompt, prompt)
     status = "error"
     content = ""
     llm_call = None
@@ -4592,7 +4615,8 @@ def run_agent_v1_fallback(comment_id: int, agent_type: str,
                       "stage": "v1_fallback", "role": role, "intent": "dialogue",
                       "comment_id": comment_id}
         content, rc, llm_call = _call_llm_with_meta(prompt, system_prompt, timeout=1800,
-                                                    ledger_ctx=ledger_ctx)
+                                                    ledger_ctx=ledger_ctx,
+                                                    search_mode=_REPLY_SEARCH_MODE)
         status = "success" if rc == 0 and content else "error"
         if rc != 0:
             content = f"Agent 执行出错：{content[:500]}"
@@ -4609,6 +4633,7 @@ def run_agent_v1_fallback(comment_id: int, agent_type: str,
     elapsed = round(time.time() - start_time, 1)
     debug_meta = json.dumps({
         "version": "v1_fallback",
+        "reply_strategy": REPLY_STRATEGY_ID,
         "intent": "dialogue",
         "role": role,
         "llm_provider": (llm_call or {}).get("provider"),

@@ -15,6 +15,9 @@
 """
 from __future__ import annotations
 
+# 策略版本标识：线上 debug_meta / 回放台账都用它归因
+STRATEGY_ID = "search-directive-v1"
+
 SEARCH_DIRECTIVE = """
 ## 检索要求（本策略强制）
 回答前必须先用 web 搜索工具检索：
