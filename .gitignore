@@ -19,6 +19,7 @@ backend/.logs/
 backend/.test_cases/
 backend/debug-logs/
 backend/*.bak
+backend/*.migrated
 
 # 开发过程文档，不开源
 CLAUDE.md

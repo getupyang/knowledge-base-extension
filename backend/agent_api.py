@@ -69,22 +69,69 @@ def _ensure_data_dir():
         except Exception:
             return 0
 
+    # 迁移发生在启动最早期，failures logger 还没就绪，单独落 migration.log
+    def _log_migration(msg: str):
+        print(f"[agent_api] {msg}")
+        try:
+            with open(os.path.join(LOG_DIR, "migration.log"), "a", encoding="utf-8") as f:
+                f.write(f"{datetime.now().isoformat()} {msg}\n")
+        except Exception:
+            pass
+
+    # 迁移成功后把老文件改名留档，避免下次排查时被当成活跃数据源误读。
+    # 如出问题可手动把 .migrated 后缀去掉恢复。
+    def _retire_legacy(path: str):
+        try:
+            os.replace(path, path + ".migrated")
+            _log_migration(f"retired legacy file: {path} -> {path}.migrated")
+        except Exception as e:
+            _log_migration(f"legacy retire skipped ({path}): {e}")
+
+    migration_disabled = os.environ.get("KB_DISABLE_LEGACY_DB_MIGRATION") == "1"
+
     should_migrate_db = (
-        os.environ.get("KB_DISABLE_LEGACY_DB_MIGRATION") != "1"
+        not migration_disabled
         and os.path.exists(LEGACY_DB_PATH)
         and (not os.path.exists(DB_PATH) or (_comment_count(DB_PATH) == 0 and _comment_count(LEGACY_DB_PATH) > 0))
     )
     if should_migrate_db:
         try:
             shutil.copy2(LEGACY_DB_PATH, DB_PATH)
-            print(f"[agent_api] migrated legacy DB: {LEGACY_DB_PATH} -> {DB_PATH}")
+            _log_migration(f"migrated legacy DB: {LEGACY_DB_PATH} -> {DB_PATH}")
+            _retire_legacy(LEGACY_DB_PATH)
         except Exception as e:
-            print(f"[agent_api] legacy DB migration skipped: {e}")
+            _log_migration(f"legacy DB migration skipped: {e}")
     defaults = {
         USER_PROFILE_PATH: "# 用户画像\n\n（空白，系统会根据这台电脑上的本地批注逐步学习。）\n",
         PROJECT_CONTEXT_PATH: "# 项目上下文\n\n（空白，用户还没有填写项目背景。AI 不能假设用户正在做某个项目。）\n",
         LEARNED_RULES_PATH: '{\n  "rules": []\n}\n',
     }
+
+    # 记忆文件迁移：老版本把 user_profile.md / learned_rules.json / project_context.md
+    # 存在代码目录（ROOT），只搬 DB 不搬它们会让老用户升级后"失忆"。
+    # 仅当目标缺失或仍是空白默认值时才搬，绝不覆盖已有内容。
+    for path, default_content in defaults.items():
+        legacy_path = os.path.join(ROOT, os.path.basename(path))
+        if migration_disabled or not os.path.exists(legacy_path):
+            continue
+        if os.path.abspath(legacy_path) == os.path.abspath(path):
+            continue
+        target_is_blank = True
+        if os.path.exists(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    target_is_blank = f.read() == default_content
+            except Exception:
+                target_is_blank = False
+        if not target_is_blank:
+            continue
+        try:
+            shutil.copy2(legacy_path, path)
+            _log_migration(f"migrated legacy memory file: {legacy_path} -> {path}")
+            _retire_legacy(legacy_path)
+        except Exception as e:
+            _log_migration(f"legacy memory migration skipped ({legacy_path}): {e}")
+
     for path, content in defaults.items():
         if not os.path.exists(path):
             with open(path, "w", encoding="utf-8") as f:
