@@ -5505,6 +5505,65 @@ def update_status(comment_id: int, body: StatusUpdate):
     conn.close()
     return {"ok": True}
 
+# 对话重建时剔除的错误兜底回复前缀（这些不是真实 AI 轮次，混进对话会污染语义）
+_DIALOG_ERROR_PREFIXES = ("Agent 超时", "Agent 执行出错", "Agent 调用失败", "⚠️")
+# 单轮 AI 回复进对话历史的长度上限（保 prompt 预算；用户轮不截断——用户的话是一手意图）
+_DIALOG_AI_TURN_MAX_CHARS = 1200
+
+
+def _build_dialog_comment(comment_id: int, first_comment: str) -> str:
+    """多轮追问的真实对话重建（修复"压平"bug）。
+
+    此前前端在追问时把所有用户消息拼接（u1u2u3）PATCH 进 comments.comment，
+    AI 看到的是一段没有自己回复的假独白。修复后：
+      - comments.comment 恢复「首轮原文」语义，前端不再 PATCH
+      - rerun 时从 replies 表按时间序重建 用户/AI 交错的完整对话
+      - 错误兜底回复（Agent 超时/执行出错等）不进对话
+      - 末尾连续的 AI 轮丢弃：对话必须终于用户消息（重新生成场景 = 重答最后一条用户消息）
+    """
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT author, content FROM replies WHERE comment_id = ? "
+            "AND author IN ('user', 'agent') ORDER BY created_at, id",
+            (comment_id,)
+        ).fetchall()
+    finally:
+        conn.close()
+
+    turns: list[tuple[str, str]] = []
+    for r in rows:
+        content = (r["content"] or "").strip()
+        if not content:
+            continue
+        if r["author"] == "agent":
+            if content.startswith(_DIALOG_ERROR_PREFIXES):
+                continue
+            if len(content) > _DIALOG_AI_TURN_MAX_CHARS:
+                content = content[:_DIALOG_AI_TURN_MAX_CHARS] + "\n……（本轮 AI 回复过长，已截断）"
+            turns.append(("AI", content))
+        else:
+            turns.append(("用户", content))
+
+    # 对话必须终于用户消息：末尾的 AI 轮是"待重答"的旧回复，丢弃
+    while turns and turns[-1][0] == "AI":
+        turns.pop()
+
+    if not turns:
+        return first_comment
+
+    lines = [
+        "（以下是本条划线下的完整多轮对话，按时间顺序。请针对最后一条用户消息回复，"
+        "已回答过的内容不必重复。）",
+        "",
+        f"[用户]\n{first_comment}",
+    ]
+    for who, content in turns:
+        lines.append(f"\n[{who}]\n{content}")
+    return "\n".join(lines)
+
+
 @app.post("/comments/{comment_id}/rerun")
 def rerun_agent(comment_id: int):
     """重新触发 agent（v2 路由器重跑，plan 确认后直接执行 Step 2）"""
@@ -5547,7 +5606,8 @@ def rerun_agent(comment_id: int):
     def _rerun_inner():
         selected = c["selected_text"] or "（无划线内容）"
         surrounding = c.get("surrounding_text", "") or ""
-        comment = c["comment"]
+        # 多轮追问：从 replies 重建真实对话（首轮时无 replies，等价于原 comment）
+        comment = _build_dialog_comment(comment_id, c["comment"])
 
         # 运营埋点 identity：从 comments 表 row 里读出（创建时已持久化）
         identity_ctx = {

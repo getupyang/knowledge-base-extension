@@ -4393,7 +4393,9 @@ const commentSystem = (() => {
     try {
       let agentCommentId = c.agentCommentId;
 
-      // 构建完整对话历史作为 comment（首轮 + 所有追问）
+      // 多轮压平 bug 已修：不再把用户消息拼接 PATCH 进 comment。
+      // 后端 rerun 时会从 replies 表重建 用户/AI 交错的真实对话（comments.comment 保持首轮原文）。
+      // conversationComment 仅用于下方"后端 comment 不存在"的恢复路径（离线期间建的 thread 补建档案）。
       const allUserMessages = [c.text, ...c.replies.filter(r => !r.isAI).map(r => r.text)];
       const conversationComment = allUserMessages.join("\n\n---追问---\n\n");
 
@@ -4423,13 +4425,7 @@ const commentSystem = (() => {
             });
           }
         } catch { /* ignore */ }
-        // 更新 comment 内容为完整对话再 rerun
-        const patchResp = await fetch(`http://localhost:8766/comments/${agentCommentId}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ comment: conversationComment }),
-        });
-        if (!patchResp.ok) throw new Error(`无法更新追问内容（HTTP ${patchResp.status}）`);
+        // 直接 rerun：追问已通过 POST /reply 落库，后端自己重建对话历史
         const rerunResp = await fetch(`http://localhost:8766/comments/${agentCommentId}/rerun`, { method: "POST" });
         if (!rerunResp.ok) throw new Error(`无法重新召唤 AI（HTTP ${rerunResp.status}）`);
       } else {
