@@ -1860,11 +1860,19 @@ async function loadDiary() {
         <div class="kb-nb-diary-page">
           <a href="${escapeHtml(c.page_url)}" target="_blank" rel="noopener">${escapeHtml(c.page_title || c.page_url)}</a>
         </div>` : "";
-      // 把这条评论的 Margin replies 渲染成紧跟其后的 agent 流
-      const aiReplies = (c.replies || []).filter(r => r.author === "agent");
-      const repliesHtml = aiReplies.map(r => {
+      // 把这条评论的对话流（用户追问 + Margin 回复）按时间序渲染成紧跟其后的 thread
+      const threadReplies = (c.replies || []).filter(r => r.author === "agent" || r.author === "user");
+      const repliesHtml = threadReplies.map(r => {
         const rt = new Date(r.created_at);
         const rts = `${(rt.getMonth()+1)}-${String(rt.getDate()).padStart(2,"0")} ${String(rt.getHours()).padStart(2,"0")}:${String(rt.getMinutes()).padStart(2,"0")}`;
+        if (r.author === "user") {
+          return `
+          <div class="kb-nb-diary-item">
+            <div class="kb-nb-diary-meta">你 · ${rts}</div>
+            <div class="kb-nb-diary-text">${escapeHtml(r.content || "")}</div>
+          </div>
+        `;
+        }
         const replyId = String(r.id);
         const unread = !seenReplyIds.has(replyId);
         if (unread) _diaryUnreadReplyIds.push(replyId);
