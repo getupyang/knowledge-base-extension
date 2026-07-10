@@ -1445,9 +1445,8 @@ a { color: inherit; }
 
 /* Diary */
 #kb-nb-diary-list {
-  display: flex; flex-direction: column; gap: 10px;
-  border-left: 1px solid var(--kb-line-2);
-  padding-left: 20px; margin-left: 8px;
+  display: flex; flex-direction: column;
+  padding-left: 22px; margin-left: 8px;
 }
 .kb-nb-diary-unread-notice {
   margin: 0 0 4px -12px;
@@ -1495,30 +1494,51 @@ a { color: inherit; }
   border-color: var(--kb-line);
   color: var(--kb-ink-2);
 }
-.kb-nb-diary-item {
+/* ── Thread 卡片：一条批注 + 全追问链聚成一张卡 ── */
+.kb-nb-diary-card {
+  position: relative;
+  margin: 0 0 14px -6px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--kb-line);
+  border-radius: 6px;
+  background: var(--kb-paper);
+}
+/* 日期骨架（今天/昨天/更早） */
+.kb-nb-diary-daymark {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 10px; letter-spacing: 0.08em;
+  color: var(--kb-ink-faint);
+  margin: 4px 0 8px; padding-bottom: 3px;
+  border-bottom: 1px dashed var(--kb-line);
+}
+.kb-nb-diary-daymark:first-child { margin-top: 0; }
+/* "共 N 轮追问" 徽章 */
+.kb-nb-diary-turncount {
+  margin-left: 6px;
+  color: var(--kb-blue);
+  font-size: 9px; letter-spacing: 0.02em;
+}
+
+.kb-nb-diary-turn {
   position: relative;
   padding: 4px 0 8px;
 }
-.kb-nb-diary-item::before {
-  content: ''; position: absolute; left: -25px; top: 8px;
-  width: 8px; height: 8px; border-radius: 50%;
+.kb-nb-diary-turn + .kb-nb-diary-turn {
+  border-top: 1px dotted var(--kb-line);
+  padding-top: 8px;
+}
+.kb-nb-diary-turn::before {
+  content: ''; position: absolute; left: -19px; top: 8px;
+  width: 7px; height: 7px; border-radius: 50%;
   background: var(--kb-paper); border: 1.5px solid var(--kb-terra);
 }
-.kb-nb-diary-item.agent::before {
+.kb-nb-diary-turn.agent::before {
   border-color: var(--kb-blue); background: var(--kb-blue);
 }
-.kb-nb-diary-item.agent.unread {
-  margin-left: -8px;
-  padding: 10px 10px 12px;
-  border: 1px solid oklch(0.55 0.14 150 / 0.28);
-  border-radius: 4px;
-  background: var(--kb-brand-faint);
-}
-.kb-nb-diary-item.agent.unread::before {
-  left: -17px;
+.kb-nb-diary-turn.agent.unread::before {
   box-shadow: 0 0 0 4px oklch(0.55 0.14 150 / 0.12);
 }
-.kb-nb-diary-item.agent.flash {
+.kb-nb-diary-turn.agent.flash {
   animation: kb-nb-diary-flash 0.8s ease-in-out 1;
 }
 @keyframes kb-nb-diary-flash {
@@ -1552,10 +1572,10 @@ a { color: inherit; }
 .kb-nb-diary-full p:last-child {
   margin-bottom: 0;
 }
-.kb-nb-diary-item.agent.expanded .kb-nb-diary-preview {
+.kb-nb-diary-turn.agent.expanded .kb-nb-diary-preview {
   display: none;
 }
-.kb-nb-diary-item.agent.expanded .kb-nb-diary-full {
+.kb-nb-diary-turn.agent.expanded .kb-nb-diary-full {
   display: block;
 }
 .kb-nb-diary-actions {

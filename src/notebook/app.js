@@ -206,11 +206,9 @@ function markAgentRepliesSeen(ids) {
       item.classList.remove("unread");
       const badge = item.querySelector(".kb-nb-diary-unread-tag");
       if (badge) badge.remove();
+      // 已读后移除"标为已读"按钮（展开阅读按钮不受影响，独立存在）
       const btn = item.querySelector("[data-read-reply]");
-      if (btn) {
-        btn.textContent = "已读";
-        btn.disabled = true;
-      }
+      if (btn) btn.remove();
     }
   });
   _diaryUnreadReplyIds = _diaryUnreadReplyIds.filter(id => !normalized.includes(String(id)));
@@ -1851,58 +1849,95 @@ async function loadDiary() {
     );
     const seenReplyIds = ensureAgentReplySeenBaseline(allAgentReplyIds);
     _diaryUnreadReplyIds = [];
-    list.innerHTML = data.items.map(c => {
-      const t = new Date(c.created_at);
-      const ts = `${(t.getMonth()+1)}-${String(t.getDate()).padStart(2,"0")} ${String(t.getHours()).padStart(2,"0")}:${String(t.getMinutes()).padStart(2,"0")}`;
+
+    // ── 一条 comment + 它的整条追问链 = 一张 thread 卡片 ──
+    // 卡片按「最后活跃时间」= max(首评, 全部 replies) 倒序，解决"首评时间倒序 + 链内正序"的锯齿。
+    const fmtTime = d => `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
+    const lastActive = c => {
+      let ms = new Date(c.created_at).getTime();
+      (c.replies || []).forEach(r => { ms = Math.max(ms, new Date(r.created_at).getTime()); });
+      return ms;
+    };
+    const cards = data.items.slice().sort((a, b) => lastActive(b) - lastActive(a));
+
+    // 日期分组骨架（今天/昨天/更早），跨天回看仍有时间锚
+    const startOfDay = ms => { const d = new Date(ms); d.setHours(0,0,0,0); return d.getTime(); };
+    const today0 = startOfDay(Date.now());
+    const dayLabel = ms => {
+      const d0 = startOfDay(ms);
+      if (d0 === today0) return "今天";
+      if (d0 === today0 - 86400000) return "昨天";
+      const d = new Date(ms);
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+    };
+
+    const renderUserTurn = (content, when) => `
+        <div class="kb-nb-diary-turn user">
+          <div class="kb-nb-diary-meta">你 · ${fmtTime(when)}</div>
+          <div class="kb-nb-diary-text">${escapeHtml(content || "")}</div>
+        </div>`;
+
+    const renderAgentTurn = (r, when) => {
+      const replyId = String(r.id);
+      const unread = !seenReplyIds.has(replyId);
+      if (unread) _diaryUnreadReplyIds.push(replyId);
+      const raw = r.content || "";
+      const compact = raw.replace(/\s+/g, " ").trim();
+      const preview = compact.slice(0, 220);
+      const isLong = compact.length > 220 || raw.length > 320;
+      // AI 回复默认折叠（只显示 preview）；用户的话永远完整。data-agent-reply-id 契约保持不变。
+      return `
+        <div class="kb-nb-diary-turn agent ${unread ? "unread" : ""}" data-agent-reply-id="${escapeHtml(replyId)}">
+          <div class="kb-nb-diary-meta">
+            Margin · ${fmtTime(when)}
+            ${unread ? `<span class="kb-nb-diary-unread-tag">未读</span>` : ""}
+          </div>
+          <div class="kb-nb-diary-text kb-nb-diary-preview">${escapeHtml(preview)}${isLong ? "…" : ""}</div>
+          <div class="kb-nb-diary-text kb-nb-diary-full">${md(raw)}</div>
+          <div class="kb-nb-diary-actions">
+            ${isLong ? `<button data-toggle-reply="${escapeHtml(replyId)}">展开阅读</button>` : ""}
+            ${unread ? `<button data-read-reply="${escapeHtml(replyId)}">标为已读</button>` : ""}
+          </div>
+        </div>`;
+    };
+
+    let lastDay = null;
+    list.innerHTML = cards.map(c => {
+      const activeMs = lastActive(c);
+      const day = dayLabel(activeMs);
+      const dayHeader = day !== lastDay ? `<div class="kb-nb-diary-daymark">${day}</div>` : "";
+      lastDay = day;
+
+      const commentTime = new Date(c.created_at);
       const excerpt = (c.selected_text || "").trim();
       const excerptHtml = excerpt ? `<div class="kb-nb-diary-quote">"${escapeHtml(excerpt.slice(0, 120))}${excerpt.length > 120 ? "…" : ""}"</div>` : "";
       const pageHtml = c.page_url ? `
         <div class="kb-nb-diary-page">
           <a href="${escapeHtml(c.page_url)}" target="_blank" rel="noopener">${escapeHtml(c.page_title || c.page_url)}</a>
         </div>` : "";
-      // 把这条评论的对话流（用户追问 + Margin 回复）按时间序渲染成紧跟其后的 thread
-      const threadReplies = (c.replies || []).filter(r => r.author === "agent" || r.author === "user");
-      const repliesHtml = threadReplies.map(r => {
-        const rt = new Date(r.created_at);
-        const rts = `${(rt.getMonth()+1)}-${String(rt.getDate()).padStart(2,"0")} ${String(rt.getHours()).padStart(2,"0")}:${String(rt.getMinutes()).padStart(2,"0")}`;
-        if (r.author === "user") {
-          return `
-          <div class="kb-nb-diary-item">
-            <div class="kb-nb-diary-meta">你 · ${rts}</div>
-            <div class="kb-nb-diary-text">${escapeHtml(r.content || "")}</div>
-          </div>
-        `;
-        }
-        const replyId = String(r.id);
-        const unread = !seenReplyIds.has(replyId);
-        if (unread) _diaryUnreadReplyIds.push(replyId);
-        const raw = r.content || "";
-        const compact = raw.replace(/\s+/g, " ").trim();
-        const preview = compact.slice(0, 220);
-        const isLong = compact.length > 220 || raw.length > 320;
-        return `
-          <div class="kb-nb-diary-item agent ${unread ? "unread" : ""}" data-agent-reply-id="${escapeHtml(replyId)}">
-            <div class="kb-nb-diary-meta">
-              Margin · ${rts}
-              ${unread ? `<span class="kb-nb-diary-unread-tag">未读</span>` : ""}
-            </div>
-            <div class="kb-nb-diary-text kb-nb-diary-preview">${escapeHtml(preview)}${isLong ? "…" : ""}</div>
-            <div class="kb-nb-diary-text kb-nb-diary-full">${md(raw)}</div>
-            <div class="kb-nb-diary-actions">
-              <button data-read-reply="${escapeHtml(replyId)}">${isLong ? "展开阅读" : "标为已读"}</button>
-            </div>
-          </div>
-        `;
+
+      const replies = (c.replies || []).filter(r => r.author === "agent" || r.author === "user");
+      const followupCount = replies.filter(r => r.author === "user").length;
+      const badge = followupCount > 0
+        ? `<span class="kb-nb-diary-turncount">· 共 ${followupCount} 轮追问 ·</span>`
+        : "";
+
+      const turnsHtml = replies.map(r => {
+        const when = new Date(r.created_at);
+        return r.author === "user" ? renderUserTurn(r.content, when) : renderAgentTurn(r, when);
       }).join("");
+
       return `
-        <div class="kb-nb-diary-item">
-          <div class="kb-nb-diary-meta">你 · ${ts}</div>
-          <div class="kb-nb-diary-text">${escapeHtml(c.comment || "")}</div>
-          ${excerptHtml}
-          ${pageHtml}
-        </div>
-        ${repliesHtml}
-      `;
+        ${dayHeader}
+        <div class="kb-nb-diary-card">
+          <div class="kb-nb-diary-turn user">
+            <div class="kb-nb-diary-meta">你 · ${fmtTime(commentTime)} ${badge}</div>
+            <div class="kb-nb-diary-text">${escapeHtml(c.comment || "")}</div>
+            ${excerptHtml}
+            ${pageHtml}
+          </div>
+          ${turnsHtml}
+        </div>`;
     }).join("");
     list.innerHTML = `
       <div class="kb-nb-diary-unread-notice" id="kb-nb-diary-unread-notice"></div>
@@ -1928,19 +1963,23 @@ $("kb-nb-diary-list").addEventListener("click", e => {
     return;
   }
 
-  const readBtn = e.target.closest("[data-read-reply]");
-  if (readBtn) {
-    const id = readBtn.dataset.readReply;
+  // 展开/收起：toggle，不是只 add（旧 bug = 展开后收不回）。按钮文案随状态翻转。
+  const toggleBtn = e.target.closest("[data-toggle-reply]");
+  if (toggleBtn) {
+    const id = toggleBtn.dataset.toggleReply;
     const item = document.querySelector(`[data-agent-reply-id="${CSS.escape(String(id))}"]`);
-    if (item) item.classList.add("expanded");
-    markAgentRepliesSeen(id);
+    if (item) {
+      const expanded = item.classList.toggle("expanded");
+      toggleBtn.textContent = expanded ? "收起" : "展开阅读";
+      if (expanded) markAgentRepliesSeen(id);  // 展开即视为已读
+    }
     return;
   }
 
-  const item = e.target.closest("[data-agent-reply-id]");
-  if (item) {
-    item.classList.add("expanded");
-    markAgentRepliesSeen(item.dataset.agentReplyId);
+  const readBtn = e.target.closest("[data-read-reply]");
+  if (readBtn) {
+    markAgentRepliesSeen(readBtn.dataset.readReply);
+    return;
   }
 });
 
