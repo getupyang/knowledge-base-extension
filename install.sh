@@ -83,6 +83,11 @@ discover_bin() {
   if [ -n "${SHELL:-}" ]; then
     from_shell="$("$SHELL" -l -c "command -v $name" 2>/dev/null | tail -1)"
   fi
+  # ChatGPT 桌面版内嵌完整的 codex CLI（与 App 共用登录态），很多用户只有它、没有独立 CLI
+  app_bundled=""
+  if [ "$name" = "codex" ]; then
+    app_bundled="/Applications/ChatGPT.app/Contents/Resources/codex"
+  fi
   for cand in \
     "$from_shell" \
     "$HOME/.npm-global/bin/$name" \
@@ -90,7 +95,8 @@ discover_bin() {
     "/usr/local/bin/$name" \
     "$HOME/.local/bin/$name" \
     "$HOME/.volta/bin/$name" \
-    "$HOME/.bun/bin/$name"; do
+    "$HOME/.bun/bin/$name" \
+    "$app_bundled"; do
     if probe_bin "$cand"; then
       printf '%s' "$cand"
       return 0
