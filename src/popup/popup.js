@@ -37,7 +37,7 @@ function setText(id, text) {
 }
 
 function togglePanel(id) {
-  for (const panelId of ["aiPanel", "notionPanel", "exportPanel"]) {
+  for (const panelId of ["aiPanel", "notionPanel", "exportPanel", "setupPanel"]) {
     const panel = $(panelId);
     panel.hidden = panelId === id ? !panel.hidden : true;
   }
@@ -98,16 +98,77 @@ async function exportVault(format) {
   }
 }
 
-function renderOffline() {
-  setText("localStatus", "未连接");
-  setText("localDetail", isWindowsPlatform() ? "请先运行 .\\start.ps1" : "请先运行 bash start.sh");
-  setText("aiStatus", "无法确认");
+// ── 引擎状态机 ──
+// S0 从未连接过本地服务（新用户）→ 「开启 AI」安装引导
+// SE 连接过但现在不在跑        → 同一条安装命令兼作修复（install.sh 幂等）
+// S1 服务在线但 AI 未配置       → 引导选择 AI 服务或贴 API Key
+// S2 就绪                      → 正常状态
+// 离线时每 2.5 秒探测 /health，装好后 popup 自动点亮，用户不需要刷新。
+
+const ENGINE_SEEN_KEY = "kb_engine_seen_v1";
+const INSTALL_CMD = "curl -fsSL https://raw.githubusercontent.com/getupyang/knowledge-base-extension/main/install.sh | bash";
+let _healthPollTimer = null;
+
+async function engineSeenBefore() {
+  try {
+    const stored = await chrome.storage.local.get(ENGINE_SEEN_KEY);
+    return !!stored[ENGINE_SEEN_KEY];
+  } catch {
+    return false;
+  }
+}
+
+function markEngineSeen() {
+  try { chrome.storage.local.set({ [ENGINE_SEEN_KEY]: true }); } catch {}
+}
+
+function startHealthPolling() {
+  if (_healthPollTimer) return;
+  _healthPollTimer = setInterval(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/health`);
+      if (res.ok) {
+        clearInterval(_healthPollTimer);
+        _healthPollTimer = null;
+        $("setupPanel").hidden = true;
+        loadRuntimeStatus();
+      }
+    } catch { /* 继续等 */ }
+  }, 2500);
+}
+
+async function renderOffline() {
+  const seen = await engineSeenBefore();
+  setText("aiStatus", "未开启");
   setText("aiDetail", "");
-  setText("backupStatus", "无法确认");
+  setText("backupStatus", "—");
   setText("backupDetail", "");
   $("aiConfigBtn").disabled = true;
   $("notionConfigBtn").disabled = true;
-  setStatus("本地服务未启动", "error");
+
+  const setupBtn = $("setupBtn");
+  setupBtn.hidden = false;
+  if (seen) {
+    // SE：装过，但服务没在跑
+    setText("localStatus", "未连接");
+    setText("localDetail", "本地服务没有在运行");
+    setupBtn.textContent = "修复";
+    setText("setupTitle", "恢复本地服务（约 1 分钟）");
+    setText("setupIntro", "重新运行一次安装命令即可恢复（顺便自动更新到最新版），批注数据不受影响。");
+    setStatus("本地服务未运行", "error");
+  } else {
+    // S0：新用户，从未连接过
+    setText("localStatus", "划线批注可用");
+    setText("localDetail", "开启 AI 后，批注会得到回应，并被长期记住");
+    setupBtn.textContent = "开启 AI";
+    setText("setupTitle", "开启 AI（约 2 分钟）");
+    setStatus("");
+  }
+  if (isWindowsPlatform()) {
+    setText("setupIntro", "Windows 安装请按仓库 WINDOWS.md 的步骤运行 setup.ps1；完成后回到这里，状态会自动变绿。");
+  }
+  $("installCmdBox").textContent = INSTALL_CMD;
+  startHealthPolling();
 }
 
 function renderRuntime(data) {
@@ -115,6 +176,8 @@ function renderRuntime(data) {
   const ai = data.ai || {};
   const notion = data.notion || {};
 
+  markEngineSeen();
+  $("setupBtn").hidden = true;
   setText("localStatus", "已连接");
   setText("localDetail", "批注、对话和记忆会保存在这台电脑上");
 
@@ -385,6 +448,19 @@ document.addEventListener("DOMContentLoaded", () => {
   $("aiConfigBtn").addEventListener("click", () => togglePanel("aiPanel"));
   $("notionConfigBtn").addEventListener("click", () => togglePanel("notionPanel"));
   $("exportConfigBtn").addEventListener("click", () => togglePanel("exportPanel"));
+  $("setupBtn").addEventListener("click", () => togglePanel("setupPanel"));
+  $("closeSetupPanelBtn").addEventListener("click", () => {
+    $("setupPanel").hidden = true;
+    setStatus("");
+  });
+  $("copyInstallCmdBtn").addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(INSTALL_CMD);
+      setStatus("已复制，去「终端」粘贴运行", "");
+    } catch {
+      setStatus("复制失败，请手动选中命令复制", "error");
+    }
+  });
   $("closeExportPanelBtn").addEventListener("click", () => {
     $("exportPanel").hidden = true;
     setStatus("");
