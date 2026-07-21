@@ -120,6 +120,29 @@
       background: var(--kb-field); color: var(--kb-ink);
       word-break: break-all; user-select: all; -webkit-user-select: all;
     }
+    .row-info { cursor: pointer; min-width: 0; }
+    /* iOS 风格开关：纯 CSS，Mac/Windows 渲染一致 */
+    .kb-switch { position: relative; display: inline-block; flex: 0 0 auto; align-self: center; }
+    .kb-switch input {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      opacity: 0; margin: 0; cursor: pointer; z-index: 1;
+    }
+    .kb-switch .kb-knob {
+      display: block; width: 42px; height: 26px; border-radius: 13px;
+      background: color-mix(in srgb, var(--kb-line) 80%, #9aa294);
+      transition: background .18s ease;
+      position: relative;
+    }
+    .kb-switch .kb-knob::after {
+      content: ""; position: absolute; top: 2px; left: 2px;
+      width: 22px; height: 22px; border-radius: 50%;
+      background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.28);
+      transition: left .18s ease;
+    }
+    .kb-switch input:checked + .kb-knob { background: var(--kb-brand); }
+    .kb-switch input:checked + .kb-knob::after { left: 18px; }
+    .kb-switch input:disabled + .kb-knob { opacity: .45; }
+    .kb-switch input:disabled { cursor: not-allowed; }
   </style>
 </head>
 <body>
@@ -136,36 +159,34 @@
 
   <div class="status-grid">
     <div class="status-row">
-      <div>
-        <span class="row-label">本机资料库</span>
-        <span class="row-value" id="localStatus">正在检查...</span>
-        <span class="row-detail" id="localDetail"></span>
-      </div>
-      <button class="row-action" id="setupBtn" hidden>开启 AI</button>
-    </div>
-    <div class="status-row">
-      <div>
-        <span class="row-label">AI 服务</span>
+      <div class="row-info" id="aiRowInfo">
+        <span class="row-label">AI 回应</span>
         <span class="row-value" id="aiStatus">正在检查...</span>
         <span class="row-detail" id="aiDetail"></span>
       </div>
-      <button class="row-action" id="aiConfigBtn">切换</button>
+      <label class="kb-switch" title="开启或暂停 AI 回应">
+        <input type="checkbox" id="aiSwitch">
+        <span class="kb-knob"></span>
+      </label>
     </div>
     <div class="status-row">
       <div>
-        <span class="row-label">云端备份</span>
-        <span class="row-value" id="backupStatus">正在检查...</span>
-        <span class="row-detail" id="backupDetail"></span>
-      </div>
-      <button class="row-action" id="notionConfigBtn">配置</button>
-    </div>
-    <div class="status-row">
-      <div>
-        <span class="row-label">本机批注</span>
+        <span class="row-label">划线批注</span>
         <span class="row-value" id="vaultStatus">正在统计...</span>
         <span class="row-detail" id="vaultDetail"></span>
       </div>
       <button class="row-action" id="exportConfigBtn">导出</button>
+    </div>
+    <div class="status-row">
+      <div class="row-info" id="notionRowInfo">
+        <span class="row-label">Notion 云备份</span>
+        <span class="row-value" id="backupStatus">正在检查...</span>
+        <span class="row-detail" id="backupDetail"></span>
+      </div>
+      <label class="kb-switch" title="开启或暂停 Notion 备份">
+        <input type="checkbox" id="notionSwitch">
+        <span class="kb-knob"></span>
+      </label>
     </div>
   </div>
 

@@ -137,30 +137,48 @@ function startHealthPolling() {
   }, 2500);
 }
 
-async function renderOffline() {
-  const seen = await engineSeenBefore();
-  setText("aiStatus", "未开启");
-  setText("aiDetail", "");
-  setText("backupStatus", "—");
-  setText("backupDetail", "");
-  $("aiConfigBtn").disabled = true;
-  $("notionConfigBtn").disabled = true;
+// AI 暂停开关（popup 写，content script 在召唤 AI 入口读）
+const AI_PAUSED_KEY = "kb_ai_paused_v1";
 
-  const setupBtn = $("setupBtn");
-  setupBtn.hidden = false;
+async function readAiPaused() {
+  try {
+    const stored = await chrome.storage.local.get(AI_PAUSED_KEY);
+    return !!stored[AI_PAUSED_KEY];
+  } catch {
+    return false;
+  }
+}
+
+async function setAiPaused(paused) {
+  try {
+    if (paused) await chrome.storage.local.set({ [AI_PAUSED_KEY]: true });
+    else await chrome.storage.local.remove(AI_PAUSED_KEY);
+  } catch {}
+}
+
+async function renderOffline() {
+  runtimeState = null;
+  const seen = await engineSeenBefore();
+  const aiSwitch = $("aiSwitch");
+  aiSwitch.checked = false;
+  aiSwitch.disabled = false;
+  const notionSwitch = $("notionSwitch");
+  notionSwitch.checked = false;
+  notionSwitch.disabled = true;
+  setText("backupStatus", "未开启");
+  setText("backupDetail", "AI 开启后可用");
+
   if (seen) {
-    // SE：装过，但服务没在跑
-    setText("localStatus", "未连接");
-    setText("localDetail", "本地服务没有在运行");
-    setupBtn.textContent = "修复";
+    // SE：装过，但服务没在跑——开关兼作修复入口
+    setText("aiStatus", "未连接");
+    setText("aiDetail", "本地服务没有在运行，打开开关一键修复");
     setText("setupTitle", "恢复本地服务（约 1 分钟）");
     setText("setupIntro", "重新运行一次安装命令即可恢复（顺便自动更新到最新版），批注数据不受影响。");
     setStatus("本地服务未运行", "error");
   } else {
     // S0：新用户，从未连接过
-    setText("localStatus", "划线批注可用");
-    setText("localDetail", "开启 AI 后，批注会得到回应，并被长期记住");
-    setupBtn.textContent = "开启 AI";
+    setText("aiStatus", "未开启");
+    setText("aiDetail", "打开后 AI 会回应你的批注，并记住你的偏好");
     setText("setupTitle", "开启 AI（约 2 分钟）");
     setStatus("");
   }
@@ -171,39 +189,51 @@ async function renderOffline() {
   startHealthPolling();
 }
 
-function renderRuntime(data) {
+async function renderRuntime(data) {
   runtimeState = data;
   const ai = data.ai || {};
   const notion = data.notion || {};
 
   markEngineSeen();
-  $("setupBtn").hidden = true;
-  setText("localStatus", "已连接");
-  setText("localDetail", "批注、对话和记忆会保存在这台电脑上");
-
-  setText("aiStatus", ai.displayName || "未配置");
-  setText("aiDetail", ai.error || ai.detail || "");
-
-  if (notion.configured || data.notionConfigured) {
-    setText("backupStatus", "Notion 已开启");
-    setText("backupDetail", "会额外保存一份云端备份");
-  } else if (notion.saved) {
-    setText("backupStatus", "Notion 已关闭");
-    setText("backupDetail", "已记住配置，需要时可重新开启");
+  const paused = await readAiPaused();
+  const configured = Boolean(ai.displayName);
+  const aiSwitch = $("aiSwitch");
+  aiSwitch.disabled = false;
+  if (!configured) {
+    aiSwitch.checked = false;
+    setText("aiStatus", "还差一步");
+    setText("aiDetail", ai.error || "打开开关：选择本机 AI 或粘贴 API Key");
+  } else if (paused) {
+    aiSwitch.checked = false;
+    setText("aiStatus", "已暂停");
+    setText("aiDetail", "批注照常保存；打开开关恢复 AI 回应");
   } else {
-    setText("backupStatus", "未开启");
-    setText("backupDetail", "本机保存已可用，可按需配置 Notion");
+    aiSwitch.checked = true;
+    setText("aiStatus", ai.displayName);
+    setText("aiDetail", ai.error || ai.detail || "批注、对话和记忆都保存在这台电脑");
   }
 
-  $("aiConfigBtn").disabled = false;
-  $("notionConfigBtn").disabled = false;
+  const notionSwitch = $("notionSwitch");
+  notionSwitch.disabled = false;
+  const notionOn = Boolean(notion.configured || data.notionConfigured);
+  notionSwitch.checked = notionOn;
+  if (notionOn) {
+    setText("backupStatus", "已开启");
+    setText("backupDetail", "新批注会额外备份一份到你的 Notion");
+  } else if (notion.saved) {
+    setText("backupStatus", "已暂停");
+    setText("backupDetail", "配置已保留，打开开关即可恢复");
+  } else {
+    setText("backupStatus", "未开启");
+    setText("backupDetail", "打开后额外备份一份到你的 Notion");
+  }
+
   $("useCodexBtn").disabled = !ai.available?.codex_cli;
   $("useClaudeBtn").disabled = !ai.available?.claude_code;
   $("useApiBtn").disabled = false;
   $("apiKey").placeholder = ai.apiKeySet ? "已保存；留空表示继续使用" : "粘贴 API Key";
   syncNotionForm(notion);
   syncDraftFromRuntime(ai);
-  setStatus("本地优先模式", "neutral");
 }
 
 async function api(path, options = {}) {
@@ -372,6 +402,54 @@ async function saveAiConfig() {
   }
 }
 
+// ── 开关行为 ──
+// HIG 语义：开关只表达"能立即改变的状态"。前置条件不满足时拨动开关
+// 不假装打开——弹回原位并打开对应的配置/安装面板（gated toggle）。
+
+async function onAiSwitchChange() {
+  const sw = $("aiSwitch");
+  if (!runtimeState) {
+    // 引擎不在线（S0/SE）：弹回，打开安装/修复引导
+    sw.checked = false;
+    togglePanel("setupPanel");
+    return;
+  }
+  const ai = runtimeState.ai || {};
+  if (!ai.displayName) {
+    // 在线但未配置（S1）：弹回，打开 AI 选择面板
+    sw.checked = false;
+    togglePanel("aiPanel");
+    return;
+  }
+  await setAiPaused(!sw.checked);
+  await renderRuntime(runtimeState);
+  setStatus(sw.checked ? "AI 已恢复回应" : "AI 已暂停，批注照常保存", sw.checked ? "" : "neutral");
+}
+
+async function onNotionSwitchChange() {
+  const sw = $("notionSwitch");
+  const notion = (runtimeState || {}).notion || {};
+  if (sw.checked && !notion.saved && !notion.configured) {
+    // 首次开启需要 Token：弹回，打开配置面板
+    sw.checked = false;
+    togglePanel("notionPanel");
+    return;
+  }
+  const wantOn = sw.checked;
+  try {
+    const data = await api("/config/notion", {
+      method: "POST",
+      body: JSON.stringify({ enabled: wantOn }),
+    });
+    await renderRuntime({ ...(runtimeState || {}), notion: data.notion, notionConfigured: !!data.notion?.configured });
+    setStatus(wantOn ? "Notion 备份已开启" : "Notion 备份已暂停", wantOn ? "" : "neutral");
+  } catch (err) {
+    sw.checked = !wantOn;
+    if (wantOn) togglePanel("notionPanel");
+    setStatus(err.message || "操作失败", "error");
+  }
+}
+
 async function saveNotionConfig() {
   const token = $("notionToken").value.trim();
   const databaseId = $("notionDatabaseId").value.trim();
@@ -445,10 +523,12 @@ document.addEventListener("DOMContentLoaded", () => {
     chrome.tabs.create({ url: chrome.runtime.getURL("src/notebook/index.html") });
     window.close();
   });
-  $("aiConfigBtn").addEventListener("click", () => togglePanel("aiPanel"));
-  $("notionConfigBtn").addEventListener("click", () => togglePanel("notionPanel"));
+  $("aiSwitch").addEventListener("change", onAiSwitchChange);
+  $("notionSwitch").addEventListener("change", onNotionSwitchChange);
+  // 点行文字看详情/换服务：在线开 AI 面板，离线开安装引导
+  $("aiRowInfo").addEventListener("click", () => togglePanel(runtimeState ? "aiPanel" : "setupPanel"));
+  $("notionRowInfo").addEventListener("click", () => { if (runtimeState) togglePanel("notionPanel"); });
   $("exportConfigBtn").addEventListener("click", () => togglePanel("exportPanel"));
-  $("setupBtn").addEventListener("click", () => togglePanel("setupPanel"));
   $("closeSetupPanelBtn").addEventListener("click", () => {
     $("setupPanel").hidden = true;
     setStatus("");

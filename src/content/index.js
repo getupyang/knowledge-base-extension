@@ -4371,6 +4371,26 @@ const commentSystem = (() => {
     const comments = load();
     const c = comments.find(x => x.id === commentId);
     if (!c) { _askAIRunning.delete(commentId); _lockReplyInput(commentId, false); return; }
+
+    // 用户在 popup 里暂停了 AI：不发起请求，就地提示后退出（批注保存不受影响）
+    const _aiPaused = await new Promise((resolve) => {
+      try {
+        chrome.storage.local.get("kb_ai_paused_v1", (v) => resolve(Boolean(v && v.kb_ai_paused_v1)));
+      } catch { resolve(false); }
+    });
+    if (_aiPaused) {
+      const card = document.getElementById("kb-cmt-" + commentId);
+      if (card) {
+        const note = document.createElement("div");
+        note.className = "kb-thinking";
+        note.textContent = "AI 回应已暂停——点浏览器工具栏的 Margin 图标可重新打开";
+        card.appendChild(note);
+        setTimeout(() => note.remove(), 5000);
+      }
+      _askAIRunning.delete(commentId);
+      _lockReplyInput(commentId, false);
+      return;
+    }
     const _askStartMs = Date.now();
     const _requestedVia = options.replaceReplyId ? "regenerate" : (options.selectedText ? "better_question" : "ask_ai");
     telemetryEvent("ai_reply_requested", "sidebar", {
