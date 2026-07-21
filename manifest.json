@@ -6,6 +6,7 @@
   "permissions": [
     "contextMenus",
     "storage",
+    "unlimitedStorage",
     "activeTab",
     "scripting",
     "clipboardWrite"

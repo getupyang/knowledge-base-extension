@@ -37,9 +37,64 @@ function setText(id, text) {
 }
 
 function togglePanel(id) {
-  for (const panelId of ["aiPanel", "notionPanel"]) {
+  for (const panelId of ["aiPanel", "notionPanel", "exportPanel"]) {
     const panel = $(panelId);
     panel.hidden = panelId === id ? !panel.hidden : true;
+  }
+}
+
+// ── 本机批注库（vault）：统计与导出，不依赖后端在线 ──
+
+const VAULT_KEY = "kb_vault_v1";
+
+async function readVault() {
+  const stored = await chrome.storage.local.get(VAULT_KEY);
+  return stored[VAULT_KEY];
+}
+
+async function loadVaultStats() {
+  try {
+    const s = KBVaultCore.stats(await readVault());
+    if (s.pages) {
+      setText("vaultStatus", `${s.comments} 条批注 · ${s.highlights} 条高亮`);
+      setText("vaultDetail", `来自 ${s.pages} 个页面，随时可导出带走`);
+    } else {
+      setText("vaultStatus", "还没有内容");
+      setText("vaultDetail", "在网页上划线批注后，这里可以导出备份");
+    }
+    $("exportMdBtn").disabled = !s.pages;
+    $("exportJsonBtn").disabled = !s.pages;
+  } catch {
+    setText("vaultStatus", "无法读取");
+    setText("vaultDetail", "");
+  }
+}
+
+function downloadTextFile(filename, mime, text) {
+  const url = URL.createObjectURL(new Blob([text], { type: mime }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+async function exportVault(format) {
+  try {
+    const vault = await readVault();
+    const now = new Date();
+    const stamp = now.toISOString().slice(0, 10);
+    if (format === "md") {
+      downloadTextFile(`margin-export-${stamp}.md`, "text/markdown", KBVaultCore.toMarkdown(vault, now.toISOString()));
+    } else {
+      const obj = KBVaultCore.toExportObject(vault, now.toISOString());
+      downloadTextFile(`margin-export-${stamp}.json`, "application/json", JSON.stringify(obj, null, 2));
+    }
+    setStatus("已导出到下载文件夹", "");
+  } catch (err) {
+    setStatus(err.message || "导出失败", "error");
   }
 }
 
@@ -329,6 +384,13 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   $("aiConfigBtn").addEventListener("click", () => togglePanel("aiPanel"));
   $("notionConfigBtn").addEventListener("click", () => togglePanel("notionPanel"));
+  $("exportConfigBtn").addEventListener("click", () => togglePanel("exportPanel"));
+  $("closeExportPanelBtn").addEventListener("click", () => {
+    $("exportPanel").hidden = true;
+    setStatus("");
+  });
+  $("exportMdBtn").addEventListener("click", () => exportVault("md"));
+  $("exportJsonBtn").addEventListener("click", () => exportVault("json"));
   $("useCodexBtn").addEventListener("click", () => setAiDraftProvider("codex_cli"));
   $("useClaudeBtn").addEventListener("click", () => setAiDraftProvider("claude_code"));
   $("useApiBtn").addEventListener("click", () => setAiDraftProvider("api"));
@@ -371,4 +433,5 @@ document.addEventListener("DOMContentLoaded", () => {
     setStatus("");
   });
   loadRuntimeStatus();
+  loadVaultStats();
 });

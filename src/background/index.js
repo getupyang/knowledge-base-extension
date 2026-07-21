@@ -1,3 +1,26 @@
+importScripts("/src/common/vault-core.js");
+
+// ── 本地批注库（vault）镜像 ──
+// content script 每次保存批注/高亮后发 VAULT_MIRROR，聚合写入 chrome.storage.local，
+// 供 popup 统计与导出。串行写链避免并发覆盖；失败只上报诊断，不影响主流程。
+const VAULT_KEY = "kb_vault_v1";
+let _vaultWriteChain = Promise.resolve();
+function mirrorToVault(data) {
+  _vaultWriteChain = _vaultWriteChain
+    .then(async () => {
+      const stored = await chrome.storage.local.get(VAULT_KEY);
+      const next = KBVaultCore.applyMirror(stored[VAULT_KEY], {
+        ...data,
+        mirroredAt: new Date().toISOString(),
+      });
+      await chrome.storage.local.set({ [VAULT_KEY]: next });
+    })
+    .catch((err) => {
+      reportClientError("vaultMirror", err, { pageUrl: data?.pageUrl, kind: data?.kind });
+    });
+  return _vaultWriteChain;
+}
+
 async function getConfig() {
   return new Promise((resolve) => {
     chrome.storage.local.get(["notionToken", "databaseId"], (result) => {
@@ -96,6 +119,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "PING") {
     sendResponse({ pong: true });
     return;
+  }
+  if (msg.type === "VAULT_MIRROR") {
+    mirrorToVault(msg.data || {}).then(() => sendResponse({ success: true }));
+    return true;
   }
   if (msg.type === "SAVE_TO_NOTION") {
     saveToNotion(msg.data)

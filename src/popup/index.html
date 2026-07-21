@@ -152,6 +152,14 @@
       </div>
       <button class="row-action" id="notionConfigBtn">配置</button>
     </div>
+    <div class="status-row">
+      <div>
+        <span class="row-label">本机批注</span>
+        <span class="row-value" id="vaultStatus">正在统计...</span>
+        <span class="row-detail" id="vaultDetail"></span>
+      </div>
+      <button class="row-action" id="exportConfigBtn">导出</button>
+    </div>
   </div>
 
   <section class="panel" id="aiPanel" hidden>
@@ -212,6 +220,17 @@
     </div>
   </section>
 
+  <section class="panel" id="exportPanel" hidden>
+    <div class="panel-head">
+      <div class="panel-title">导出本机批注</div>
+      <button class="panel-close" id="closeExportPanelBtn">收起</button>
+    </div>
+    <button id="exportMdBtn">导出 Markdown（适合阅读）</button>
+    <button class="kb-secondary" id="exportJsonBtn">导出 JSON（完整数据，可迁移）</button>
+    <div class="helper">导出这台电脑浏览器里保存的划线、批注和 AI 回复。备份或换电脑时使用，不需要联网。</div>
+  </section>
+
+  <script src="../common/vault-core.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

@@ -205,6 +205,7 @@ class Regression:
         js_files = [
             "src/background/index.js",
             "src/collectors/claude.js",
+            "src/common/vault-core.js",
             "src/content/index.js",
             "src/content/weread-bridge.js",
             "src/content/marked.min.js",
@@ -214,9 +215,13 @@ class Regression:
             "scripts/test-claude-collector.js",
             "scripts/test-comment-system.js",
             "scripts/test-anchor-overlap.js",
+            "scripts/test-vault-core.js",
         ]
         for js_file in js_files:
             run_cmd(["node", "--check", js_file])
+
+        # vault-core 纯逻辑回归（无外部依赖，归属静态检查）
+        run_cmd(["node", "scripts/test-vault-core.js"])
 
         inline_parser = r"""
           const fs = require('fs');

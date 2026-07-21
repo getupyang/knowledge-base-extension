@@ -815,6 +815,16 @@ const commentSystem = (() => {
     return _unique(_pageUrlCandidates().map(url => prefix + url).concat(prefix + _storageUrl()));
   }
   const STORAGE_KEY = () => "kb_comments_" + _storageUrl();
+  // 镜像到扩展级批注库（chrome.storage.local，background 聚合写入）：
+  // 跨页面聚合供 popup 统计/导出；失败静默，绝不影响页面内保存主流程。
+  function _vaultMirror(kind, items) {
+    try {
+      chrome.runtime.sendMessage(
+        { type: "VAULT_MIRROR", data: { pageUrl: _storageUrl(), pageTitle: document.title || "", kind, items } },
+        () => void chrome.runtime.lastError
+      );
+    } catch { /* 扩展上下文失效（升级/重载）时静默 */ }
+  }
   let panelEl = null;
   let currentExcerpt = "";
   let panelOpen = false;
@@ -1028,6 +1038,7 @@ const commentSystem = (() => {
   }
   function save(comments) {
     localStorage.setItem(STORAGE_KEY(), JSON.stringify(comments));
+    _vaultMirror("comments", comments);
   }
   function addComment(excerpt, text) {
     const comments = load();
@@ -1373,6 +1384,7 @@ const commentSystem = (() => {
   }
   function saveHighlights(hls) {
     localStorage.setItem(HL_KEY(), JSON.stringify(hls));
+    _vaultMirror("highlights", hls);
   }
   function addHighlight(excerpt, position) {
     const hls = loadHighlights();
@@ -4714,6 +4726,17 @@ const commentSystem = (() => {
       }, "*");
     }
   });
+
+  // 存量数据回填：本页在 vault 之前留下的批注/高亮，首次访问时镜像进扩展级批注库。
+  // 延迟执行避开页面初始化高峰；vault 端整页覆盖语义使重复回填幂等。
+  setTimeout(() => {
+    try {
+      const existingComments = load();
+      if (existingComments.length) _vaultMirror("comments", existingComments);
+      const existingHighlights = loadHighlights();
+      if (existingHighlights.length) _vaultMirror("highlights", existingHighlights);
+    } catch { /* 回填失败不影响页面功能 */ }
+  }, 2500);
 
   return {
     open,
