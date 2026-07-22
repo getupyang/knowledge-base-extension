@@ -143,6 +143,14 @@
     .kb-switch input:checked + .kb-knob::after { left: 18px; }
     .kb-switch input:disabled + .kb-knob { opacity: .45; }
     .kb-switch input:disabled { cursor: not-allowed; }
+    /* 面板从属于父行：在行的正下方展开，圆角相接成一张卡片（disclosure 模式） */
+    .status-block { display: grid; gap: 0; }
+    .status-block .panel { margin-top: 0; border-top: none; border-radius: 0 0 6px 6px; }
+    .status-block:has(.panel:not([hidden])) .status-row {
+      border-radius: 6px 6px 0 0;
+      border-color: var(--kb-line);
+      border-bottom: none;
+    }
   </style>
 </head>
 <body>
@@ -158,39 +166,36 @@
   <div class="status" id="status"></div>
 
   <div class="status-grid">
-    <div class="status-row">
-      <div class="row-info" id="aiRowInfo">
-        <span class="row-label">AI 回应</span>
-        <span class="row-value" id="aiStatus">正在检查...</span>
-        <span class="row-detail" id="aiDetail"></span>
+    <div class="status-block">
+      <div class="status-row">
+        <div class="row-info" id="aiRowInfo">
+          <span class="row-label">AI 回应</span>
+          <span class="row-value" id="aiStatus">正在检查...</span>
+          <span class="row-detail" id="aiDetail"></span>
+        </div>
+        <label class="kb-switch" title="开启或暂停 AI 回应">
+          <input type="checkbox" id="aiSwitch">
+          <span class="kb-knob"></span>
+        </label>
       </div>
-      <label class="kb-switch" title="开启或暂停 AI 回应">
-        <input type="checkbox" id="aiSwitch">
-        <span class="kb-knob"></span>
-      </label>
-    </div>
-    <div class="status-row">
-      <div>
-        <span class="row-label">划线批注</span>
-        <span class="row-value" id="vaultStatus">正在统计...</span>
-        <span class="row-detail" id="vaultDetail"></span>
-      </div>
-      <button class="row-action" id="exportConfigBtn">导出</button>
-    </div>
-    <div class="status-row">
-      <div class="row-info" id="notionRowInfo">
-        <span class="row-label">Notion 云备份</span>
-        <span class="row-value" id="backupStatus">正在检查...</span>
-        <span class="row-detail" id="backupDetail"></span>
-      </div>
-      <label class="kb-switch" title="开启或暂停 Notion 备份">
-        <input type="checkbox" id="notionSwitch">
-        <span class="kb-knob"></span>
-      </label>
-    </div>
-  </div>
-
-  <section class="panel" id="aiPanel" hidden>
+      <section class="panel" id="setupPanel" hidden>
+        <div class="panel-head">
+          <div class="panel-title" id="setupTitle">开启 AI（约 2 分钟）</div>
+          <button class="panel-close" id="closeSetupPanelBtn">收起</button>
+        </div>
+        <div class="helper" id="setupIntro" style="margin-top:0; margin-bottom:8px;">
+          在这台电脑上装一个 Margin 本地服务，AI 就能回应你的批注，并记住你的偏好和思考。
+          数据都保存在你自己的电脑上。
+        </div>
+        <label>第 1 步：复制这条命令</label>
+        <div class="cmd-box" id="installCmdBox"></div>
+        <button id="copyInstallCmdBtn">复制命令</button>
+        <div class="helper">
+          第 2 步：打开「终端」（按 ⌘+空格，输入 Terminal 回车），粘贴命令并回车。<br>
+          第 3 步：跑完后回到这里——状态会自动变绿，不用刷新。
+        </div>
+      </section>
+      <section class="panel" id="aiPanel" hidden>
     <div class="panel-head">
       <div class="panel-title">切换 AI 服务</div>
       <button class="panel-close" id="closeAiPanelBtn">收起</button>
@@ -224,11 +229,44 @@
       <label for="apiKey">API Key</label>
       <input id="apiKey" type="password" placeholder="粘贴 API Key">
     </div>
-    <button id="saveAiBtn">保存并切换</button>
-    <div class="helper" id="aiDraftHint">选择一个服务后再保存。</div>
-  </section>
+        <button id="saveAiBtn">保存并切换</button>
+        <div class="helper" id="aiDraftHint">选择一个服务后再保存。</div>
+      </section>
+    </div>
 
-  <section class="panel" id="notionPanel" hidden>
+    <div class="status-block">
+      <div class="status-row">
+        <div>
+          <span class="row-label">划线批注</span>
+          <span class="row-value" id="vaultStatus">正在统计...</span>
+          <span class="row-detail" id="vaultDetail"></span>
+        </div>
+        <button class="row-action" id="exportConfigBtn">导出</button>
+      </div>
+      <section class="panel" id="exportPanel" hidden>
+        <div class="panel-head">
+          <div class="panel-title">导出本机批注</div>
+          <button class="panel-close" id="closeExportPanelBtn">收起</button>
+        </div>
+        <button id="exportMdBtn">导出 Markdown（适合阅读）</button>
+        <button class="kb-secondary" id="exportJsonBtn">导出 JSON（完整数据，可迁移）</button>
+        <div class="helper">导出这台电脑浏览器里保存的划线、批注和 AI 回复。备份或换电脑时使用，不需要联网。</div>
+      </section>
+    </div>
+
+    <div class="status-block">
+      <div class="status-row">
+        <div class="row-info" id="notionRowInfo">
+          <span class="row-label">Notion 云备份</span>
+          <span class="row-value" id="backupStatus">正在检查...</span>
+          <span class="row-detail" id="backupDetail"></span>
+        </div>
+        <label class="kb-switch" title="开启或暂停 Notion 备份">
+          <input type="checkbox" id="notionSwitch">
+          <span class="kb-knob"></span>
+        </label>
+      </div>
+      <section class="panel" id="notionPanel" hidden>
     <div class="panel-head">
       <div class="panel-title">Notion 云端备份</div>
       <button class="panel-close" id="closeNotionPanelBtn">收起</button>
@@ -246,35 +284,9 @@
     <div class="helper" id="notionHint">
       <strong>第一次配置：</strong>在 Notion 的 My integrations 创建 integration，复制 Secret；再打开目标数据库，在 Connections 里授权这个 integration。Database ID 可直接粘贴数据库链接，Margin 会自动提取。
     </div>
-  </section>
-
-  <section class="panel" id="setupPanel" hidden>
-    <div class="panel-head">
-      <div class="panel-title" id="setupTitle">开启 AI（约 2 分钟）</div>
-      <button class="panel-close" id="closeSetupPanelBtn">收起</button>
+      </section>
     </div>
-    <div class="helper" id="setupIntro" style="margin-top:0; margin-bottom:8px;">
-      在这台电脑上装一个 Margin 本地服务，AI 就能回应你的批注，并记住你的偏好和思考。
-      数据都保存在你自己的电脑上。
-    </div>
-    <label>第 1 步：复制这条命令</label>
-    <div class="cmd-box" id="installCmdBox"></div>
-    <button id="copyInstallCmdBtn">复制命令</button>
-    <div class="helper">
-      第 2 步：打开「终端」（按 ⌘+空格，输入 Terminal 回车），粘贴命令并回车。<br>
-      第 3 步：跑完后回到这里——状态会自动变绿，不用刷新。
-    </div>
-  </section>
-
-  <section class="panel" id="exportPanel" hidden>
-    <div class="panel-head">
-      <div class="panel-title">导出本机批注</div>
-      <button class="panel-close" id="closeExportPanelBtn">收起</button>
-    </div>
-    <button id="exportMdBtn">导出 Markdown（适合阅读）</button>
-    <button class="kb-secondary" id="exportJsonBtn">导出 JSON（完整数据，可迁移）</button>
-    <div class="helper">导出这台电脑浏览器里保存的划线、批注和 AI 回复。备份或换电脑时使用，不需要联网。</div>
-  </section>
+  </div>
 
   <script src="../common/vault-core.js"></script>
   <script src="popup.js"></script>
