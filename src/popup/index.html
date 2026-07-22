@@ -14,6 +14,7 @@
       --kb-brand-dark: oklch(0.42 0.13 150);
       --kb-field: #ffffff;
       --kb-button-text: #ffffff;
+      --kb-amber: #b45309;
     }
     @media (prefers-color-scheme: dark) {
       :root {
@@ -26,8 +27,11 @@
         --kb-brand-dark: #3ea65e;
         --kb-field: #111713;
         --kb-button-text: #ffffff;
+        --kb-amber: #f59e0b;
       }
     }
+    /* 作者样式会覆盖 UA 的 [hidden]{display:none}（曾在 .status-block{display:grid} 上实锤），显式兜底 */
+    [hidden] { display: none !important; }
     body { width: 320px; padding: 16px; font-family: -apple-system, sans-serif; font-size: 13px; color: var(--kb-ink); background: var(--kb-paper); }
     h3 { margin: 0; font-size: 18px; font-weight: 800; line-height: 1; letter-spacing: 0; }
     .popup-head {
@@ -58,6 +62,7 @@
       border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500;
     }
     button:hover { background: var(--kb-brand-dark); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
     button.kb-secondary {
       background: var(--kb-ink); margin-top: 6px;
     }
@@ -78,11 +83,12 @@
       background: var(--kb-field); color: var(--kb-ink); font-size: 12px; border-radius: 6px;
     }
     .row-action:hover { background: var(--kb-paper); }
+    .row-action.primary { background: var(--kb-brand); border-color: var(--kb-brand); color: #fff; font-weight: 600; }
+    .row-action.primary:hover { background: var(--kb-brand-dark); }
     .panel {
       margin-top: 10px; padding: 10px; border: 1px solid var(--kb-line); border-radius: 6px;
       background: color-mix(in srgb, var(--kb-field) 80%, var(--kb-soft));
     }
-    .panel[hidden] { display: none; }
     .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
     .panel-title { font-weight: 700; }
     .panel-close {
@@ -91,9 +97,10 @@
     }
     .panel-close:hover { background: var(--kb-paper); color: var(--kb-ink); }
     .choice-grid { display: grid; gap: 6px; }
-    .choice-grid button { text-align: left; background: var(--kb-field); color: var(--kb-ink); border: 1px solid var(--kb-line); }
+    .choice-grid button { text-align: left; background: var(--kb-field); color: var(--kb-ink); border: 1px solid var(--kb-line); line-height: 1.4; }
+    .choice-grid button small { display: block; color: var(--kb-muted); font-size: 11px; font-weight: 400; margin-top: 1px; }
     .choice-grid button:hover { border-color: var(--kb-brand); }
-    .choice-grid button.is-selected { border-color: var(--kb-brand); color: var(--kb-brand); box-shadow: inset 3px 0 0 var(--kb-brand); }
+    .choice-grid button.is-selected { border-color: var(--kb-brand); box-shadow: inset 3px 0 0 var(--kb-brand); }
     .choice-grid button:disabled { opacity: 0.45; cursor: not-allowed; }
     .api-box { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--kb-line); }
     select {
@@ -121,7 +128,7 @@
       word-break: break-all; user-select: all; -webkit-user-select: all;
     }
     .row-info { cursor: pointer; min-width: 0; }
-    /* iOS 风格开关：纯 CSS，Mac/Windows 渲染一致 */
+    /* iOS 风格开关：只用于真正双向可选的功能（Notion 备份）。AI 引擎没有开关。 */
     .kb-switch { position: relative; display: inline-block; flex: 0 0 auto; align-self: center; }
     .kb-switch input {
       position: absolute; inset: 0; width: 100%; height: 100%;
@@ -151,6 +158,36 @@
       border-color: var(--kb-line);
       border-bottom: none;
     }
+    /* 状态灯 */
+    .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
+    .dot.green { background: var(--kb-brand); animation: kb-pulse 2.4s ease-in-out infinite; }
+    .dot.amber { background: var(--kb-amber); box-shadow: 0 0 0 3px color-mix(in srgb, var(--kb-amber) 16%, transparent); }
+    @keyframes kb-pulse {
+      0%, 100% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--kb-brand) 22%, transparent); }
+      50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--kb-brand) 8%, transparent); }
+    }
+    /* 首次配置引导卡（S0 / S1） */
+    .hero { margin-top: 12px; padding: 12px; border: 1px solid color-mix(in srgb, var(--kb-brand) 35%, var(--kb-line)); border-radius: 8px; background: color-mix(in srgb, var(--kb-brand) 4%, var(--kb-field)); }
+    .hero-title { font-size: 14px; font-weight: 800; margin-bottom: 4px; }
+    .hero-copy { color: var(--kb-muted); font-size: 11.5px; line-height: 1.55; }
+    .stepper { display: grid; gap: 10px; margin-top: 12px; }
+    .step { display: grid; grid-template-columns: 22px minmax(0, 1fr); column-gap: 8px; row-gap: 6px; }
+    .step-num { width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--kb-line); color: var(--kb-muted); font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; background: var(--kb-field); box-sizing: border-box; }
+    .step-title { font-size: 12.5px; font-weight: 700; align-self: center; }
+    .step.is-active .step-num { border-color: var(--kb-brand); color: var(--kb-brand); }
+    .step.is-done .step-num { background: var(--kb-brand); border-color: var(--kb-brand); color: #fff; }
+    .step.is-done .step-title { color: var(--kb-muted); }
+    .step.is-muted .step-num { opacity: .6; }
+    .step.is-muted .step-title { color: var(--kb-muted); font-weight: 600; }
+    .step-body { grid-column: 2; }
+    .wait { margin-top: 10px; text-align: center; color: var(--kb-muted); font-size: 11px; }
+    .wait .spin { display: inline-block; width: 10px; height: 10px; border: 2px solid var(--kb-line); border-top-color: var(--kb-brand); border-radius: 50%; animation: kb-spin 1s linear infinite; vertical-align: -1px; margin-right: 6px; }
+    @keyframes kb-spin { to { transform: rotate(360deg); } }
+    /* 暂停：刻意做成配置台底部的一行灰字，不是开关 */
+    .pause-zone { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--kb-line); }
+    .pause-link { width: auto; padding: 0; border: 0; background: transparent; color: var(--kb-muted); font-size: 11px; font-weight: 600; text-align: left; }
+    .pause-link:hover { background: transparent; color: var(--kb-ink); text-decoration: underline; }
+    .pause-confirm .row-action { margin-right: 6px; }
   </style>
 </head>
 <body>
@@ -165,72 +202,160 @@
   <button id="notebookBtn">打开记忆笔记本</button>
   <div class="status" id="status"></div>
 
+  <!-- S0：新用户，本地引擎未安装——首次配置是单向必做流程，没有开关 -->
+  <div class="hero" id="s0Hero" hidden>
+    <div class="hero-title">跑一条命令，AI 引擎开始工作</div>
+    <div class="hero-copy">
+      Margin 的核心是 AI：它回应你的批注，越用越懂你。
+      装好本地引擎后会自动连接你电脑上的 AI 服务——只配置一次，数据都留在你自己的电脑上。
+    </div>
+    <div class="stepper">
+      <div class="step is-active">
+        <span class="step-num">1</span>
+        <span class="step-title">安装本地引擎</span>
+        <div class="step-body">
+          <label style="margin-top:4px" id="installStepLabel">复制这条命令，粘贴到「终端」运行（⌘+空格 搜 Terminal）</label>
+          <div class="cmd-box" id="installCmdBox"></div>
+          <button id="copyInstallCmdBtn">复制命令</button>
+        </div>
+      </div>
+      <div class="step is-muted">
+        <span class="step-num">2</span>
+        <span class="step-title">自动连接 AI 服务</span>
+        <div class="step-body">
+          <div class="helper" style="margin-top:2px">按顺序检测：Claude Code → Codex → API Key，连上哪个用哪个，不用你选。</div>
+        </div>
+      </div>
+      <div class="step is-muted">
+        <span class="step-num">3</span>
+        <span class="step-title">完成，绿灯常亮</span>
+      </div>
+    </div>
+    <div class="wait"><span class="spin"></span>正在等待引擎上线——装好后自动完成后两步，不用刷新</div>
+  </div>
+
+  <!-- S1：引擎在线但什么服务都没连上——唯一需要用户动手的兜底态 -->
+  <div class="hero" id="s1Hero" hidden>
+    <div class="hero-title">引擎已上线，还差一个 AI 服务</div>
+    <div class="hero-copy" id="s1Probe">
+      已自动查找：Claude Code（未检测到）· Codex（未检测到）。
+      粘贴一个 API Key 就能开启。之后如果装了 Claude Code 或 Codex，在配置台一键切换。
+    </div>
+    <div class="stepper">
+      <div class="step is-done">
+        <span class="step-num">✓</span>
+        <span class="step-title">本地引擎已上线</span>
+      </div>
+      <div class="step is-active">
+        <span class="step-num">2</span>
+        <span class="step-title">连接 AI 服务（API Key）</span>
+        <div class="step-body">
+          <div style="margin-top:4px">
+            <label for="s1ApiProvider">API 服务</label>
+            <select id="s1ApiProvider">
+              <option value="qwen">千问 / Qwen</option>
+              <option value="openrouter">OpenRouter</option>
+            </select>
+            <div id="s1QwenEndpointWrap">
+              <label for="s1QwenEndpoint">千问服务区域</label>
+              <select id="s1QwenEndpoint">
+                <option value="qwen_cn">阿里云百炼 / 中国内地</option>
+                <option value="qwen_global">Qwen Global / 新加坡</option>
+                <option value="qwen_coding_cn">Qwen Coding Plan / 中国内地</option>
+                <option value="qwen_coding_global">Qwen Coding Plan / Global</option>
+              </select>
+            </div>
+            <label for="s1ApiModel">默认模型</label>
+            <input id="s1ApiModel" type="text" value="qwen3.5-plus">
+            <label for="s1ApiKey">API Key</label>
+            <input id="s1ApiKey" type="password" placeholder="粘贴 API Key">
+          </div>
+          <button id="s1SaveBtn" disabled>保存，开启 AI</button>
+        </div>
+      </div>
+      <div class="step is-muted">
+        <span class="step-num">3</span>
+        <span class="step-title">完成，绿灯常亮</span>
+      </div>
+    </div>
+  </div>
+
   <div class="status-grid">
-    <div class="status-block">
+    <!-- AI 引擎行：S2 绿灯运行态 / SE 黄灯故障态。没有开关。 -->
+    <div class="status-block" id="aiBlock" hidden>
       <div class="status-row">
         <div class="row-info" id="aiRowInfo">
-          <span class="row-label">AI 回应</span>
+          <span class="row-label">AI 引擎</span>
           <span class="row-value" id="aiStatus">正在检查...</span>
           <span class="row-detail" id="aiDetail"></span>
         </div>
-        <label class="kb-switch" title="开启或暂停 AI 回应">
-          <input type="checkbox" id="aiSwitch">
-          <span class="kb-knob"></span>
-        </label>
+        <button class="row-action" id="aiActionBtn">详情</button>
       </div>
-      <section class="panel" id="setupPanel" hidden>
+
+      <!-- S2 配置台：切换服务是一等操作，暂停是底部灰字 -->
+      <section class="panel" id="consolePanel" hidden>
         <div class="panel-head">
-          <div class="panel-title" id="setupTitle">开启 AI（约 2 分钟）</div>
-          <button class="panel-close" id="closeSetupPanelBtn">收起</button>
+          <div class="panel-title">引擎配置台</div>
+          <button class="panel-close" id="closeConsoleBtn">收起</button>
         </div>
-        <div class="helper" id="setupIntro" style="margin-top:0; margin-bottom:8px;">
-          在这台电脑上装一个 Margin 本地服务，AI 就能回应你的批注，并记住你的偏好和思考。
-          数据都保存在你自己的电脑上。
+        <div class="helper" id="consoleSummary" style="margin-top:0; margin-bottom:8px;"></div>
+        <label>切换 AI 服务</label>
+        <div class="choice-grid">
+          <button data-provider="claude_code" id="useClaudeBtn">Claude Code 直连<small>使用你的 Claude 订阅</small></button>
+          <button data-provider="codex_cli" id="useCodexBtn">Codex 直连<small>使用你的 ChatGPT 订阅</small></button>
+          <button data-provider="api" id="useApiBtn">API Key 供能<small>千问 / OpenRouter</small></button>
         </div>
-        <label>第 1 步：复制这条命令</label>
-        <div class="cmd-box" id="installCmdBox"></div>
-        <button id="copyInstallCmdBtn">复制命令</button>
-        <div class="helper">
-          第 2 步：打开「终端」（按 ⌘+空格，输入 Terminal 回车），粘贴命令并回车。<br>
-          第 3 步：跑完后回到这里——状态会自动变绿，不用刷新。
+        <div class="api-box" id="claudeConfigFields">
+          <label for="claudeBaseUrl">Claude Base URL（可选）</label>
+          <input id="claudeBaseUrl" type="text" placeholder="留空使用 Claude Code 默认配置">
+        </div>
+        <div class="api-box" id="apiConfigFields">
+          <label for="apiProvider">API 服务</label>
+          <select id="apiProvider">
+            <option value="qwen">千问 / Qwen</option>
+            <option value="openrouter">OpenRouter</option>
+          </select>
+          <div id="qwenEndpointWrap">
+            <label for="qwenEndpoint">千问服务区域</label>
+            <select id="qwenEndpoint">
+              <option value="qwen_cn">阿里云百炼 / 中国内地</option>
+              <option value="qwen_global">Qwen Global / 新加坡</option>
+              <option value="qwen_coding_cn">Qwen Coding Plan / 中国内地</option>
+              <option value="qwen_coding_global">Qwen Coding Plan / Global</option>
+            </select>
+          </div>
+          <label for="apiModel">默认模型</label>
+          <input id="apiModel" type="text" value="qwen3.5-plus">
+          <label for="apiKey">API Key</label>
+          <input id="apiKey" type="password" placeholder="粘贴 API Key">
+        </div>
+        <button id="saveAiBtn">保存并切换</button>
+        <div class="helper" id="aiDraftHint">切换只影响模型供能，你的批注和记忆不受影响。</div>
+        <div class="pause-zone">
+          <button class="pause-link" id="pauseLink">需要临时暂停 AI？</button>
+          <div class="pause-confirm" id="pauseConfirm" hidden>
+            <div class="helper" style="margin-top:6px">暂停后 AI 停止回应批注，划线批注仍正常保存。</div>
+            <div style="margin-top:6px">
+              <button class="row-action" id="pauseBtn">暂停</button>
+              <button class="row-action" id="cancelPauseBtn">取消</button>
+            </div>
+          </div>
         </div>
       </section>
-      <section class="panel" id="aiPanel" hidden>
-    <div class="panel-head">
-      <div class="panel-title">切换 AI 服务</div>
-      <button class="panel-close" id="closeAiPanelBtn">收起</button>
-    </div>
-    <div class="choice-grid">
-      <button data-provider="codex_cli" id="useCodexBtn">Codex 直连</button>
-      <button data-provider="claude_code" id="useClaudeBtn">Claude Code 直连</button>
-      <button data-provider="api" id="useApiBtn">千问 / OpenRouter API</button>
-    </div>
-    <div class="api-box" id="claudeConfigFields">
-      <label for="claudeBaseUrl">Claude Base URL（可选）</label>
-      <input id="claudeBaseUrl" type="text" placeholder="留空使用 Claude Code 默认配置">
-    </div>
-    <div class="api-box" id="apiConfigFields">
-      <label for="apiProvider">API 模型</label>
-      <select id="apiProvider">
-        <option value="qwen">千问 / Qwen</option>
-        <option value="openrouter">OpenRouter</option>
-      </select>
-      <div id="qwenEndpointWrap">
-        <label for="qwenEndpoint">千问服务区域</label>
-        <select id="qwenEndpoint">
-          <option value="qwen_cn">阿里云百炼 / 中国内地</option>
-          <option value="qwen_global">Qwen Global / 新加坡</option>
-          <option value="qwen_coding_cn">Qwen Coding Plan / 中国内地</option>
-          <option value="qwen_coding_global">Qwen Coding Plan / Global</option>
-        </select>
-      </div>
-      <label for="apiModel">默认模型</label>
-      <input id="apiModel" type="text" value="qwen3.5-plus">
-      <label for="apiKey">API Key</label>
-      <input id="apiKey" type="password" placeholder="粘贴 API Key">
-    </div>
-        <button id="saveAiBtn">保存并切换</button>
-        <div class="helper" id="aiDraftHint">选择一个服务后再保存。</div>
+
+      <!-- SE 修复面板：install.sh 幂等，重跑即恢复 -->
+      <section class="panel" id="startPanel" hidden>
+        <div class="panel-head">
+          <div class="panel-title">启动引擎</div>
+          <button class="panel-close" id="closeStartPanelBtn">收起</button>
+        </div>
+        <label style="margin-top:0" id="startStepLabel">复制这条命令，粘贴到「终端」运行</label>
+        <div class="cmd-box" id="startCmdBox"></div>
+        <button id="copyStartCmdBtn">复制命令</button>
+        <div class="helper" id="startHelp">
+          跑完后回到这里，状态会自动变绿，不用刷新。<br>
+          <strong>反复出现这个状态？</strong>同一条命令兼作修复（顺便自动更新到最新版），批注数据不受影响。
+        </div>
       </section>
     </div>
 

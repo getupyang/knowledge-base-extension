@@ -6236,6 +6236,8 @@ def _public_ai_status(llm: dict) -> dict:
         "configured": bool(selected) and not bool(error),
         "selectedProvider": selected,
         "providerConfig": provider_config,
+        # auto = 引擎按 Claude Code→Codex→API 优先级自动连接；manual = 用户在配置台选过
+        "providerSource": "auto" if provider_config == "auto" else "manual",
         "displayName": display,
         "detail": detail,
         "error": error,

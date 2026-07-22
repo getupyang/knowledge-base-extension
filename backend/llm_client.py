@@ -729,6 +729,7 @@ def _provider_from_name(name: str) -> BaseProvider:
 
 
 def _available_local_provider_names() -> list[str]:
+    # 顺序即产品定义的自动连接优先级：Claude Code → Codex（2026-07-22 拍板）
     names = []
     if _provider_enabled("claude_code", default=True) and find_claude_bin():
         names.append("claude_code")
@@ -747,27 +748,13 @@ def _select_provider() -> BaseProvider:
     if local_agent in {"claude_code", "codex_cli"}:
         return _provider_from_name(local_agent)
 
-    if local_agent == "auto":
-        local_providers = _available_local_provider_names()
-        if len(local_providers) == 1:
-            return _provider_from_name(local_providers[0])
-        if len(local_providers) > 1:
-            raise LLMConfigError(
-                "Multiple local LLM providers available "
-                f"({', '.join(local_providers)}). Set MEMAI_LLM_PROVIDER to one fixed value."
-            )
-
+    # auto：按固定优先级自动连接 Claude Code → Codex → API Key，检测到哪个用哪个。
+    # 用户在配置台手动选过服务后 MEMAI_LLM_PROVIDER 为显式值，不会走到这里。
+    local_providers = _available_local_provider_names()
+    if local_providers:
+        return _provider_from_name(local_providers[0])
     if _api_key():
         return OpenAICompatibleProvider()
-
-    local_hint = _available_local_provider_names()
-    if len(local_hint) == 1:
-        return _provider_from_name(local_hint[0])
-    if len(local_hint) > 1:
-        raise LLMConfigError(
-            "Multiple local LLM providers available "
-            f"({', '.join(local_hint)}). Set MEMAI_LLM_PROVIDER to one fixed value."
-        )
     raise LLMConfigError("No LLM provider available: configure API key or install Claude Code/Codex")
 
 

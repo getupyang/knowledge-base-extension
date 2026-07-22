@@ -1,8 +1,18 @@
 // MV3 popup 脚本：内容必须外置，不能 inline（CSP 默认禁）
+//
+// v4.1 状态机（2026-07-22 定稿）：AI 引擎是产品本体，没有 AI 开关。
+// S0 引擎未装（新用户）    → 单向三步引导卡：装引擎 → 自动连接 → 绿灯
+// SE 装过但没在跑          → 黄灯故障态，主按钮「启动」（install.sh 幂等兼修复）
+// S1 在线但没连上任何服务   → 兜底：直接 API Key 表单（本机确认没有 Claude Code/Codex）
+// S2 就绪                  → 绿灯常亮；「详情」进配置台（切换是一等操作，暂停是底部灰字）
+//
+// 首次自动连接优先级由后端决定：Claude Code → Codex → API Key，popup 只读结果。
 
 const API_BASE = "http://localhost:8766";
 
 let runtimeState = null;
+// aiActionBtn 的当前语义：console（详情/配置台）| start（SE 修复）| resume（暂停恢复）
+let aiActionMode = "console";
 let aiDraft = {
   provider: "codex_cli",
   apiProvider: "qwen",
@@ -36,8 +46,19 @@ function setText(id, text) {
   if (el) el.textContent = text || "";
 }
 
+function setAiValue(dotClass, text) {
+  const el = $("aiStatus");
+  el.textContent = "";
+  if (dotClass) {
+    const d = document.createElement("span");
+    d.className = `dot ${dotClass}`;
+    el.appendChild(d);
+  }
+  el.appendChild(document.createTextNode(text));
+}
+
 function togglePanel(id) {
-  for (const panelId of ["aiPanel", "notionPanel", "exportPanel", "setupPanel"]) {
+  for (const panelId of ["consolePanel", "startPanel", "notionPanel", "exportPanel"]) {
     const panel = $(panelId);
     panel.hidden = panelId === id ? !panel.hidden : true;
   }
@@ -98,12 +119,7 @@ async function exportVault(format) {
   }
 }
 
-// ── 引擎状态机 ──
-// S0 从未连接过本地服务（新用户）→ 「开启 AI」安装引导
-// SE 连接过但现在不在跑        → 同一条安装命令兼作修复（install.sh 幂等）
-// S1 服务在线但 AI 未配置       → 引导选择 AI 服务或贴 API Key
-// S2 就绪                      → 正常状态
-// 离线时每 2.5 秒探测 /health，装好后 popup 自动点亮，用户不需要刷新。
+// ── 引擎连接 ──
 
 const ENGINE_SEEN_KEY = "kb_engine_seen_v1";
 const INSTALL_CMD = "curl -fsSL https://raw.githubusercontent.com/getupyang/knowledge-base-extension/main/install.sh | bash";
@@ -130,14 +146,14 @@ function startHealthPolling() {
       if (res.ok) {
         clearInterval(_healthPollTimer);
         _healthPollTimer = null;
-        $("setupPanel").hidden = true;
+        $("startPanel").hidden = true;
         loadRuntimeStatus();
       }
     } catch { /* 继续等 */ }
   }, 2500);
 }
 
-// AI 暂停开关（popup 写，content script 在召唤 AI 入口读）
+// AI 暂停标记（popup 写，content script 在召唤 AI 入口读）
 const AI_PAUSED_KEY = "kb_ai_paused_v1";
 
 async function readAiPaused() {
@@ -156,63 +172,118 @@ async function setAiPaused(paused) {
   } catch {}
 }
 
+// ── 状态机渲染 ──
+
+function showState(state) {
+  $("s0Hero").hidden = state !== "s0";
+  $("s1Hero").hidden = state !== "s1";
+  $("aiBlock").hidden = state !== "s2" && state !== "se";
+}
+
 async function renderOffline() {
   runtimeState = null;
-  const seen = await engineSeenBefore();
-  const aiSwitch = $("aiSwitch");
-  aiSwitch.checked = false;
-  aiSwitch.disabled = false;
   const notionSwitch = $("notionSwitch");
   notionSwitch.checked = false;
   notionSwitch.disabled = true;
   setText("backupStatus", "未开启");
-  setText("backupDetail", "AI 开启后可用");
+  setText("backupDetail", "引擎上线后可用");
 
+  const seen = await engineSeenBefore();
   if (seen) {
-    // SE：装过，但服务没在跑——开关兼作修复入口
-    setText("aiStatus", "未连接");
-    setText("aiDetail", "本地服务没有在运行，打开开关一键修复");
-    setText("setupTitle", "恢复本地服务（约 1 分钟）");
-    setText("setupIntro", "重新运行一次安装命令即可恢复（顺便自动更新到最新版），批注数据不受影响。");
-    setStatus("本地服务未运行", "error");
+    // SE：装过但服务没在跑——故障态，话术是修复不是开启
+    showState("se");
+    aiActionMode = "start";
+    setAiValue("amber", "未在运行");
+    setText("aiDetail", "划线批注仍在正常保存；启动引擎后 AI 继续回应");
+    const btn = $("aiActionBtn");
+    btn.textContent = "启动";
+    btn.classList.add("primary");
+    $("consolePanel").hidden = true;
+    $("startCmdBox").textContent = INSTALL_CMD;
+    if (isWindowsPlatform()) {
+      setText("startStepLabel", "Windows：按仓库 WINDOWS.md 的步骤重新运行 setup.ps1");
+    }
   } else {
-    // S0：新用户，从未连接过
-    setText("aiStatus", "未开启");
-    setText("aiDetail", "打开后 AI 会回应你的批注，并记住你的偏好");
-    setText("setupTitle", "开启 AI（约 2 分钟）");
+    // S0：新用户——首次配置是单向必做流程
+    showState("s0");
+    $("installCmdBox").textContent = INSTALL_CMD;
+    if (isWindowsPlatform()) {
+      setText("installStepLabel", "Windows：按仓库 WINDOWS.md 的步骤运行 setup.ps1，完成后回到这里");
+    }
     setStatus("");
   }
-  if (isWindowsPlatform()) {
-    setText("setupIntro", "Windows 安装请按仓库 WINDOWS.md 的步骤运行 setup.ps1；完成后回到这里，状态会自动变绿。");
-  }
-  $("installCmdBox").textContent = INSTALL_CMD;
   startHealthPolling();
 }
 
-async function renderRuntime(data) {
+async function renderOnline(data) {
   runtimeState = data;
-  const ai = data.ai || {};
-  const notion = data.notion || {};
-
   markEngineSeen();
-  const paused = await readAiPaused();
-  const configured = Boolean(ai.displayName);
-  const aiSwitch = $("aiSwitch");
-  aiSwitch.disabled = false;
-  if (!configured) {
-    aiSwitch.checked = false;
-    setText("aiStatus", "还差一步");
-    setText("aiDetail", ai.error || "打开开关：选择本机 AI 或粘贴 API Key");
-  } else if (paused) {
-    aiSwitch.checked = false;
-    setText("aiStatus", "已暂停");
-    setText("aiDetail", "批注照常保存；打开开关恢复 AI 回应");
+  renderNotion(data);
+  const ai = data.ai || {};
+  if (ai.configured) {
+    await renderS2(ai);
   } else {
-    aiSwitch.checked = true;
-    setText("aiStatus", ai.displayName);
-    setText("aiDetail", ai.error || ai.detail || "批注、对话和记忆都保存在这台电脑");
+    renderS1(ai);
   }
+}
 
+function renderS1(ai) {
+  // 兜底态：引擎在线但没连上任何服务。只给 API Key 表单——
+  // Claude Code / Codex 已确认不存在，三选一只是噪音。
+  showState("s1");
+  const claudeFound = Boolean(ai.available && ai.available.claude_code);
+  const codexFound = Boolean(ai.available && ai.available.codex_cli);
+  let probe =
+    `已自动查找：Claude Code（${claudeFound ? "检测到" : "未检测到"}）` +
+    `· Codex（${codexFound ? "检测到" : "未检测到"}）。` +
+    "粘贴一个 API Key 就能开启。之后如果装了 Claude Code 或 Codex，在配置台一键切换。";
+  if (ai.error && (claudeFound || codexFound)) {
+    // 理论上检测到就会被自动连接；走到这说明连接出错，把真实原因给用户
+    probe = `自动连接失败：${ai.error}。也可以先粘贴一个 API Key 开启。`;
+  }
+  setText("s1Probe", probe);
+  $("s1QwenEndpointWrap").hidden = $("s1ApiProvider").value !== "qwen";
+  $("s1ApiKey").placeholder = ai.apiKeySet ? "已保存；留空表示继续使用" : "粘贴 API Key";
+  $("s1SaveBtn").disabled = !$("s1ApiKey").value.trim() && !ai.apiKeySet;
+}
+
+const PROVIDER_SHORT = { codex_cli: "Codex", claude_code: "Claude Code" };
+
+function shortAiName(ai) {
+  if (ai.selectedProvider === "api") return ai.displayName || "API 服务";
+  return PROVIDER_SHORT[ai.selectedProvider] || ai.displayName || "AI 服务";
+}
+
+async function renderS2(ai) {
+  showState("s2");
+  $("startPanel").hidden = true;
+  const paused = await readAiPaused();
+  const btn = $("aiActionBtn");
+  if (paused) {
+    aiActionMode = "resume";
+    setAiValue("amber", "已暂停");
+    setText("aiDetail", "AI 暂停回应中，划线批注仍正常保存");
+    btn.textContent = "恢复";
+    btn.classList.add("primary");
+    $("consolePanel").hidden = true;
+  } else {
+    aiActionMode = "console";
+    setAiValue("green", `运行中 · ${shortAiName(ai)} 供能`);
+    const source = ai.providerSource === "auto" ? "自动连接 · " : "";
+    setText("aiDetail", `${source}${ai.detail || "记忆与数据都在本机"}`);
+    btn.textContent = "详情";
+    btn.classList.remove("primary");
+  }
+  setText("consoleSummary", `当前由 ${shortAiName(ai)} 提供模型能力${ai.detail ? ` · ${ai.detail}` : ""}`);
+  $("useCodexBtn").disabled = !(ai.available && ai.available.codex_cli);
+  $("useClaudeBtn").disabled = !(ai.available && ai.available.claude_code);
+  $("useApiBtn").disabled = false;
+  $("apiKey").placeholder = ai.apiKeySet ? "已保存；留空表示继续使用" : "粘贴 API Key";
+  syncDraftFromRuntime(ai);
+}
+
+function renderNotion(data) {
+  const notion = data.notion || {};
   const notionSwitch = $("notionSwitch");
   notionSwitch.disabled = false;
   const notionOn = Boolean(notion.configured || data.notionConfigured);
@@ -227,13 +298,7 @@ async function renderRuntime(data) {
     setText("backupStatus", "未开启");
     setText("backupDetail", "打开后额外备份一份到你的 Notion");
   }
-
-  $("useCodexBtn").disabled = !ai.available?.codex_cli;
-  $("useClaudeBtn").disabled = !ai.available?.claude_code;
-  $("useApiBtn").disabled = false;
-  $("apiKey").placeholder = ai.apiKeySet ? "已保存；留空表示继续使用" : "粘贴 API Key";
   syncNotionForm(notion);
-  syncDraftFromRuntime(ai);
 }
 
 async function api(path, options = {}) {
@@ -262,11 +327,54 @@ async function api(path, options = {}) {
 async function loadRuntimeStatus() {
   try {
     const data = await api("/config");
-    renderRuntime(data);
+    await renderOnline(data);
   } catch (err) {
-    renderOffline();
+    await renderOffline();
   }
 }
+
+// ── AI 引擎行动作（详情 / 启动 / 恢复） ──
+
+async function onAiAction() {
+  if (aiActionMode === "start") {
+    togglePanel("startPanel");
+    return;
+  }
+  if (aiActionMode === "resume") {
+    await setAiPaused(false);
+    if (runtimeState) await renderS2(runtimeState.ai || {});
+    setStatus("AI 已恢复回应", "");
+    return;
+  }
+  togglePanel("consolePanel");
+}
+
+// ── S1 兜底：API Key 开启 ──
+
+async function saveS1ApiConfig() {
+  const apiProvider = $("s1ApiProvider").value;
+  const payload = {
+    provider: "api",
+    apiProvider,
+    apiKey: $("s1ApiKey").value.trim(),
+    model: $("s1ApiModel").value.trim() || defaultApiModel(apiProvider),
+    qwenEndpoint: $("s1QwenEndpoint").value,
+  };
+  setStatus("正在开启 AI...", "neutral");
+  $("s1SaveBtn").disabled = true;
+  try {
+    await api("/config/ai", { method: "POST", body: JSON.stringify(payload) });
+    const verified = await api("/config");
+    $("s1ApiKey").value = "";
+    await renderOnline(verified);
+    setStatus("AI 已开启，去任何网页划一句话试试", "");
+  } catch (err) {
+    setStatus(err.message || "开启失败", "error");
+    $("s1SaveBtn").disabled = false;
+  }
+}
+
+// ── S2 配置台：切换服务 ──
 
 function defaultApiModel(provider) {
   return provider === "openrouter" ? "openai/gpt-4o-mini" : "qwen3.5-plus";
@@ -313,7 +421,7 @@ function syncDraftFromRuntime(ai) {
       provider: "api",
       apiProvider: ai.apiProvider === "openrouter" ? "openrouter" : "qwen",
       model: ai.apiModel || defaultApiModel(ai.apiProvider),
-      qwenEndpoint: ai.apiProvider === "openrouter" ? "qwen_cn" : "qwen_cn",
+      qwenEndpoint: "qwen_cn",
       claudeBaseUrl: ai.claudeBaseUrl || "",
     };
   } else {
@@ -355,9 +463,7 @@ function syncAiDraftUi() {
   $("saveAiBtn").disabled = draftMatchesCurrent();
   $("aiDraftHint").textContent = aiDraft.provider === "api"
     ? "API Key 只保存在这台电脑；已保存过 Key 时，留空会继续使用原来的 Key。"
-    : aiDraft.provider === "claude_code"
-      ? "保存后，新的 Claude Code 请求会使用这个 Base URL。留空则使用默认配置。"
-      : "保存后，新的 AI 请求会使用这个服务。";
+    : "切换只影响模型供能，你的批注和记忆不受影响。";
 }
 
 function setAiSaving(isSaving) {
@@ -391,8 +497,9 @@ async function saveAiConfig() {
       body: JSON.stringify(payload),
     });
     const verified = await api("/config");
-    renderRuntime(verified);
     $("apiKey").value = "";
+    $("consolePanel").hidden = true;
+    await renderOnline(verified);
     setStatus(`已切换为 ${aiLabel((verified || {}).ai || aiDraft)}`, "");
   } catch (err) {
     setStatus(err.message || "切换失败", "error");
@@ -402,29 +509,7 @@ async function saveAiConfig() {
   }
 }
 
-// ── 开关行为 ──
-// HIG 语义：开关只表达"能立即改变的状态"。前置条件不满足时拨动开关
-// 不假装打开——弹回原位并打开对应的配置/安装面板（gated toggle）。
-
-async function onAiSwitchChange() {
-  const sw = $("aiSwitch");
-  if (!runtimeState) {
-    // 引擎不在线（S0/SE）：弹回，打开安装/修复引导
-    sw.checked = false;
-    togglePanel("setupPanel");
-    return;
-  }
-  const ai = runtimeState.ai || {};
-  if (!ai.displayName) {
-    // 在线但未配置（S1）：弹回，打开 AI 选择面板
-    sw.checked = false;
-    togglePanel("aiPanel");
-    return;
-  }
-  await setAiPaused(!sw.checked);
-  await renderRuntime(runtimeState);
-  setStatus(sw.checked ? "AI 已恢复回应" : "AI 已暂停，批注照常保存", sw.checked ? "" : "neutral");
-}
+// ── Notion（真正可选的功能，保留开关语义） ──
 
 async function onNotionSwitchChange() {
   const sw = $("notionSwitch");
@@ -441,7 +526,8 @@ async function onNotionSwitchChange() {
       method: "POST",
       body: JSON.stringify({ enabled: wantOn }),
     });
-    await renderRuntime({ ...(runtimeState || {}), notion: data.notion, notionConfigured: !!data.notion?.configured });
+    runtimeState = { ...(runtimeState || {}), notion: data.notion, notionConfigured: !!data.notion?.configured };
+    renderNotion(runtimeState);
     setStatus(wantOn ? "Notion 备份已开启" : "Notion 备份已暂停", wantOn ? "" : "neutral");
   } catch (err) {
     sw.checked = !wantOn;
@@ -459,7 +545,8 @@ async function saveNotionConfig() {
       method: "POST",
       body: JSON.stringify({ token, databaseId, enabled: true }),
     });
-    renderRuntime({ ...(runtimeState || {}), notion: data.notion, notionConfigured: data.notion?.configured });
+    runtimeState = { ...(runtimeState || {}), notion: data.notion, notionConfigured: !!data.notion?.configured };
+    renderNotion(runtimeState);
     $("notionToken").value = "";
     $("notionPanel").hidden = true;
     setStatus("Notion 已开启", "");
@@ -475,7 +562,8 @@ async function disableNotionConfig() {
       method: "POST",
       body: JSON.stringify({ enabled: false }),
     });
-    renderRuntime({ ...(runtimeState || {}), notion: data.notion, notionConfigured: false });
+    runtimeState = { ...(runtimeState || {}), notion: data.notion, notionConfigured: false };
+    renderNotion(runtimeState);
     $("notionPanel").hidden = true;
     setStatus("Notion 备份已暂停", "");
   } catch (err) {
@@ -493,7 +581,8 @@ async function createNotionDatabase() {
       method: "POST",
       body: JSON.stringify({ token, parentPage }),
     });
-    renderRuntime({ ...(runtimeState || {}), notion: data.notion, notionConfigured: data.notion?.configured });
+    runtimeState = { ...(runtimeState || {}), notion: data.notion, notionConfigured: !!data.notion?.configured };
+    renderNotion(runtimeState);
     $("notionDatabaseId").value = data.databaseId || "";
     $("notionToken").value = "";
     $("notionParentPage").value = "";
@@ -523,16 +612,20 @@ document.addEventListener("DOMContentLoaded", () => {
     chrome.tabs.create({ url: chrome.runtime.getURL("src/notebook/index.html") });
     window.close();
   });
-  $("aiSwitch").addEventListener("change", onAiSwitchChange);
-  $("notionSwitch").addEventListener("change", onNotionSwitchChange);
-  // 点行文字看详情/换服务：在线开 AI 面板，离线开安装引导
-  $("aiRowInfo").addEventListener("click", () => togglePanel(runtimeState ? "aiPanel" : "setupPanel"));
-  $("notionRowInfo").addEventListener("click", () => { if (runtimeState) togglePanel("notionPanel"); });
-  $("exportConfigBtn").addEventListener("click", () => togglePanel("exportPanel"));
-  $("closeSetupPanelBtn").addEventListener("click", () => {
-    $("setupPanel").hidden = true;
+
+  // AI 引擎行：详情（S2）/ 启动（SE）/ 恢复（暂停中）
+  $("aiActionBtn").addEventListener("click", onAiAction);
+  $("aiRowInfo").addEventListener("click", onAiAction);
+  $("closeConsoleBtn").addEventListener("click", () => {
+    $("consolePanel").hidden = true;
     setStatus("");
   });
+  $("closeStartPanelBtn").addEventListener("click", () => {
+    $("startPanel").hidden = true;
+    setStatus("");
+  });
+
+  // 安装 / 修复命令复制
   $("copyInstallCmdBtn").addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(INSTALL_CMD);
@@ -541,12 +634,35 @@ document.addEventListener("DOMContentLoaded", () => {
       setStatus("复制失败，请手动选中命令复制", "error");
     }
   });
+  $("copyStartCmdBtn").addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(INSTALL_CMD);
+      setStatus("已复制，去「终端」粘贴运行", "");
+    } catch {
+      setStatus("复制失败，请手动选中命令复制", "error");
+    }
+  });
+
+  // S1 兜底表单
+  $("s1SaveBtn").addEventListener("click", saveS1ApiConfig);
+  $("s1ApiKey").addEventListener("input", () => {
+    $("s1SaveBtn").disabled = !$("s1ApiKey").value.trim() && !runtimeState?.ai?.apiKeySet;
+  });
+  $("s1ApiProvider").addEventListener("change", () => {
+    $("s1QwenEndpointWrap").hidden = $("s1ApiProvider").value !== "qwen";
+    $("s1ApiModel").value = defaultApiModel($("s1ApiProvider").value);
+  });
+
+  // 导出
+  $("exportConfigBtn").addEventListener("click", () => togglePanel("exportPanel"));
   $("closeExportPanelBtn").addEventListener("click", () => {
     $("exportPanel").hidden = true;
     setStatus("");
   });
   $("exportMdBtn").addEventListener("click", () => exportVault("md"));
   $("exportJsonBtn").addEventListener("click", () => exportVault("json"));
+
+  // 配置台：切换服务
   $("useCodexBtn").addEventListener("click", () => setAiDraftProvider("codex_cli"));
   $("useClaudeBtn").addEventListener("click", () => setAiDraftProvider("claude_code"));
   $("useApiBtn").addEventListener("click", () => setAiDraftProvider("api"));
@@ -574,20 +690,36 @@ document.addEventListener("DOMContentLoaded", () => {
     syncAiDraftUi();
   });
   $("saveAiBtn").addEventListener("click", saveAiConfig);
+
+  // 暂停：配置台底部灰字 + 二次确认
+  $("pauseLink").addEventListener("click", () => {
+    $("pauseConfirm").hidden = !$("pauseConfirm").hidden;
+  });
+  $("cancelPauseBtn").addEventListener("click", () => {
+    $("pauseConfirm").hidden = true;
+  });
+  $("pauseBtn").addEventListener("click", async () => {
+    await setAiPaused(true);
+    $("pauseConfirm").hidden = true;
+    $("consolePanel").hidden = true;
+    if (runtimeState) await renderS2(runtimeState.ai || {});
+    setStatus("AI 已暂停，批注照常保存", "neutral");
+  });
+
+  // Notion
+  $("notionSwitch").addEventListener("change", onNotionSwitchChange);
+  $("notionRowInfo").addEventListener("click", () => { if (runtimeState) togglePanel("notionPanel"); });
   $("saveNotionBtn").addEventListener("click", saveNotionConfig);
   $("disableNotionBtn").addEventListener("click", disableNotionConfig);
   $("createNotionDatabaseBtn").addEventListener("click", createNotionDatabase);
   $("openNotionIntegrationsBtn").addEventListener("click", () => {
     chrome.tabs.create({ url: "https://www.notion.so/my-integrations" });
   });
-  $("closeAiPanelBtn").addEventListener("click", () => {
-    $("aiPanel").hidden = true;
-    setStatus("");
-  });
   $("closeNotionPanelBtn").addEventListener("click", () => {
     $("notionPanel").hidden = true;
     setStatus("");
   });
+
   loadRuntimeStatus();
   loadVaultStats();
 });
