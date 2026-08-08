@@ -5666,9 +5666,21 @@ def rerun_agent(comment_id: int):
     thread.start()
     return {"message": f"已重新触发 AI（v2）"}
 
+# 版本兼容（清单 1.4 协议）：api_schema 只在扩展↔后端出现破坏性变更时 +1；
+# popup 用它判断是否提示"引擎需要升级"。BACKEND_VERSION 随 release tag 更新。
+BACKEND_VERSION = "0.4.0-dev"
+API_SCHEMA = 1
+
+
 @app.get("/health")
 def health():
-    return {"status": "ok", "data_dir": DATA_DIR, "db": DB_PATH}
+    return {
+        "status": "ok",
+        "data_dir": DATA_DIR,
+        "db": DB_PATH,
+        "backend_version": BACKEND_VERSION,
+        "api_schema": API_SCHEMA,
+    }
 
 
 # ──────────────────────────────────────────
@@ -6304,34 +6316,61 @@ class AiConfigUpdate(BaseModel):
     claudeBaseUrl: Optional[str] = None
 
 
+_API_ENDPOINT_MAP = {
+    "qwen_cn": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "qwen_global": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    "qwen_coding_cn": "https://coding.dashscope.aliyuncs.com/v1",
+    "qwen_coding_global": "https://coding-intl.dashscope.aliyuncs.com/v1",
+}
+
+
+def _resolve_api_choice(payload: AiConfigUpdate):
+    """校验并解析 API 服务商选择，返回 (api_provider, base_url, model)。"""
+    api_provider = (payload.apiProvider or "").strip()
+    if api_provider not in ("qwen", "openrouter"):
+        raise HTTPException(status_code=400, detail="请选择千问或 OpenRouter")
+    if api_provider == "qwen":
+        base_url = _API_ENDPOINT_MAP.get((payload.qwenEndpoint or "qwen_cn").strip())
+        if not base_url:
+            raise HTTPException(status_code=400, detail="请选择千问服务区域")
+        model = (payload.model or "qwen3.5-plus").strip()
+    else:
+        base_url = "https://openrouter.ai/api/v1"
+        model = (payload.model or "openai/gpt-4o-mini").strip()
+    return api_provider, base_url, model
+
+
+@app.post("/config/ai/test")
+def test_ai_config(payload: AiConfigUpdate, request: Request):
+    """真实调用一次 API 验证 Key/模型/接入点可用。只校验，不写任何配置。
+    支撑 popup C 态"Key 无效 → 表单红字不跳走"（七状态设计定稿）。"""
+    _require_extension_origin(request)
+    if (payload.provider or "").strip() != "api":
+        raise HTTPException(status_code=400, detail="只支持校验 API 服务配置")
+    _, base_url, model = _resolve_api_choice(payload)
+    api_key = (payload.apiKey or "").strip() or None
+    if api_key is None and not get_llm_status().get("api_key_configured"):
+        raise HTTPException(status_code=400, detail="请填写 API Key")
+    from llm_client import OpenAICompatibleProvider
+
+    try:
+        provider = OpenAICompatibleProvider(api_key=api_key, base_url=base_url)
+        provider.generate_text("请只回复两个字符：OK", timeout=25, model=model)
+    except LLMError as e:
+        return {"ok": False, "error": str(e)[:500]}
+    return {"ok": True}
+
+
 @app.post("/config/ai")
 def update_ai_config(payload: AiConfigUpdate, request: Request):
     _require_extension_origin(request)
     provider = (payload.provider or "").strip()
     llm = get_llm_status()
     if provider == "api":
-        api_provider = (payload.apiProvider or "").strip()
         api_key = (payload.apiKey or "").strip()
-        qwen_endpoint = (payload.qwenEndpoint or "qwen_cn").strip()
-        endpoint_map = {
-            "qwen_cn": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            "qwen_global": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-            "qwen_coding_cn": "https://coding.dashscope.aliyuncs.com/v1",
-            "qwen_coding_global": "https://coding-intl.dashscope.aliyuncs.com/v1",
-        }
-        if api_provider not in ("qwen", "openrouter"):
-            raise HTTPException(status_code=400, detail="请选择千问或 OpenRouter")
         if not api_key and not llm.get("api_key_configured"):
             raise HTTPException(status_code=400, detail="请填写 API Key")
-
-        if api_provider == "qwen":
-            base_url = endpoint_map.get(qwen_endpoint)
-            if not base_url:
-                raise HTTPException(status_code=400, detail="请选择千问服务区域")
-            model = (payload.model or "qwen3.5-plus").strip()
-        else:
-            base_url = "https://openrouter.ai/api/v1"
-            model = (payload.model or "openai/gpt-4o-mini").strip()
+        api_provider, base_url, model = _resolve_api_choice(payload)
 
         updates = {
             "MEMAI_LLM_PROVIDER": "api",
