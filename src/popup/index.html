@@ -15,6 +15,8 @@
       --kb-field: #ffffff;
       --kb-button-text: #ffffff;
       --kb-amber: #b45309;
+      --kb-amber-bg: #fdf6e9;
+      --kb-red: #c0392b;
     }
     @media (prefers-color-scheme: dark) {
       :root {
@@ -28,11 +30,13 @@
         --kb-field: #111713;
         --kb-button-text: #ffffff;
         --kb-amber: #f59e0b;
+        --kb-amber-bg: #2a2116;
+        --kb-red: #f87171;
       }
     }
     /* 作者样式会覆盖 UA 的 [hidden]{display:none}（曾在 .status-block{display:grid} 上实锤），显式兜底 */
     [hidden] { display: none !important; }
-    body { width: 320px; padding: 16px; font-family: -apple-system, sans-serif; font-size: 13px; color: var(--kb-ink); background: var(--kb-paper); }
+    body { width: 340px; padding: 16px; font-family: -apple-system, sans-serif; font-size: 13px; color: var(--kb-ink); background: var(--kb-paper); }
     h3 { margin: 0; font-size: 18px; font-weight: 800; line-height: 1; letter-spacing: 0; }
     .popup-head {
       display: grid;
@@ -42,12 +46,7 @@
       margin-bottom: 14px;
     }
     .popup-head img { display: block; width: 36px; height: 36px; flex: 0 0 auto; }
-    .popup-head > div {
-      display: grid;
-      min-width: 0;
-      gap: 3px;
-      align-content: center;
-    }
+    .popup-head > div { display: grid; min-width: 0; gap: 3px; align-content: center; }
     .popup-head span { display: block; margin: 0; color: var(--kb-muted); font-size: 12px; font-weight: 600; line-height: 1.18; letter-spacing: 0; }
     label { display: block; margin-bottom: 4px; color: var(--kb-muted); font-size: 12px; }
     input {
@@ -63,46 +62,11 @@
     }
     button:hover { background: var(--kb-brand-dark); }
     button:disabled { opacity: 0.45; cursor: not-allowed; }
-    button.kb-secondary {
-      background: var(--kb-ink); margin-top: 6px;
-    }
+    button.kb-secondary { background: var(--kb-ink); margin-top: 6px; }
     button.kb-secondary:hover { background: #000; }
     .status { margin-top: 8px; font-size: 12px; font-weight: 600; text-align: center; min-height: 18px; padding: 4px 0; border-radius: 6px; color: var(--kb-brand); }
     .status.error { color: #ef4444; }
     .status.neutral { color: var(--kb-muted); }
-    .status-grid { margin-top: 12px; display: grid; gap: 8px; }
-    .status-row {
-      display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center;
-      padding: 10px; background: var(--kb-soft); border-radius: 6px; border: 1px solid transparent;
-    }
-    .row-label { display: block; color: var(--kb-muted); font-size: 11px; margin-bottom: 3px; }
-    .row-value { display: block; color: var(--kb-ink); font-size: 13px; font-weight: 700; line-height: 1.35; }
-    .row-detail { display: block; color: var(--kb-muted); font-size: 11px; line-height: 1.35; margin-top: 2px; }
-    .row-action {
-      width: auto; min-width: 48px; padding: 5px 8px; border: 1px solid var(--kb-line);
-      background: var(--kb-field); color: var(--kb-ink); font-size: 12px; border-radius: 6px;
-    }
-    .row-action:hover { background: var(--kb-paper); }
-    .row-action.primary { background: var(--kb-brand); border-color: var(--kb-brand); color: #fff; font-weight: 600; }
-    .row-action.primary:hover { background: var(--kb-brand-dark); }
-    .panel {
-      margin-top: 10px; padding: 10px; border: 1px solid var(--kb-line); border-radius: 6px;
-      background: color-mix(in srgb, var(--kb-field) 80%, var(--kb-soft));
-    }
-    .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
-    .panel-title { font-weight: 700; }
-    .panel-close {
-      width: auto; min-width: 44px; padding: 4px 8px; border: 1px solid var(--kb-line);
-      background: var(--kb-field); color: var(--kb-muted); font-size: 12px; border-radius: 6px;
-    }
-    .panel-close:hover { background: var(--kb-paper); color: var(--kb-ink); }
-    .choice-grid { display: grid; gap: 6px; }
-    .choice-grid button { text-align: left; background: var(--kb-field); color: var(--kb-ink); border: 1px solid var(--kb-line); line-height: 1.4; }
-    .choice-grid button small { display: block; color: var(--kb-muted); font-size: 11px; font-weight: 400; margin-top: 1px; }
-    .choice-grid button:hover { border-color: var(--kb-brand); }
-    .choice-grid button.is-selected { border-color: var(--kb-brand); box-shadow: inset 3px 0 0 var(--kb-brand); }
-    .choice-grid button:disabled { opacity: 0.45; cursor: not-allowed; }
-    .api-box { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--kb-line); }
     select {
       width: 100%; box-sizing: border-box; margin-bottom: 8px; padding: 7px 8px;
       border: 1px solid var(--kb-line); border-radius: 6px; background: var(--kb-field); color: var(--kb-ink);
@@ -114,10 +78,7 @@
       font-size: 11px; font-weight: 700; text-align: left;
     }
     .text-action:hover { background: transparent; color: var(--kb-brand-dark); }
-    .secondary-action {
-      margin-bottom: 10px; background: var(--kb-field); color: var(--kb-ink);
-      border: 1px solid var(--kb-line);
-    }
+    .secondary-action { background: var(--kb-field); color: var(--kb-ink); border: 1px solid var(--kb-line); }
     .secondary-action:hover { background: var(--kb-paper); }
     .danger { margin-top: 8px; background: transparent; color: #c2410c; border: 1px solid color-mix(in srgb, #c2410c 45%, var(--kb-line)); }
     .danger:hover { background: color-mix(in srgb, #c2410c 8%, var(--kb-field)); }
@@ -126,9 +87,80 @@
       padding: 8px; margin-bottom: 8px; border: 1px solid var(--kb-line); border-radius: 6px;
       background: var(--kb-field); color: var(--kb-ink);
       word-break: break-all; user-select: all; -webkit-user-select: all;
+      white-space: pre-wrap;
     }
+    /* 状态灯 */
+    .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
+    .dot.green { background: var(--kb-brand); animation: kb-pulse 2.4s ease-in-out infinite; }
+    .dot.amber { background: var(--kb-amber); box-shadow: 0 0 0 3px color-mix(in srgb, var(--kb-amber) 16%, transparent); }
+    @keyframes kb-pulse {
+      0%, 100% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--kb-brand) 22%, transparent); }
+      50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--kb-brand) 8%, transparent); }
+    }
+    /* 七状态屏（A-G）：同一容器内切换 + 滑入过渡（A→B 是换屏不是灰按钮） */
+    .screen { transition: opacity .25s ease, transform .25s ease; }
+    .screen.enter { opacity: 0; transform: translateX(14px); }
+    .hero { padding: 12px; border: 1px solid color-mix(in srgb, var(--kb-brand) 35%, var(--kb-line)); border-radius: 8px; background: color-mix(in srgb, var(--kb-brand) 4%, var(--kb-field)); }
+    .hero-title { font-size: 14px; font-weight: 800; margin-bottom: 4px; }
+    .hero-copy { color: var(--kb-muted); font-size: 11.5px; line-height: 1.55; margin-bottom: 10px; }
+    .hero.green { border-color: var(--kb-brand); background: color-mix(in srgb, var(--kb-brand) 7%, var(--kb-field)); }
+    .hero.amber { border-color: color-mix(in srgb, var(--kb-amber) 45%, var(--kb-line)); background: var(--kb-amber-bg); }
+    .choice-grid { display: grid; gap: 6px; }
+    .choice-grid button { text-align: left; background: var(--kb-field); color: var(--kb-ink); border: 1px solid var(--kb-line); line-height: 1.4; }
+    .choice-grid button small { display: block; color: var(--kb-muted); font-size: 11px; font-weight: 400; margin-top: 1px; }
+    .choice-grid button:hover { border-color: var(--kb-brand); }
+    .choice-grid button.is-selected { border-color: var(--kb-brand); box-shadow: inset 3px 0 0 var(--kb-brand); }
+    .divider { text-align: center; color: var(--kb-muted); font-size: 11px; margin: 10px 0 6px; }
+    .back-link { display: inline-block; margin-bottom: 8px; color: var(--kb-muted); }
+    .back-link:hover { color: var(--kb-ink); }
+    .wait { margin-top: 10px; text-align: center; color: var(--kb-muted); font-size: 11px; line-height: 1.5; }
+    .wait .spin { display: inline-block; width: 10px; height: 10px; border: 2px solid var(--kb-line); border-top-color: var(--kb-brand); border-radius: 50%; animation: kb-spin 1s linear infinite; vertical-align: -1px; margin-right: 6px; }
+    @keyframes kb-spin { to { transform: rotate(360deg); } }
+    .form-err { color: var(--kb-red); font-size: 11.5px; line-height: 1.45; margin: -4px 0 8px; }
+    .conn-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+    .conn-title { font-size: 14px; font-weight: 800; }
+    .conn-detail { display: block; color: var(--kb-muted); font-size: 11px; margin-top: 3px; }
+    .row-action {
+      width: auto; min-width: 48px; padding: 5px 8px; border: 1px solid var(--kb-line);
+      background: var(--kb-field); color: var(--kb-ink); font-size: 12px; border-radius: 6px;
+    }
+    .row-action:hover { background: var(--kb-paper); }
+    .row-action.primary { background: var(--kb-brand); border-color: var(--kb-brand); color: #fff; font-weight: 600; }
+    .row-action.primary:hover { background: var(--kb-brand-dark); }
+    .upgrade-banner {
+      margin-top: 8px; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--kb-amber) 45%, var(--kb-line));
+      border-radius: 6px; background: var(--kb-amber-bg); font-size: 11.5px; line-height: 1.5;
+    }
+    .upgrade-banner .text-action { color: var(--kb-amber); }
+    /* E 态下方功能区（沿用行+面板 disclosure 模式） */
+    .status-grid { margin-top: 12px; display: grid; gap: 8px; }
+    .status-row {
+      display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center;
+      padding: 10px; background: var(--kb-soft); border-radius: 6px; border: 1px solid transparent;
+    }
+    .row-label { display: block; color: var(--kb-muted); font-size: 11px; margin-bottom: 3px; }
+    .row-value { display: block; color: var(--kb-ink); font-size: 13px; font-weight: 700; line-height: 1.35; }
+    .row-detail { display: block; color: var(--kb-muted); font-size: 11px; line-height: 1.35; margin-top: 2px; }
+    .panel {
+      margin-top: 10px; padding: 10px; border: 1px solid var(--kb-line); border-radius: 6px;
+      background: color-mix(in srgb, var(--kb-field) 80%, var(--kb-soft));
+    }
+    .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+    .panel-title { font-weight: 700; }
+    .panel-close {
+      width: auto; min-width: 44px; padding: 4px 8px; border: 1px solid var(--kb-line);
+      background: var(--kb-field); color: var(--kb-muted); font-size: 12px; border-radius: 6px;
+    }
+    .panel-close:hover { background: var(--kb-paper); color: var(--kb-ink); }
     .row-info { cursor: pointer; min-width: 0; }
-    /* iOS 风格开关：只用于真正双向可选的功能（Notion 备份）。AI 引擎没有开关。 */
+    .status-block { display: grid; gap: 0; }
+    .status-block .panel { margin-top: 0; border-top: none; border-radius: 0 0 6px 6px; }
+    .status-block:has(.panel:not([hidden])) .status-row {
+      border-radius: 6px 6px 0 0;
+      border-color: var(--kb-line);
+      border-bottom: none;
+    }
+    /* iOS 风格开关：只用于真正双向可选的功能（Notion 备份）。AI 连接没有开关。 */
     .kb-switch { position: relative; display: inline-block; flex: 0 0 auto; align-self: center; }
     .kb-switch input {
       position: absolute; inset: 0; width: 100%; height: 100%;
@@ -150,47 +182,12 @@
     .kb-switch input:checked + .kb-knob::after { left: 18px; }
     .kb-switch input:disabled + .kb-knob { opacity: .45; }
     .kb-switch input:disabled { cursor: not-allowed; }
-    /* 面板从属于父行：在行的正下方展开，圆角相接成一张卡片（disclosure 模式） */
-    .status-block { display: grid; gap: 0; }
-    .status-block .panel { margin-top: 0; border-top: none; border-radius: 0 0 6px 6px; }
-    .status-block:has(.panel:not([hidden])) .status-row {
-      border-radius: 6px 6px 0 0;
-      border-color: var(--kb-line);
-      border-bottom: none;
-    }
-    /* 状态灯 */
-    .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
-    .dot.green { background: var(--kb-brand); animation: kb-pulse 2.4s ease-in-out infinite; }
-    .dot.amber { background: var(--kb-amber); box-shadow: 0 0 0 3px color-mix(in srgb, var(--kb-amber) 16%, transparent); }
-    @keyframes kb-pulse {
-      0%, 100% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--kb-brand) 22%, transparent); }
-      50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--kb-brand) 8%, transparent); }
-    }
-    /* 首次配置引导卡（S0 / S1） */
-    .hero { margin-top: 12px; padding: 12px; border: 1px solid color-mix(in srgb, var(--kb-brand) 35%, var(--kb-line)); border-radius: 8px; background: color-mix(in srgb, var(--kb-brand) 4%, var(--kb-field)); }
-    .hero-title { font-size: 14px; font-weight: 800; margin-bottom: 4px; }
-    .hero-copy { color: var(--kb-muted); font-size: 11.5px; line-height: 1.55; }
-    .stepper { display: grid; gap: 10px; margin-top: 12px; }
-    .step { display: grid; grid-template-columns: 22px minmax(0, 1fr); column-gap: 8px; row-gap: 6px; }
-    .step-num { width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--kb-line); color: var(--kb-muted); font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; background: var(--kb-field); box-sizing: border-box; }
-    .step-title { font-size: 12.5px; font-weight: 700; align-self: center; }
-    .step.is-active .step-num { border-color: var(--kb-brand); color: var(--kb-brand); }
-    .step.is-done .step-num { background: var(--kb-brand); border-color: var(--kb-brand); color: #fff; }
-    .step.is-done .step-title { color: var(--kb-muted); }
-    .step.is-muted .step-num { opacity: .6; }
-    .step.is-muted .step-title { color: var(--kb-muted); font-weight: 600; }
-    .step-body { grid-column: 2; }
-    .wait { margin-top: 10px; text-align: center; color: var(--kb-muted); font-size: 11px; }
-    .wait .spin { display: inline-block; width: 10px; height: 10px; border: 2px solid var(--kb-line); border-top-color: var(--kb-brand); border-radius: 50%; animation: kb-spin 1s linear infinite; vertical-align: -1px; margin-right: 6px; }
-    @keyframes kb-spin { to { transform: rotate(360deg); } }
-    /* 暂停：刻意做成配置台底部的一行灰字，不是开关 */
-    .pause-zone { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--kb-line); }
-    .pause-link { width: auto; padding: 0; border: 0; background: transparent; color: var(--kb-muted); font-size: 11px; font-weight: 600; text-align: left; }
+    .indep-label { font-size: 10px; color: var(--kb-muted); text-transform: uppercase; letter-spacing: .5px; margin: 4px 0 0; opacity: .8; }
+    .pause-link { display: block; width: auto; margin: 12px auto 0; padding: 0; border: 0; background: transparent; color: var(--kb-muted); font-size: 11px; font-weight: 600; }
     .pause-link:hover { background: transparent; color: var(--kb-ink); text-decoration: underline; }
-    .pause-confirm .row-action { margin-right: 6px; }
   </style>
 </head>
-<body>
+<body data-state="">
   <div class="popup-head">
     <img src="../../assets/icons/icon128.png" width="36" height="36" alt="" aria-hidden="true">
     <div>
@@ -199,220 +196,185 @@
     </div>
   </div>
 
-  <button id="notebookBtn">打开记忆笔记本</button>
+  <!-- 仅 E 已连接态显示（设计定稿 2026-08-09：未连接时它依赖的后端是空/报错，抬高第一屏门槛） -->
+  <button id="notebookBtn" hidden>打开记忆笔记本</button>
   <div class="status" id="status"></div>
 
-  <!-- S0：新用户，本地引擎未安装——首次配置是单向必做流程，没有开关 -->
-  <div class="hero" id="s0Hero" hidden>
-    <div class="hero-title">跑一条命令，AI 引擎开始工作</div>
-    <div class="hero-copy">
-      Margin 的核心是 AI：它回应你的批注，越用越懂你。
-      装好本地引擎后会自动连接你电脑上的 AI 服务——只配置一次，数据都留在你自己的电脑上。
-    </div>
-    <div class="stepper">
-      <div class="step is-active">
-        <span class="step-num">1</span>
-        <span class="step-title">安装本地引擎</span>
-        <div class="step-body">
-          <label style="margin-top:4px" id="installStepLabel">复制这条命令，粘贴到「终端」运行（⌘+空格 搜 Terminal）</label>
-          <div class="cmd-box" id="installCmdBox"></div>
-          <button id="copyInstallCmdBtn">复制命令</button>
-        </div>
-      </div>
-      <div class="step is-muted">
-        <span class="step-num">2</span>
-        <span class="step-title">自动连接 AI 服务</span>
-        <div class="step-body">
-          <div class="helper" style="margin-top:2px">按顺序检测：Claude Code → Codex → API Key，连上哪个用哪个，不用你选。</div>
-        </div>
-      </div>
-      <div class="step is-muted">
-        <span class="step-num">3</span>
-        <span class="step-title">完成，绿灯常亮</span>
-      </div>
-    </div>
-    <div class="wait"><span class="spin"></span>正在等待引擎上线——装好后自动完成后两步，不用刷新</div>
-  </div>
-
-  <!-- S1：引擎在线但什么服务都没连上——唯一需要用户动手的兜底态 -->
-  <div class="hero" id="s1Hero" hidden>
-    <div class="hero-title">引擎已上线，还差一个 AI 服务</div>
-    <div class="hero-copy" id="s1Probe">
-      已自动查找：Claude Code（未检测到）· Codex（未检测到）。
-      粘贴一个 API Key 就能开启。之后如果装了 Claude Code 或 Codex，在配置台一键切换。
-    </div>
-    <div class="stepper">
-      <div class="step is-done">
-        <span class="step-num">✓</span>
-        <span class="step-title">本地引擎已上线</span>
-      </div>
-      <div class="step is-active">
-        <span class="step-num">2</span>
-        <span class="step-title">连接 AI 服务（API Key）</span>
-        <div class="step-body">
-          <div style="margin-top:4px">
-            <label for="s1ApiProvider">API 服务</label>
-            <select id="s1ApiProvider">
-              <option value="qwen">千问 / Qwen</option>
-              <option value="openrouter">OpenRouter</option>
-            </select>
-            <div id="s1QwenEndpointWrap">
-              <label for="s1QwenEndpoint">千问服务区域</label>
-              <select id="s1QwenEndpoint">
-                <option value="qwen_cn">阿里云百炼 / 中国内地</option>
-                <option value="qwen_global">Qwen Global / 新加坡</option>
-                <option value="qwen_coding_cn">Qwen Coding Plan / 中国内地</option>
-                <option value="qwen_coding_global">Qwen Coding Plan / Global</option>
-              </select>
-            </div>
-            <label for="s1ApiModel">默认模型</label>
-            <input id="s1ApiModel" type="text" value="qwen3.5-plus">
-            <label for="s1ApiKey">API Key</label>
-            <input id="s1ApiKey" type="password" placeholder="粘贴 API Key">
-          </div>
-          <button id="s1SaveBtn" disabled>保存，开启 AI</button>
-        </div>
-      </div>
-      <div class="step is-muted">
-        <span class="step-num">3</span>
-        <span class="step-title">完成，绿灯常亮</span>
-      </div>
-    </div>
-  </div>
-
-  <div class="status-grid">
-    <!-- AI 引擎行：S2 绿灯运行态 / SE 黄灯故障态。没有开关。 -->
-    <div class="status-block" id="aiBlock" hidden>
-      <div class="status-row">
-        <div class="row-info" id="aiRowInfo">
-          <span class="row-label">AI 引擎</span>
-          <span class="row-value" id="aiStatus">正在检查...</span>
-          <span class="row-detail" id="aiDetail"></span>
-        </div>
-        <button class="row-action" id="aiActionBtn">详情</button>
-      </div>
-
-      <!-- S2 配置台：切换服务是一等操作，暂停是底部灰字 -->
-      <section class="panel" id="consolePanel" hidden>
-        <div class="panel-head">
-          <div class="panel-title">引擎配置台</div>
-          <button class="panel-close" id="closeConsoleBtn">收起</button>
-        </div>
-        <div class="helper" id="consoleSummary" style="margin-top:0; margin-bottom:8px;"></div>
-        <label>切换 AI 服务</label>
+  <div id="screens">
+    <!-- A 未连接·初始：只做一个决策——用哪个 AI -->
+    <div class="screen" id="screenA" hidden>
+      <div class="hero">
+        <div class="hero-title">让 Margin 用上你的 AI</div>
+        <div class="hero-copy">选一个你在用的 AI，Margin 会让它帮你在本地准备好并连上。数据都留在你自己的电脑上。</div>
         <div class="choice-grid">
-          <button data-provider="claude_code" id="useClaudeBtn">Claude Code 直连<small>使用你的 Claude 订阅</small></button>
-          <button data-provider="codex_cli" id="useCodexBtn">Codex 直连<small>使用你的 ChatGPT 订阅</small></button>
-          <button data-provider="api" id="useApiBtn">API Key 供能<small>千问 / OpenRouter</small></button>
+          <button id="aChooseClaude">用 Claude Code 连接<small>使用你的 Claude 订阅</small></button>
+          <button id="aChooseCodex">用 Codex 连接<small>使用你的 ChatGPT 订阅</small></button>
         </div>
-        <div class="api-box" id="claudeConfigFields">
-          <label for="claudeBaseUrl">Claude Base URL（可选）</label>
-          <input id="claudeBaseUrl" type="text" placeholder="留空使用 Claude Code 默认配置">
-        </div>
-        <div class="api-box" id="apiConfigFields">
-          <label for="apiProvider">API 服务</label>
-          <select id="apiProvider">
-            <option value="qwen">千问 / Qwen</option>
-            <option value="openrouter">OpenRouter</option>
+        <div class="divider">— 没有这些？ —</div>
+        <button class="text-action" id="aChooseApi">用 API Key 连接（次选）</button>
+      </div>
+    </div>
+
+    <!-- B 等待连接：给一段话粘给正开着的 agent，后台轮询自动变绿灯 -->
+    <div class="screen" id="screenB" hidden>
+      <button class="text-action back-link" id="bBack">← 选错了，换一个</button>
+      <div class="hero">
+        <div class="hero-title">把这段话发给你的 <span class="bProv">Claude Code</span></div>
+        <div class="hero-copy">粘到你正开着的 <span class="bProv">Claude Code</span> 对话框里，它会帮你装好并连上。</div>
+        <div class="cmd-box" id="bPrompt"></div>
+        <button id="bCopyBtn">复制这段话</button>
+        <div class="wait" id="bWait" hidden><span class="spin"></span>已复制。粘给 <span class="bProv">Claude Code</span> 后，这里会自动亮绿灯，不用刷新</div>
+        <div class="wait" id="bSlow" hidden><button class="text-action" id="bSlowLink">等了挺久？看看哪里不对</button></div>
+      </div>
+    </div>
+
+    <!-- C API 表单：没有 Claude Code / Codex 时的次选路径 -->
+    <div class="screen" id="screenC" hidden>
+      <button class="text-action back-link" id="cBack">← 换回 Claude Code / Codex</button>
+      <div class="hero">
+        <div class="hero-title">用 API Key 连接</div>
+        <label for="cProvider">服务商</label>
+        <select id="cProvider">
+          <option value="qwen">千问 / Qwen</option>
+          <option value="openrouter">OpenRouter</option>
+        </select>
+        <div id="cQwenWrap">
+          <label for="cQwenEndpoint">千问服务区域</label>
+          <select id="cQwenEndpoint">
+            <option value="qwen_cn">阿里云百炼 / 中国内地</option>
+            <option value="qwen_global">Qwen Global / 新加坡</option>
+            <option value="qwen_coding_cn">Qwen Coding Plan / 中国内地</option>
+            <option value="qwen_coding_global">Qwen Coding Plan / Global</option>
           </select>
-          <div id="qwenEndpointWrap">
-            <label for="qwenEndpoint">千问服务区域</label>
-            <select id="qwenEndpoint">
-              <option value="qwen_cn">阿里云百炼 / 中国内地</option>
-              <option value="qwen_global">Qwen Global / 新加坡</option>
-              <option value="qwen_coding_cn">Qwen Coding Plan / 中国内地</option>
-              <option value="qwen_coding_global">Qwen Coding Plan / Global</option>
-            </select>
-          </div>
-          <label for="apiModel">默认模型</label>
-          <input id="apiModel" type="text" value="qwen3.5-plus">
-          <label for="apiKey">API Key</label>
-          <input id="apiKey" type="password" placeholder="粘贴 API Key">
         </div>
-        <button id="saveAiBtn">保存并切换</button>
-        <div class="helper" id="aiDraftHint">切换只影响模型供能，你的批注和记忆不受影响。</div>
-        <div class="pause-zone">
-          <button class="pause-link" id="pauseLink">需要临时暂停 AI？</button>
-          <div class="pause-confirm" id="pauseConfirm" hidden>
-            <div class="helper" style="margin-top:6px">暂停后 AI 停止回应批注，划线批注仍正常保存。</div>
-            <div style="margin-top:6px">
-              <button class="row-action" id="pauseBtn">暂停</button>
-              <button class="row-action" id="cancelPauseBtn">取消</button>
+        <label for="cModel">模型</label>
+        <input id="cModel" type="text" value="qwen3.5-plus">
+        <label for="cKey">API Key</label>
+        <input id="cKey" type="password" placeholder="粘贴 API Key">
+        <div class="helper" id="cEndpointNote" style="margin:-4px 0 8px">接入点已自动配好，不需要填域名。</div>
+        <div class="form-err" id="cErr" hidden></div>
+        <button id="cSaveBtn">保存，连接</button>
+      </div>
+    </div>
+
+    <!-- D 连接遇到问题：主动作是帮你连上（重试/诊断），不是推 API Key -->
+    <div class="screen" id="screenD" hidden>
+      <div class="hero amber">
+        <div class="hero-title"><span class="dot amber"></span>还没连上</div>
+        <div class="hero-copy">可能是本地没准备成功，或没找到你的 <span id="dProv">AI</span>。不是你的错，我们帮你查。</div>
+        <button id="dRetryBtn">重新试一次</button>
+        <button class="secondary-action" id="dSwitchBtn" style="margin-top:6px">换个 AI</button>
+        <div style="margin-top:8px"><button class="text-action" id="dDiagToggle">看看哪里出错（展开诊断）</button></div>
+        <div class="panel" id="dDiagPanel" hidden>
+          <div class="helper" id="dDiagContent" style="margin-top:0">正在读取…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- E 已连接：绿灯最健康；切换是明面按钮；Notion 独立区块 -->
+    <div class="screen" id="screenE" hidden>
+      <div class="hero green">
+        <div class="conn-row">
+          <div>
+            <span class="conn-title"><span class="dot green"></span>已连接 · <span id="eProv">AI</span></span>
+            <span class="conn-detail">越用越懂你</span>
+          </div>
+          <button class="row-action" id="eSwitchBtn">切换</button>
+        </div>
+      </div>
+      <div class="upgrade-banner" id="eUpgrade" hidden>
+        引擎版本偏旧，部分功能可能不可用。
+        <button class="text-action" id="eUpgradeCopy">复制升级指令，发给你的 AI</button>
+      </div>
+
+      <div class="status-grid">
+        <div class="status-block">
+          <div class="status-row">
+            <div>
+              <span class="row-label">划线批注</span>
+              <span class="row-value" id="vaultStatus">正在统计...</span>
+              <span class="row-detail" id="vaultDetail"></span>
             </div>
+            <button class="row-action" id="exportConfigBtn">导出</button>
           </div>
+          <section class="panel" id="exportPanel" hidden>
+            <div class="panel-head">
+              <div class="panel-title">导出本机批注</div>
+              <button class="panel-close" id="closeExportPanelBtn">收起</button>
+            </div>
+            <button id="exportMdBtn">导出 Markdown（适合阅读）</button>
+            <button class="kb-secondary" id="exportJsonBtn">导出 JSON（完整数据，可迁移）</button>
+            <div class="helper">导出这台电脑浏览器里保存的划线、批注和 AI 回复。备份或换电脑时使用，不需要联网。</div>
+          </section>
         </div>
-      </section>
 
-      <!-- SE 修复面板：install.sh 幂等，重跑即恢复 -->
-      <section class="panel" id="startPanel" hidden>
-        <div class="panel-head">
-          <div class="panel-title">启动引擎</div>
-          <button class="panel-close" id="closeStartPanelBtn">收起</button>
+        <div class="indep-label">— 以下与 AI 连接无关 —</div>
+        <div class="status-block">
+          <div class="status-row">
+            <div class="row-info" id="notionRowInfo">
+              <span class="row-label">Notion 云备份</span>
+              <span class="row-value" id="backupStatus">正在检查...</span>
+              <span class="row-detail" id="backupDetail"></span>
+            </div>
+            <label class="kb-switch" title="开启或暂停 Notion 备份">
+              <input type="checkbox" id="notionSwitch">
+              <span class="kb-knob"></span>
+            </label>
+          </div>
+          <section class="panel" id="notionPanel" hidden>
+            <div class="panel-head">
+              <div class="panel-title">Notion 云端备份</div>
+              <button class="panel-close" id="closeNotionPanelBtn">收起</button>
+            </div>
+            <label for="notionToken">Notion Token</label>
+            <input id="notionToken" type="password" placeholder="ntn_...">
+            <button class="text-action" id="openNotionIntegrationsBtn">打开 Notion integrations 页面</button>
+            <label for="notionParentPage">放数据库的 Notion 页面链接</label>
+            <input id="notionParentPage" type="text" placeholder="新建一个空白页，授权 integration 后粘贴页面链接">
+            <button class="secondary-action" id="createNotionDatabaseBtn" style="margin-bottom:10px">自动创建数据库</button>
+            <label for="notionDatabaseId">Database ID 或数据库链接</label>
+            <input id="notionDatabaseId" type="text" placeholder="可粘贴整段 Notion 数据库链接">
+            <button id="saveNotionBtn">保存并开启</button>
+            <button class="danger" id="disableNotionBtn">暂停云端备份</button>
+            <div class="helper" id="notionHint">
+              <strong>第一次配置：</strong>在 Notion 的 My integrations 创建 integration，复制 Secret；再打开目标数据库，在 Connections 里授权这个 integration。Database ID 可直接粘贴数据库链接，Margin 会自动提取。
+            </div>
+          </section>
         </div>
-        <label style="margin-top:0" id="startStepLabel">复制这条命令，粘贴到「终端」运行</label>
-        <div class="cmd-box" id="startCmdBox"></div>
-        <button id="copyStartCmdBtn">复制命令</button>
-        <div class="helper" id="startHelp">
-          跑完后回到这里，状态会自动变绿，不用刷新。<br>
-          <strong>反复出现这个状态？</strong>同一条命令兼作修复（顺便自动更新到最新版），批注数据不受影响。
-        </div>
-      </section>
-    </div>
-
-    <div class="status-block">
-      <div class="status-row">
-        <div>
-          <span class="row-label">划线批注</span>
-          <span class="row-value" id="vaultStatus">正在统计...</span>
-          <span class="row-detail" id="vaultDetail"></span>
-        </div>
-        <button class="row-action" id="exportConfigBtn">导出</button>
       </div>
-      <section class="panel" id="exportPanel" hidden>
-        <div class="panel-head">
-          <div class="panel-title">导出本机批注</div>
-          <button class="panel-close" id="closeExportPanelBtn">收起</button>
-        </div>
-        <button id="exportMdBtn">导出 Markdown（适合阅读）</button>
-        <button class="kb-secondary" id="exportJsonBtn">导出 JSON（完整数据，可迁移）</button>
-        <div class="helper">导出这台电脑浏览器里保存的划线、批注和 AI 回复。备份或换电脑时使用，不需要联网。</div>
-      </section>
+
+      <button class="pause-link" id="ePauseLink">暂停 AI</button>
     </div>
 
-    <div class="status-block">
-      <div class="status-row">
-        <div class="row-info" id="notionRowInfo">
-          <span class="row-label">Notion 云备份</span>
-          <span class="row-value" id="backupStatus">正在检查...</span>
-          <span class="row-detail" id="backupDetail"></span>
+    <!-- F 切换 AI：引擎在跑，内部即时切，不重装 -->
+    <div class="screen" id="screenF" hidden>
+      <button class="text-action back-link" id="fBack">← 返回</button>
+      <div class="hero">
+        <div class="hero-title">换一个 AI</div>
+        <div class="hero-copy">切换即时生效，不用重装。你的批注和记忆不受影响。</div>
+        <div class="choice-grid">
+          <button id="fClaude">Claude Code<small id="fClaudeNote">使用你的 Claude 订阅</small></button>
+          <button id="fCodex">Codex<small id="fCodexNote">使用你的 ChatGPT 订阅</small></button>
+          <button id="fApi">API 服务<small id="fApiNote">千问 / OpenRouter</small></button>
         </div>
-        <label class="kb-switch" title="开启或暂停 Notion 备份">
-          <input type="checkbox" id="notionSwitch">
-          <span class="kb-knob"></span>
-        </label>
       </div>
-      <section class="panel" id="notionPanel" hidden>
-    <div class="panel-head">
-      <div class="panel-title">Notion 云端备份</div>
-      <button class="panel-close" id="closeNotionPanelBtn">收起</button>
     </div>
-    <label for="notionToken">Notion Token</label>
-    <input id="notionToken" type="password" placeholder="ntn_...">
-    <button class="text-action" id="openNotionIntegrationsBtn">打开 Notion integrations 页面</button>
-    <label for="notionParentPage">放数据库的 Notion 页面链接</label>
-    <input id="notionParentPage" type="text" placeholder="新建一个空白页，授权 integration 后粘贴页面链接">
-    <button class="secondary-action" id="createNotionDatabaseBtn">自动创建数据库</button>
-    <label for="notionDatabaseId">Database ID 或数据库链接</label>
-    <input id="notionDatabaseId" type="text" placeholder="可粘贴整段 Notion 数据库链接">
-    <button id="saveNotionBtn">保存并开启</button>
-    <button class="danger" id="disableNotionBtn">暂停云端备份</button>
-    <div class="helper" id="notionHint">
-      <strong>第一次配置：</strong>在 Notion 的 My integrations 创建 integration，复制 Secret；再打开目标数据库，在 Connections 里授权这个 integration。Database ID 可直接粘贴数据库链接，Margin 会自动提取。
-    </div>
-      </section>
+
+    <!-- G 已暂停：用户主动暂停（区别于故障），批注照常 -->
+    <div class="screen" id="screenG" hidden>
+      <div class="hero amber">
+        <div class="conn-row">
+          <div>
+            <span class="conn-title"><span class="dot amber"></span>AI 已暂停</span>
+            <span class="conn-detail">划线批注照常保存，AI 暂不回应</span>
+          </div>
+          <button class="row-action primary" id="gResumeBtn">恢复</button>
+        </div>
+      </div>
     </div>
   </div>
 
+  <script src="../common/release-pin.js"></script>
   <script src="../common/vault-core.js"></script>
   <script src="popup.js"></script>
 </body>
