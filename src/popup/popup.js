@@ -1,23 +1,24 @@
 // MV3 popup 脚本：内容必须外置，不能 inline（CSP 默认禁）
 //
-// 七状态状态机（2026-08-09 设计定稿，取代 v4.1 四态）：
+// 六状态状态机（2026-08-09 设计定稿 + 同日验收反馈修订：砍掉暂停 G 态）：
 // A 未连接·初始   → 只做一个决策：用哪个 AI（Claude Code / Codex 主，API Key 折叠次选）
 // B 等待连接      → 选完换屏；给一段话粘给正开着的 agent；后台轮询，检测到就绪自动进 E
 // C API 表单      → 次选路径；Key 无效红字不跳走（真实调用 /config/ai/test 验证）
-// D 连接遇到问题  → 重试 / 换个 AI / 展开诊断；不推 API Key
-// E 已连接 🟢     → 切换是明面按钮；划线批注 + Notion（独立区块）；暂停是底部灰字
+// D 连接遇到问题  → B 的故障版：一句人话说清问题 + 嵌入诊断结果的修复 prompt，
+//                   用户只负责复制转发给 AI；诊断是喂给 agent 读的，不是给用户读的
+// E 已连接 🟢     → 切换是明面按钮；数据备份（划线批注导出 + Notion）合并一个区块
 // F 切换 AI       → 引擎在跑，POST /config/ai 内部即时切，不重装；目标没就绪 → D
-// G 已暂停        → 用户主动暂停（区别于故障）；批注照常
 //
-// 三铁律：引擎对用户隐形（UI 不出现引擎/后端/8766/provider 字样，诊断面板除外）；
+// 三铁律：引擎对用户隐形（UI 不出现引擎/后端/8766/provider 字样，给 agent 的 prompt 除外）；
 // AI 连接与 Notion 独立；失败时主动作是"帮你连上"，不是推 API Key。
 // 硬承诺：粘给 agent → 跑完 → popup 不刷新自动变绿灯（每 2.5s 轮询 /health + /config）。
+// 首次变绿灯时用一行提示介绍记忆笔记本（它此刻才出现，需要被介绍，不能突然冒出来）。
 
 let API_BASE = "http://localhost:8766";
 const API_BASE_OVERRIDE_KEY = "kb_api_base_override"; // 仅测试用：隔离后端实例
 
 const CONN_KEY = "margin_conn_v1";       // { chosen, phase: idle|waiting|connected, waitingSince }
-const AI_PAUSED_KEY = "kb_ai_paused_v1"; // popup 写，content script 在召唤 AI 入口读（沿用旧 key）
+const AI_PAUSED_KEY = "kb_ai_paused_v1"; // 已废弃（暂停功能已砍），启动时清理历史标记
 const VAULT_KEY = "kb_vault_v1";
 const PAIR_TOKEN_KEY = "margin_pair_token"; // 认证配对协议（清单 1.3）：3.3 后端落地前向前兼容
 
@@ -25,12 +26,11 @@ const PROVIDER_LABEL = { claude_code: "Claude Code", codex_cli: "Codex", api: "A
 const SLOW_HINT_MS = 90 * 1000;        // B 态等待超过这个时长，出"看看哪里不对"入口
 const WAIT_GIVEUP_MS = 10 * 60 * 1000; // 重开 popup 时等待已超过这个时长，直接进 D
 
-let cur = null;            // 当前屏：A-G
+let cur = null;            // 当前屏：A-F
 let conn = { chosen: null, phase: "idle", waitingSince: 0 };
 let runtimeState = null;   // GET /config 最近一次成功响应
 let lastHealth = null;     // GET /health 最近一次成功响应
 let pairToken = null;
-let bPromptVariant = "install"; // install | repair
 let _pollTimer = null;
 let _healthFailStreak = 0;
 
@@ -58,9 +58,10 @@ function installPrompt(provider) {
   return `请在我本机装好 Margin 的本地引擎：安装脚本在 ${INSTALL_SH_URL} （官方版本化地址，请从这里装，不要用其他来源）。用我的 ${label} 作为它的 AI。注意：不要覆盖我已有的批注数据（~/.knowledge-base-extension）。装好后启动服务、跑一次健康检查（curl http://localhost:8766/health），告诉我是否连上。需要系统权限或修改已有配置前先跟我说。`;
 }
 
-function repairPrompt(provider) {
+function repairPrompt(provider, diagText) {
   const label = PROVIDER_LABEL[provider] || "Claude Code";
-  return `我本机的 Margin 引擎没连上（可能服务没起、或没找到 ${label}）。请排查：curl http://localhost:8766/health 看服务是否在跑；看 ~/.knowledge-base-extension/.logs/failures.jsonl 里最近的失败；必要时重跑 ~/.knowledge-base-extension/app 里的 start.sh。修好后确认已用 ${label} 连上，告诉我结果。不要覆盖已有批注数据，改配置前先跟我说。`;
+  const diag = diagText ? `我这边看到的情况：${diagText}。` : "";
+  return `我本机的 Margin 引擎没连上（可能服务没起、或没找到 ${label}）。${diag}请排查：curl http://localhost:8766/health 看服务是否在跑；看 ~/.knowledge-base-extension/.logs/failures.jsonl 里最近的失败；必要时重跑 ~/.knowledge-base-extension/app 里的 start.sh。修好后确认已用 ${label} 连上，告诉我结果。不要覆盖已有批注数据，改配置前先跟我说。`;
 }
 
 // ── 持久化：连接进度 / 暂停标记 ──
@@ -77,20 +78,10 @@ async function writeConn(patch) {
   try { await chrome.storage.local.set({ [CONN_KEY]: conn }); } catch {}
 }
 
-async function readAiPaused() {
-  try {
-    const stored = await chrome.storage.local.get(AI_PAUSED_KEY);
-    return !!stored[AI_PAUSED_KEY];
-  } catch {
-    return false;
-  }
-}
-
-async function setAiPaused(paused) {
-  try {
-    if (paused) await chrome.storage.local.set({ [AI_PAUSED_KEY]: true });
-    else await chrome.storage.local.remove(AI_PAUSED_KEY);
-  } catch {}
+// 暂停功能已砍（2026-08-09 验收反馈：不需要让用户暂停 AI）。
+// 旧 key 启动时清理，防止历史标记让 content script 静默压掉召唤 AI 入口。
+async function clearLegacyAiPaused() {
+  try { await chrome.storage.local.remove(AI_PAUSED_KEY); } catch {}
 }
 
 // ── 后端调用（带配对 token；见 1.3 协议） ──
@@ -187,7 +178,7 @@ async function exportVault(format) {
 
 // ── 屏幕切换 ──
 
-const SCREEN_IDS = ["A", "B", "C", "D", "E", "F", "G"];
+const SCREEN_IDS = ["A", "B", "C", "D", "E", "F"];
 
 function go(id, opt = {}) {
   if (opt.chosen) writeConn({ chosen: opt.chosen });
@@ -218,9 +209,8 @@ function go(id, opt = {}) {
 function setupB(opt = {}) {
   const provider = opt.chosen || conn.chosen || "claude_code";
   const label = PROVIDER_LABEL[provider] || "Claude Code";
-  bPromptVariant = opt.variant || "install";
   document.querySelectorAll(".bProv").forEach((el) => { el.textContent = label; });
-  $("bPrompt").textContent = bPromptVariant === "repair" ? repairPrompt(provider) : installPrompt(provider);
+  $("bPrompt").textContent = installPrompt(provider);
   const copied = conn.phase === "waiting";
   $("bWait").hidden = !copied;
   $("bCopyBtn").textContent = copied ? "再复制一次" : "复制这段话";
@@ -298,6 +288,7 @@ async function saveCConfig() {
     if (runtimeState.ai && runtimeState.ai.configured) {
       await writeConn({ chosen: "api", phase: "connected" });
       go("E");
+      setStatus("已连上，记忆笔记本可以用了", "");
     } else {
       $("cErr").textContent = friendlyKeyError((runtimeState.ai || {}).error);
       $("cErr").hidden = false;
@@ -311,47 +302,63 @@ async function saveCConfig() {
   }
 }
 
-// ── D 连接遇到问题 ──
+// ── D 连接遇到问题：B 的故障版 ──
+// 交互模式与 B 完全一致（问题一句话 → 写好的话 → 复制转发 → 自动等绿灯）。
+// 诊断结果不给用户读，直接嵌进 prompt 给 agent 读。
 
 function setupD() {
-  setText("dProv", PROVIDER_LABEL[conn.chosen] || "AI");
-  $("dDiagPanel").hidden = true;
-  $("dDiagToggle").textContent = "看看哪里出错（展开诊断）";
+  setText("dProblem", "正在看是哪里的问题…");
+  $("dPrompt").textContent = repairPrompt(conn.chosen, "");
+  $("dWait").hidden = true;
+  $("dCopyBtn").textContent = "复制这段话";
+  refreshDProblem();
 }
 
-async function loadDiagnostics() {
-  const lines = [];
+async function refreshDProblem() {
+  const label = PROVIDER_LABEL[conn.chosen] || "AI";
+  let problem = "";
+  let diag = "";
   try {
     const res = await fetch(`${API_BASE}/health`);
-    if (res.ok) {
-      lines.push("本地引擎：在运行");
-      try {
-        const cfg = await api("/config");
-        const ai = cfg.ai || {};
-        if (ai.configured) lines.push(`AI 连接：正常（${ai.displayName || ai.selectedProvider}）`);
-        else lines.push(`AI 连接：没接上${ai.error ? ` — ${ai.error}` : ""}`);
-      } catch (e) {
-        lines.push(`读取连接状态失败：${e.message}`);
-      }
-      try {
-        const f = await api("/failures?limit=3");
-        if (f.failures && f.failures.length) {
-          lines.push("最近的失败记录：");
-          for (const item of f.failures) {
-            lines.push(`· ${(item.ts || "").slice(0, 16)} ${item.phase || ""} ${item.error_type || ""}`);
-          }
-        } else {
-          lines.push("最近没有失败记录");
-        }
-      } catch {}
-    } else {
-      lines.push("本地引擎：没有响应");
+    if (!res.ok) throw new Error("health not ok");
+    let detail = "";
+    try {
+      const cfg = await api("/config");
+      const ai = cfg.ai || {};
+      if (ai.configured) return; // 其实已连上：轮询下一拍会带去 E，这里不用管
+      detail = ai.error ? String(ai.error).slice(0, 140) : "";
+    } catch (e) {
+      detail = e.message;
     }
+    let failures = "";
+    try {
+      const f = await api("/failures?limit=3");
+      if (f.failures && f.failures.length) {
+        failures = f.failures
+          .map((i) => `${(i.ts || "").slice(0, 16)} ${i.phase || ""} ${i.error_type || ""}`.trim())
+          .join("；");
+      }
+    } catch {}
+    problem = `本地准备好了，但还没找到你的 ${label}`;
+    diag = `本地服务(localhost:8766)在跑，但 AI 没接上${detail ? `，报错：${detail}` : ""}${failures ? `。最近失败记录：${failures}` : ""}`;
   } catch {
-    lines.push("本地引擎：没有响应（服务没在跑，或还没安装）");
-    lines.push("把上面的话发给你的 AI，它能帮你装好/修好。");
+    problem = "本地还没准备好（可能没装完，或没在运行）";
+    diag = "curl http://localhost:8766/health 没有响应";
   }
-  $("dDiagContent").textContent = lines.join("\n");
+  if (cur !== "D") return; // 用户已离开 D 屏，别写穿
+  setText("dProblem", `问题：${problem}。不是你的错——把下面这段话发给你的 ${label}，它会帮你修好。`);
+  $("dPrompt").textContent = repairPrompt(conn.chosen, diag);
+}
+
+async function copyDPrompt() {
+  try {
+    await navigator.clipboard.writeText($("dPrompt").textContent);
+  } catch {
+    setStatus("复制失败，请手动选中这段话复制", "error");
+    return;
+  }
+  $("dWait").hidden = false;
+  $("dCopyBtn").textContent = "再复制一次";
 }
 
 // ── E 已连接 ──
@@ -584,10 +591,12 @@ async function pollTick() {
   runtimeState = cfg;
   const configured = Boolean(cfg.ai && cfg.ai.configured);
 
-  // C（正在填表单）/ F（正在选）/ G（用户主动暂停）不被自动跳转打断
+  // C（正在填表单）/ F（正在选）不被自动跳转打断
   if (configured && (cur === "A" || cur === "B" || cur === "D")) {
     await writeConn({ phase: "connected" });
-    go((await readAiPaused()) ? "G" : "E");
+    go("E");
+    // 记忆笔记本此刻才出现：在出现的瞬间介绍它，不能突然冒出来（2026-08-09 验收反馈）
+    setStatus("已连上，记忆笔记本可以用了", "");
     return;
   }
   if (cur === "B" && conn.phase === "waiting" && Date.now() - (conn.waitingSince || 0) > SLOW_HINT_MS) {
@@ -603,7 +612,6 @@ function startConnPolling() {
 // ── 初始状态决策 ──
 
 async function decideInitialState() {
-  const paused = await readAiPaused();
   try {
     const res = await fetch(`${API_BASE}/health`);
     if (!res.ok) throw new Error("health not ok");
@@ -611,17 +619,17 @@ async function decideInitialState() {
     runtimeState = await api("/config");
     if (runtimeState.ai && runtimeState.ai.configured) {
       await writeConn({ phase: "connected" });
-      go(paused ? "G" : "E");
+      go("E");
       return;
     }
     // 引擎在跑但 AI 没接上：等待中回 B 继续等，否则回选择屏
-    if (conn.phase === "waiting") go("B", { variant: "install" });
+    if (conn.phase === "waiting") go("B");
     else go("A");
   } catch {
     // 引擎不在：按此前进度决定
     if (conn.phase === "waiting") {
       if (Date.now() - (conn.waitingSince || 0) > WAIT_GIVEUP_MS) go("D");
-      else go("B", { variant: "install" });
+      else go("B");
     } else if (conn.phase === "connected") {
       go("D"); // 连过但现在失联 = 故障，不是新用户
     } else {
@@ -640,8 +648,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   // A：选 AI
-  $("aChooseClaude").addEventListener("click", () => go("B", { chosen: "claude_code", variant: "install" }));
-  $("aChooseCodex").addEventListener("click", () => go("B", { chosen: "codex_cli", variant: "install" }));
+  $("aChooseClaude").addEventListener("click", () => go("B", { chosen: "claude_code" }));
+  $("aChooseCodex").addEventListener("click", () => go("B", { chosen: "codex_cli" }));
   $("aChooseApi").addEventListener("click", () => go("C", { chosen: "api" }));
 
   // B：复制 + 返回 + 慢速出口
@@ -661,33 +669,15 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   $("cSaveBtn").addEventListener("click", saveCConfig);
 
-  // D：重试（修复变体）/ 换 AI / 诊断
-  $("dRetryBtn").addEventListener("click", async () => {
-    await writeConn({ phase: "waiting", waitingSince: Date.now() });
-    go("B", { variant: "repair" });
-  });
+  // D：复制修复 prompt / 换 AI
+  $("dCopyBtn").addEventListener("click", copyDPrompt);
   $("dSwitchBtn").addEventListener("click", async () => {
     await writeConn({ phase: "idle", waitingSince: 0 });
     go("A");
   });
-  $("dDiagToggle").addEventListener("click", () => {
-    const panel = $("dDiagPanel");
-    panel.hidden = !panel.hidden;
-    if (!panel.hidden) {
-      $("dDiagToggle").textContent = "收起诊断";
-      $("dDiagContent").textContent = "正在读取…";
-      loadDiagnostics();
-    } else {
-      $("dDiagToggle").textContent = "看看哪里出错（展开诊断）";
-    }
-  });
 
-  // E：切换 / 暂停 / 升级指令
+  // E：切换 / 升级指令
   $("eSwitchBtn").addEventListener("click", () => go("F"));
-  $("ePauseLink").addEventListener("click", async () => {
-    await setAiPaused(true);
-    go("G");
-  });
   $("eUpgradeCopy").addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(installPrompt(conn.chosen || "claude_code"));
@@ -702,13 +692,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("fClaude").addEventListener("click", () => switchProvider("claude_code"));
   $("fCodex").addEventListener("click", () => switchProvider("codex_cli"));
   $("fApi").addEventListener("click", () => switchProvider("api"));
-
-  // G：恢复
-  $("gResumeBtn").addEventListener("click", async () => {
-    await setAiPaused(false);
-    if (runtimeState && runtimeState.ai && runtimeState.ai.configured) go("E");
-    else go("D");
-  });
 
   // 导出
   $("exportConfigBtn").addEventListener("click", () => {
@@ -741,6 +724,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (stored[API_BASE_OVERRIDE_KEY]) API_BASE = stored[API_BASE_OVERRIDE_KEY];
     if (stored[PAIR_TOKEN_KEY]) pairToken = stored[PAIR_TOKEN_KEY];
   } catch {}
+  await clearLegacyAiPaused();
   await readConn();
   await tryPair();
   await decideInitialState();

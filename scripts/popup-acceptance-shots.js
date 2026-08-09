@@ -167,12 +167,15 @@ async function waitState(page, s, timeout = 15000) {
   await page.waitForSelector("#bWait:not([hidden])");
   await shot(page, "B-已复制-等待自动绿灯");
 
-  // ── 场景 4：硬承诺——popup 开着不动，引擎上线（codex 就绪）→ 自动变绿灯 E ──
+  // ── 场景 4：硬承诺——popup 开着不动，引擎上线（codex 就绪）→ 自动变绿灯 E
+  //    绿灯瞬间应带"已连上，记忆笔记本可以用了"的介绍行（笔记本此刻才出现，不能突然冒出来） ──
   await startBackend({ MEMAI_LLM_PROVIDER: "codex_cli", MEMAI_LOCAL_AGENT: "codex_cli" }, "configured/codex");
   await waitState(page, "E", 30000);
-  await shot(page, "E-自动变绿灯-硬承诺真实轮询");
+  await shot(page, "E-自动变绿灯-介绍记忆笔记本");
+  const intro = await page.evaluate(() => document.getElementById("status").textContent);
+  if (!intro.includes("记忆笔记本")) throw new Error(`绿灯瞬间应介绍记忆笔记本，实际状态行="${intro}"`);
 
-  // ── 场景 5：E 总览（含记忆笔记本按钮 + 划线批注 + Notion 独立区块） ──
+  // ── 场景 5：E 总览（记忆笔记本按钮 + 数据备份区块：导出与 Notion 同区块） ──
   await page.waitForTimeout(600);
   await shot(page, "E-已连接总览");
 
@@ -188,17 +191,9 @@ async function waitState(page, s, timeout = 15000) {
   await page.waitForTimeout(300);
   await shot(page, "E-已即时切换到ClaudeCode");
 
-  // ── 场景 8：暂停 → G ──
-  await page.click("#ePauseLink");
-  await waitState(page, "G");
-  await page.waitForTimeout(400);
-  await shot(page, "G-已暂停");
+  // （暂停 G 态已砍——2026-08-09 验收反馈：不需要让用户暂停 AI）
 
-  // 恢复回 E，清掉暂停标记，准备下一场景
-  await page.click("#gResumeBtn");
-  await waitState(page, "E");
-
-  // ── 场景 9：C API 表单（引擎在线但未配 AI 的实例） ──
+  // ── 场景 8：C API 表单（引擎在线但未配 AI 的实例） ──
   await stopBackend();
   await startBackend({ MEMAI_LLM_PROVIDER: "api", MEMAI_LLM_API_PROVIDER: "qwen" }, "unconfigured/api-no-key");
   await clearStorage(page);
@@ -211,7 +206,7 @@ async function waitState(page, s, timeout = 15000) {
   await page.waitForTimeout(400);
   await shot(page, "C-API表单-域名自动配");
 
-  // ── 场景 10：无效 Key → 真实调用验证 → 红字不跳走 ──
+  // ── 场景 9：无效 Key → 真实调用验证 → 红字不跳走 ──
   await page.fill("#cKey", "sk-invalid-key-for-acceptance-test");
   await page.click("#cSaveBtn");
   await page.waitForSelector("#cErr:not([hidden])", { timeout: 40000 });
@@ -219,7 +214,8 @@ async function waitState(page, s, timeout = 15000) {
   const stillC = await page.evaluate(() => document.body.dataset.state);
   if (stillC !== "C") throw new Error("C 态验证失败后不应跳走");
 
-  // ── 场景 11：D 还没连上（等待超时 + 引擎失联） ──
+  // ── 场景 10：D 还没连上（等待超时 + 引擎失联）——B 的故障版：
+  //    一句人话说清问题 + 嵌入真实诊断的修复 prompt，用户只负责复制转发 ──
   await stopBackend();
   await clearStorage(page);
   await setStorage(page, {
@@ -228,22 +224,16 @@ async function waitState(page, s, timeout = 15000) {
   });
   await page.reload();
   await waitState(page, "D");
-  await page.waitForTimeout(400);
-  await shot(page, "D-还没连上");
-
-  // ── 场景 12：D 诊断展开（真实读取：引擎无响应） ──
-  await page.click("#dDiagToggle");
   await page.waitForFunction(() => {
-    const el = document.getElementById("dDiagContent");
-    return el && el.textContent && el.textContent !== "正在读取…";
+    const el = document.getElementById("dProblem");
+    return el && el.textContent && !el.textContent.includes("正在看");
   }, { timeout: 10000 });
-  await shot(page, "D-诊断展开");
+  await shot(page, "D-还没连上-问题加修复prompt");
 
-  // ── 场景 13：D 重试 → B 修复变体 prompt ──
-  await page.click("#dRetryBtn");
-  await waitState(page, "B");
-  await page.waitForTimeout(400);
-  await shot(page, "B-修复变体prompt");
+  // ── 场景 11：D 复制修复 prompt → 等待行出现，照旧自动等绿灯 ──
+  await page.click("#dCopyBtn");
+  await page.waitForSelector("#dWait:not([hidden])");
+  await shot(page, "D-已复制-等待自动绿灯");
 
   await context.close();
   await stopBackend();

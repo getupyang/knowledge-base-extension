@@ -183,8 +183,6 @@
     .kb-switch input:disabled + .kb-knob { opacity: .45; }
     .kb-switch input:disabled { cursor: not-allowed; }
     .indep-label { font-size: 10px; color: var(--kb-muted); text-transform: uppercase; letter-spacing: .5px; margin: 4px 0 0; opacity: .8; }
-    .pause-link { display: block; width: auto; margin: 12px auto 0; padding: 0; border: 0; background: transparent; color: var(--kb-muted); font-size: 11px; font-weight: 600; }
-    .pause-link:hover { background: transparent; color: var(--kb-ink); text-decoration: underline; }
   </style>
 </head>
 <body data-state="">
@@ -257,27 +255,25 @@
       </div>
     </div>
 
-    <!-- D 连接遇到问题：主动作是帮你连上（重试/诊断），不是推 API Key -->
+    <!-- D 连接遇到问题：B 的故障版——我们查清问题、写好话，用户只负责转发给 AI
+         （2026-08-09 验收反馈：诊断不是给用户读的，是喂进 prompt 给 agent 读的；砍掉重试按钮和诊断面板） -->
     <div class="screen" id="screenD" hidden>
       <div class="hero amber">
         <div class="hero-title"><span class="dot amber"></span>还没连上</div>
-        <div class="hero-copy">可能是本地没准备成功，或没找到你的 <span id="dProv">AI</span>。不是你的错，我们帮你查。</div>
-        <button id="dRetryBtn">重新试一次</button>
+        <div class="hero-copy" id="dProblem">正在看是哪里的问题…</div>
+        <div class="cmd-box" id="dPrompt"></div>
+        <button id="dCopyBtn">复制这段话</button>
         <button class="secondary-action" id="dSwitchBtn" style="margin-top:6px">换个 AI</button>
-        <div style="margin-top:8px"><button class="text-action" id="dDiagToggle">看看哪里出错（展开诊断）</button></div>
-        <div class="panel" id="dDiagPanel" hidden>
-          <div class="helper" id="dDiagContent" style="margin-top:0">正在读取…</div>
-        </div>
+        <div class="wait" id="dWait" hidden><span class="spin"></span>已复制。修好后这里会自动亮绿灯，不用刷新</div>
       </div>
     </div>
 
-    <!-- E 已连接：绿灯最健康；切换是明面按钮；Notion 独立区块 -->
+    <!-- E 已连接：绿灯最健康；切换是明面按钮；数据备份（导出+Notion）合并一个区块 -->
     <div class="screen" id="screenE" hidden>
       <div class="hero green">
         <div class="conn-row">
           <div>
             <span class="conn-title"><span class="dot green"></span>已连接 · <span id="eProv">AI</span></span>
-            <span class="conn-detail">越用越懂你</span>
           </div>
           <button class="row-action" id="eSwitchBtn">切换</button>
         </div>
@@ -287,7 +283,9 @@
         <button class="text-action" id="eUpgradeCopy">复制升级指令，发给你的 AI</button>
       </div>
 
+      <!-- 数据备份区块：导出 + Notion 都是数据安全，同属一个区块（2026-08-09 验收反馈） -->
       <div class="status-grid">
+        <div class="indep-label">数据备份</div>
         <div class="status-block">
           <div class="status-row">
             <div>
@@ -308,7 +306,6 @@
           </section>
         </div>
 
-        <div class="indep-label">— 以下与 AI 连接无关 —</div>
         <div class="status-block">
           <div class="status-row">
             <div class="row-info" id="notionRowInfo">
@@ -343,7 +340,6 @@
         </div>
       </div>
 
-      <button class="pause-link" id="ePauseLink">暂停 AI</button>
     </div>
 
     <!-- F 切换 AI：引擎在跑，内部即时切，不重装 -->
@@ -360,18 +356,6 @@
       </div>
     </div>
 
-    <!-- G 已暂停：用户主动暂停（区别于故障），批注照常 -->
-    <div class="screen" id="screenG" hidden>
-      <div class="hero amber">
-        <div class="conn-row">
-          <div>
-            <span class="conn-title"><span class="dot amber"></span>AI 已暂停</span>
-            <span class="conn-detail">划线批注照常保存，AI 暂不回应</span>
-          </div>
-          <button class="row-action primary" id="gResumeBtn">恢复</button>
-        </div>
-      </div>
-    </div>
   </div>
 
   <script src="../common/release-pin.js"></script>
