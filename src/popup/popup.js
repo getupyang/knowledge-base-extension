@@ -200,7 +200,9 @@ function go(id, opt = {}) {
   }
   cur = id;
   document.body.dataset.state = id;
-  $("notebookBtn").hidden = id !== "E"; // 仅已连接态显示（设计定稿 2026-08-09）
+  // 记忆笔记本常驻可见：未连接置灰（点不了），连上点亮；灰→亮的过渡本身就是介绍（2026-08-11）
+  $("notebookBtn").disabled = id !== "E";
+  $("notebookHint").hidden = id === "E";
   setStatus("");
 }
 
@@ -288,7 +290,6 @@ async function saveCConfig() {
     if (runtimeState.ai && runtimeState.ai.configured) {
       await writeConn({ chosen: "api", phase: "connected" });
       go("E");
-      setStatus("已连上，记忆笔记本可以用了", "");
     } else {
       $("cErr").textContent = friendlyKeyError((runtimeState.ai || {}).error);
       $("cErr").hidden = false;
@@ -311,6 +312,8 @@ function setupD() {
   $("dPrompt").textContent = repairPrompt(conn.chosen, "");
   $("dWait").hidden = true;
   $("dCopyBtn").textContent = "复制这段话";
+  // 还在等 agent 装的人要有回头路（回 B 继续等）；连过后来断了的故障场景不显示（修复话术才是正路）
+  $("dBack").hidden = conn.phase !== "waiting";
   refreshDProblem();
 }
 
@@ -595,8 +598,6 @@ async function pollTick() {
   if (configured && (cur === "A" || cur === "B" || cur === "D")) {
     await writeConn({ phase: "connected" });
     go("E");
-    // 记忆笔记本此刻才出现：在出现的瞬间介绍它，不能突然冒出来（2026-08-09 验收反馈）
-    setStatus("已连上，记忆笔记本可以用了", "");
     return;
   }
   if (cur === "B" && conn.phase === "waiting" && Date.now() - (conn.waitingSince || 0) > SLOW_HINT_MS) {
@@ -669,7 +670,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   $("cSaveBtn").addEventListener("click", saveCConfig);
 
-  // D：复制修复 prompt / 换 AI
+  // D：返回继续等 / 复制修复 prompt / 换 AI
+  $("dBack").addEventListener("click", () => go("B"));
   $("dCopyBtn").addEventListener("click", copyDPrompt);
   $("dSwitchBtn").addEventListener("click", async () => {
     await writeConn({ phase: "idle", waitingSince: 0 });

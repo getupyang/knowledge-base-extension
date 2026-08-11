@@ -194,8 +194,10 @@
     </div>
   </div>
 
-  <!-- 仅 E 已连接态显示（设计定稿 2026-08-09：未连接时它依赖的后端是空/报错，抬高第一屏门槛） -->
-  <button id="notebookBtn" hidden>打开记忆笔记本</button>
+  <!-- 记忆笔记本常驻可见：未连接置灰 + 说明，连上点亮（2026-08-11 真人验收反馈，取代"仅 E 显示再介绍"方案：
+       突然出现 + "可以用了"会把连接的价值窄化成只解锁了笔记本；灰→亮的过渡本身就是介绍 -->
+  <button id="notebookBtn" disabled>打开记忆笔记本</button>
+  <div class="helper" id="notebookHint" style="text-align:center;margin:4px 0 0">连上你的 AI 后可用</div>
   <div class="status" id="status"></div>
 
   <div id="screens">
@@ -258,6 +260,8 @@
     <!-- D 连接遇到问题：B 的故障版——我们查清问题、写好话，用户只负责转发给 AI
          （2026-08-09 验收反馈：诊断不是给用户读的，是喂进 prompt 给 agent 读的；砍掉重试按钮和诊断面板） -->
     <div class="screen" id="screenD" hidden>
+      <!-- 仅"还在等安装"时显示（真人验收 2026-08-11 发现：从 B 的"看看哪里不对"进来后没有回头路） -->
+      <button class="text-action back-link" id="dBack" hidden>← 返回，继续等</button>
       <div class="hero amber">
         <div class="hero-title"><span class="dot amber"></span>还没连上</div>
         <div class="hero-copy" id="dProblem">正在看是哪里的问题…</div>

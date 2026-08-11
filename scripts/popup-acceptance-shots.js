@@ -14,7 +14,7 @@ const ISO_HOME = path.join(SCRATCH, "iso-home");
 const ISO_DATA = path.join(SCRATCH, "iso-data");
 const PROFILE = path.join(SCRATCH, "chrome-profile");
 const OUT = path.join(os.homedir(), "Desktop", "margin-popup-验收截图-2026-08-09");
-const PORT = 18766;
+const PORT = Number(process.env.MARGIN_SHOT_PORT || 18766); // live 验收环境占 18766 时可换端口
 const API = `http://localhost:${PORT}`;
 
 let backendProc = null;
@@ -66,6 +66,10 @@ async function stopBackend() {
 
 async function shot(page, name) {
   shotIdx += 1;
+  // 截图前保护：等换屏动画结束（.enter 透明帧会截出空屏）+ 鼠标归位（hover 残留会截出假选中框）
+  await page.mouse.move(0, 0);
+  await page.waitForFunction(() => !document.querySelector(".screen.enter"), { timeout: 3000 }).catch(() => {});
+  await page.waitForTimeout(320);
   const file = path.join(OUT, `${String(shotIdx).padStart(2, "0")}-${name}.png`);
   await page.screenshot({ path: file, fullPage: true });
   log(`shot ${path.basename(file)} (state=${await page.evaluate(() => document.body.dataset.state)})`);
@@ -151,10 +155,15 @@ async function waitState(page, s, timeout = 15000) {
   await clearStorage(page);
   await setStorage(page, { kb_api_base_override: API });
 
-  // ── 场景 1：全新用户，引擎不在 → A ──
+  // ── 场景 1：全新用户，引擎不在 → A；记忆笔记本常驻可见但置灰 + 说明 ──
   await page.reload();
   await waitState(page, "A");
   await shot(page, "A-初始-选一个AI");
+  const nbA = await page.evaluate(() => ({
+    disabled: document.getElementById("notebookBtn").disabled,
+    hintShown: !document.getElementById("notebookHint").hidden,
+  }));
+  if (!nbA.disabled || !nbA.hintShown) throw new Error("A 态记忆笔记本应置灰并显示'连上你的 AI 后可用'");
 
   // ── 场景 2：选 Codex → B 换屏（整屏滑动，非灰按钮） ──
   await page.click("#aChooseCodex");
@@ -168,12 +177,15 @@ async function waitState(page, s, timeout = 15000) {
   await shot(page, "B-已复制-等待自动绿灯");
 
   // ── 场景 4：硬承诺——popup 开着不动，引擎上线（codex 就绪）→ 自动变绿灯 E
-  //    绿灯瞬间应带"已连上，记忆笔记本可以用了"的介绍行（笔记本此刻才出现，不能突然冒出来） ──
+  //    记忆笔记本从置灰点亮、说明行消失（灰→亮的过渡本身就是介绍，2026-08-11 反馈） ──
   await startBackend({ MEMAI_LLM_PROVIDER: "codex_cli", MEMAI_LOCAL_AGENT: "codex_cli" }, "configured/codex");
   await waitState(page, "E", 30000);
-  await shot(page, "E-自动变绿灯-介绍记忆笔记本");
-  const intro = await page.evaluate(() => document.getElementById("status").textContent);
-  if (!intro.includes("记忆笔记本")) throw new Error(`绿灯瞬间应介绍记忆笔记本，实际状态行="${intro}"`);
+  await shot(page, "E-自动变绿灯-笔记本点亮");
+  const nbE = await page.evaluate(() => ({
+    disabled: document.getElementById("notebookBtn").disabled,
+    hintShown: !document.getElementById("notebookHint").hidden,
+  }));
+  if (nbE.disabled || nbE.hintShown) throw new Error("E 态记忆笔记本应点亮且隐藏说明行");
 
   // ── 场景 5：E 总览（记忆笔记本按钮 + 数据备份区块：导出与 Notion 同区块） ──
   await page.waitForTimeout(600);
@@ -229,6 +241,9 @@ async function waitState(page, s, timeout = 15000) {
     return el && el.textContent && !el.textContent.includes("正在看");
   }, { timeout: 10000 });
   await shot(page, "D-还没连上-问题加修复prompt");
+  // 等待中进入 D 必须有回头路（真人验收 2026-08-11：从 B"看看哪里不对"进来后被困住）
+  const dBackShown = await page.evaluate(() => !document.getElementById("dBack").hidden);
+  if (!dBackShown) throw new Error("等待中进入 D 应显示'← 返回，继续等'出口");
 
   // ── 场景 11：D 复制修复 prompt → 等待行出现，照旧自动等绿灯 ──
   await page.click("#dCopyBtn");
