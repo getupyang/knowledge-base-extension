@@ -216,6 +216,7 @@ class Regression:
             "scripts/test-comment-system.js",
             "scripts/test-anchor-overlap.js",
             "scripts/test-vault-core.js",
+            "scripts/test-rpc-background.js",
         ]
         for js_file in js_files:
             run_cmd(["node", "--check", js_file])
@@ -223,6 +224,8 @@ class Regression:
         # vault-core 纯逻辑回归 + popup DOM 契约（无外部依赖，归属静态检查）
         run_cmd(["node", "scripts/test-vault-core.js"])
         run_cmd(["node", "scripts/test-popup-dom.js"])
+        # 2A.2 background RPC characterization（chrome/fetch 全 mock，无外部依赖）
+        run_cmd(["node", "scripts/test-rpc-background.js"])
 
         inline_parser = r"""
           const fs = require('fs');
