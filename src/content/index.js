@@ -794,7 +794,7 @@ const selectionBar = (() => {
 
 // ─── 评论系统 ────────────────────────────────────────────────
 
-const DEBUG_MODE = true; // 发布时改为 false
+const DEBUG_MODE = false; // 清单 3.4：发布态默认关闭（调试需要时本地手动改 true）
 
 const commentSystem = (() => {
   function _pageUrlWithoutHash(url = location.href) {
