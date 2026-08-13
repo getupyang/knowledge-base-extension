@@ -25,8 +25,9 @@ _ENV = {
     "MARGIN_INGEST_TOKEN": "disabled",
 }
 
-# 这些 key 若存在（来自真实 ~/.kb_config 或 shell），会把测试写入导向真实路径 → 必须移除
-_ENV_REMOVE = ["MEMAI_BACKUP_DIR", "KB_CLIENT_ERROR_LOG"]
+# 这些 key 若存在（来自真实 ~/.kb_config 或 shell），会把测试写入导向真实路径/
+# 泄漏真实 token → 必须移除（MEMAI_PAIR_TOKEN 由 agent_api import 时在临时配置里自动生成）
+_ENV_REMOVE = ["MEMAI_BACKUP_DIR", "KB_CLIENT_ERROR_LOG", "MEMAI_PAIR_TOKEN"]
 
 
 @pytest.fixture(scope="session")
@@ -38,6 +39,9 @@ def hermetic():
     """
     temp_dir = tempfile.mkdtemp(prefix="kb-worker-test-")
     os.environ["KB_DATA_DIR"] = temp_dir
+    # 3.3：token 自动生成写配置文件——测试必须重定向到临时文件，绝不碰真实 ~/.kb_config
+    os.environ["MEMAI_CONFIG_FILE"] = os.path.join(temp_dir, "kb_config")
+    os.environ["MEMAI_REQUIRE_TOKEN"] = "off"
     os.environ.update(_ENV)
     for key in _ENV_REMOVE:
         os.environ.pop(key, None)

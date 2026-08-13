@@ -35,7 +35,7 @@ async function getConfig() {
 // 启动时从 agent_api 拉取非敏感运行状态；密钥只留在后端 ~/.kb_config。
 async function autoLoadConfig() {
   try {
-    const resp = await fetch("http://localhost:8766/config");
+    const resp = await kbEngineFetch("http://localhost:8766/config");
     if (!resp.ok) return;
     const { storageMode, notionConfigured } = await resp.json();
     await chrome.storage.local.set({ storageMode, notionConfigured: !!notionConfigured });
@@ -51,7 +51,7 @@ async function reportClientError(source, err, context = {}) {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 3000);
-    await fetch("http://localhost:8766/client-error", {
+    await kbEngineFetch("http://localhost:8766/client-error", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -114,11 +114,54 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 // 网页上下文的直连迫使后端 CORS 全开；改道后 CORS 可收紧到扩展来源（3.1），
 // token 附加也只需改这一处（3.3）。
 const KB_API_BASE = "http://localhost:8766";
+
+// ── 配对 token（清单 3.3，认证协议 §2-§4）──
+// 引擎 token 存 chrome.storage.local；缺失或失效时经 POST /pair 自动领取，用户零操作。
+const PAIR_TOKEN_KEY = "margin_pair_token";
+let _pairTokenCache = null;
+
+async function getPairToken(forceRenew = false) {
+  if (!forceRenew) {
+    if (_pairTokenCache) return _pairTokenCache;
+    const stored = await chrome.storage.local.get(PAIR_TOKEN_KEY);
+    if (stored[PAIR_TOKEN_KEY]) {
+      _pairTokenCache = stored[PAIR_TOKEN_KEY];
+      return _pairTokenCache;
+    }
+  }
+  try {
+    const resp = await fetch(KB_API_BASE + "/pair", { method: "POST" });
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data && data.token) {
+        _pairTokenCache = data.token;
+        await chrome.storage.local.set({ [PAIR_TOKEN_KEY]: data.token });
+      }
+    }
+  } catch { /* 引擎未启动：无 token 继续（强制开关关闭时后端不校验） */ }
+  return _pairTokenCache;
+}
+
+// 所有对引擎的请求走这里：附加 X-Margin-Token；401 时重新配对再试一次（token 轮换自愈）
+async function kbEngineFetch(url, options = {}) {
+  const token = await getPairToken();
+  const headers = { ...(options.headers || {}) };
+  if (token) headers["X-Margin-Token"] = token;
+  let resp = await fetch(url, { ...options, headers });
+  if (resp.status === 401) {
+    const fresh = await getPairToken(true);
+    if (fresh && fresh !== token) {
+      resp = await fetch(url, { ...options, headers: { ...headers, "X-Margin-Token": fresh } });
+    }
+  }
+  return resp;
+}
+
 async function apiProxy(path, options = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 20000);
   try {
-    const resp = await fetch(KB_API_BASE + path, {
+    const resp = await kbEngineFetch(KB_API_BASE + path, {
       method: options.method || "GET",
       headers: options.headers || undefined,
       body: options.body ?? undefined,
@@ -196,7 +239,7 @@ async function callAIViaAgent(systemPrompt, msgs) {
   const AGENT_API = 'http://localhost:8766';
   const userMsg = msgs[msgs.length - 1]?.content || '';
   // 把 systemPrompt 作为 comment 内容发过去（8766 会注入本地记忆 + 项目上下文）
-  const createRes = await fetch(`${AGENT_API}/comments`, {
+  const createRes = await kbEngineFetch(`${AGENT_API}/comments`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -212,7 +255,7 @@ async function callAIViaAgent(systemPrompt, msgs) {
   // 轮询最多 5 分钟，每 3 秒一次
   for (let i = 0; i < 100; i++) {
     await new Promise(r => setTimeout(r, 3000));
-    const pollRes = await fetch(`${AGENT_API}/comments/${id}`);
+    const pollRes = await kbEngineFetch(`${AGENT_API}/comments/${id}`);
     const data = await pollRes.json();
     const agentReply = data.replies?.find(r => r.author === 'agent');
     if (agentReply) return agentReply.content;
@@ -233,7 +276,7 @@ function splitRichText(str, max = 1990) {
 
 // 旧消息名保留兼容；真实写入统一走本地 capture endpoint，Notion 只是后端可选备份。
 async function upsertNotionPage({ notionPageId, title, url, platform, excerpt, thought, aiConversation }) {
-  const res = await fetch("http://localhost:8766/captures/upsert", {
+  const res = await kbEngineFetch("http://localhost:8766/captures/upsert", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify({notionPageId, title, url, platform, excerpt, thought, aiConversation})
@@ -245,7 +288,7 @@ async function upsertNotionPage({ notionPageId, title, url, platform, excerpt, t
 }
 
 async function saveToNotion({ title, url, platform, excerpt, thought, aiConversation }) {
-  const res = await fetch("http://localhost:8766/captures/save", {
+  const res = await kbEngineFetch("http://localhost:8766/captures/save", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify({title, url, platform, excerpt, thought, aiConversation})

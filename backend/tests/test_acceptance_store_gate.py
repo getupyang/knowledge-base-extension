@@ -22,11 +22,14 @@ def _client(agent_api):
 
 # ── F 组 · 安全：谁能跟本地引擎说话（由第 3 块 3.1/3.3 转绿）──
 
-def test_f0_health_stays_open(hermetic):
-    """F0【护栏·常绿】/health 无认证可达——防止安全修复做成'一刀切全拒'。
-    配对流程（1.3 协议）依赖未认证客户端能探活。此测试变红 = 修过头了。"""
+def test_f0_health_stays_open(hermetic, monkeypatch):
+    """F0【护栏·常绿】/health 无认证可达（即使强制开关开启）——防止安全修复做成
+    '一刀切全拒'。配对流程（1.3 协议）依赖未认证客户端能探活。此测试变红 = 修过头了。"""
     resp = _client(hermetic.agent_api).get("/health")
     assert resp.status_code == 200
+    monkeypatch.setenv("MEMAI_REQUIRE_TOKEN", "on")
+    resp = _client(hermetic.agent_api).get("/health")
+    assert resp.status_code == 200, "强制开关开启后 /health 仍应免鉴权"
 
 
 def test_f1_malicious_origin_rejected(hermetic):
@@ -71,9 +74,9 @@ def test_f1c_extension_whitelist_closes_tofu(hermetic, monkeypatch):
         "白名单模式下名单外扩展不应获得跨域许可"
 
 
-@pytest.mark.xfail(strict=True, reason="F2 由 3.3 token 落地转绿：当前后端无任何认证")
-def test_f2_missing_token_rejected_read_and_write(hermetic):
-    """F2：没有配对暗号的请求被 401/403 拒——读端点和写端点都要拒"""
+def test_f2_missing_token_rejected_read_and_write(hermetic, monkeypatch):
+    """F2【✅ 3.3 已转绿 2026-08-13】强制开关开启后，没有配对暗号的请求被 401 拒——读写都拒"""
+    monkeypatch.setenv("MEMAI_REQUIRE_TOKEN", "on")
     client = _client(hermetic.agent_api)
     read = client.get("/comments")
     assert read.status_code in (401, 403), f"无 token 读请求应被拒，实际 HTTP {read.status_code}"
@@ -83,11 +86,40 @@ def test_f2_missing_token_rejected_read_and_write(hermetic):
     assert write.status_code in (401, 403), f"无 token 写请求应被拒，实际 HTTP {write.status_code}"
 
 
-def test_f3_request_with_token_header_passes(hermetic):
-    """F3：带 token 头的请求正常通过。⚠ 现在无认证也通过（弱断言）——3.3 落地时必须
-    升级为：用真实配对流程取得的 token 通过 + 错误 token 被拒 的成对断言。"""
-    resp = _client(hermetic.agent_api).get("/comments", headers={"X-Margin-Token": "placeholder"})
-    assert resp.status_code == 200
+def test_f3_token_matrix(hermetic, monkeypatch):
+    """F3【✅ 3.3 升级为真矩阵】正确 token 通过 / 错误 token 401 / 开关关闭时不校验"""
+    agent_api = hermetic.agent_api
+    client = _client(agent_api)
+    real_token = agent_api._pair_token()
+    assert real_token, "引擎启动时应已自动生成配对 token"
+    monkeypatch.setenv("MEMAI_REQUIRE_TOKEN", "on")
+    ok = client.get("/comments", headers={"X-Margin-Token": real_token})
+    assert ok.status_code == 200, "正牌 token 应通过"
+    bad = client.get("/comments", headers={"X-Margin-Token": "wrong-token"})
+    assert bad.status_code == 401, "错误 token 应 401"
+    monkeypatch.setenv("MEMAI_REQUIRE_TOKEN", "off")
+    legacy = client.get("/comments")
+    assert legacy.status_code == 200, "开关关闭时保持存量兼容"
+
+
+def test_f4_pair_endpoint_protocol(hermetic, monkeypatch):
+    """F4【✅ 3.3】/pair 配对协议：扩展来源领取 / 网页来源被拒 / 白名单收口 / 幂等同 token"""
+    agent_api = hermetic.agent_api
+    client = _client(agent_api)
+    ext = "chrome-extension://" + "d" * 32
+    # 扩展来源领取成功，且与引擎侧 token 一致
+    r1 = client.post("/pair", headers={"Origin": ext})
+    assert r1.status_code == 200 and r1.json()["token"] == agent_api._pair_token()
+    # 幂等：再领是同一个
+    r2 = client.post("/pair", headers={"Origin": ext})
+    assert r2.json()["token"] == r1.json()["token"]
+    # 网页来源被拒
+    web = client.post("/pair", headers={"Origin": "https://evil.example"})
+    assert web.status_code == 403
+    # 白名单收口：名单外扩展被拒
+    monkeypatch.setenv("MEMAI_ALLOWED_EXTENSION_IDS", "e" * 32)
+    stranger = client.post("/pair", headers={"Origin": ext})
+    assert stranger.status_code == 403, "白名单设置后名单外扩展不应能配对"
 
 
 # ── G 组 · 离线同步（由第 4 块 4.3 转绿）──

@@ -13,6 +13,8 @@ const ROOT = path.join(__dirname, "..");
 // ── chrome mock ──
 const listeners = { onMessage: [] };
 const storageData = new Map();
+// 预置配对 token（3.3）：kbEngineFetch 应把它附到每个引擎请求头上
+storageData.set("margin_pair_token", "test-pair-token");
 let storageFailure = null;
 
 global.chrome = {
@@ -123,6 +125,8 @@ async function check(name, fn) {
       if (ce) return ce;
       assert.ok(url === "http://localhost:8766/comments?page_url=x", `代理 URL 错误：${url}`);
       assert.strictEqual(opts.method, "GET");
+      // 3.3：background 必须附配对 token（Codex review #6 指出的盲区）
+      assert.strictEqual(opts.headers["X-Margin-Token"], "test-pair-token", "代理请求应带配对 token");
       return jsonResp([{ id: 1 }]);
     };
     const r = await send({ type: "API_FETCH", path: "/comments?page_url=x", options: { method: "GET" } });

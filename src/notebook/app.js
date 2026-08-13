@@ -3,6 +3,16 @@
 // 设计：~/mem-ai/docs/memory-backend-design.md
 
 const API_BASE = "http://localhost:8766";
+
+// 配对 token（清单 3.3）：background 配对后存 storage，本页请求一律带上（无则不带，
+// 强制开关关闭时后端不校验；开启后无 token 会 401，由 popup/背景页重新配对恢复）
+async function marginAuthHeaders() {
+  try {
+    const s = await chrome.storage.local.get("margin_pair_token");
+    return s.margin_pair_token ? { "X-Margin-Token": s.margin_pair_token } : {};
+  } catch { return {}; }
+}
+
 const BETTER_QUESTION_ASK_AI = "kb_better_question_ask_ai";
 
 // ─── 工具 ───
@@ -102,7 +112,7 @@ async function notebookTelemetry(eventName, properties) {
     };
     await fetch(`${API_BASE}/telemetry/events`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(await marginAuthHeaders()) },
       body: JSON.stringify(body),
     });
   } catch { /* fire-and-forget */ }
@@ -278,7 +288,8 @@ function updateDiaryUnreadNotice() {
 
 async function api(path, opts = {}) {
   try {
-    const r = await fetch(API_BASE + path, opts);
+    const authed = { ...opts, headers: { ...(opts.headers || {}), ...(await marginAuthHeaders()) } };
+    const r = await fetch(API_BASE + path, authed);
     if (!r.ok) throw new Error("HTTP " + r.status);
     return await r.json();
   } catch (e) {

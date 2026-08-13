@@ -169,10 +169,18 @@ saveBtn.addEventListener("click", async () => {
   }
 });
 
+// 配对 token（清单 3.3）：background 配对后存 storage，请求带上（无则不带）
+async function marginAuthHeaders() {
+  try {
+    const s = await chrome.storage.local.get("margin_pair_token");
+    return s.margin_pair_token ? { "X-Margin-Token": s.margin_pair_token } : {};
+  } catch { return {}; }
+}
+
 async function saveToVault({ title, url, platform, excerpt, thought, aiConversation }) {
   const res = await fetch("http://localhost:8766/captures/save", {
     method: "POST",
-    headers: {"Content-Type": "application/json"},
+    headers: {"Content-Type": "application/json", ...(await marginAuthHeaders())},
     body: JSON.stringify({title, url, platform, excerpt, thought, aiConversation})
   });
 

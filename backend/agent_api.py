@@ -16,6 +16,7 @@ import time
 import urllib.error
 import urllib.request
 import hashlib
+import secrets
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
 from typing import Optional
@@ -140,6 +141,70 @@ _ensure_data_dir()
 
 app = FastAPI()
 
+# ── 配对 token（清单 3.3，认证协议 §1-§4）──
+# 引擎侧生成单一 token，写 ~/.kb_config（0600）；扩展经 POST /pair 领取。
+# 强制开关 MEMAI_REQUIRE_TOKEN 缺省 off（存量兼容），installer 在安装链路里翻 on。
+# MEMAI_CONFIG_FILE 供测试/自托管重定向配置文件，缺省 ~/.kb_config。
+from pathlib import Path as _Path
+
+_KB_CONFIG_FILE = _Path(os.path.expanduser(os.environ.get("MEMAI_CONFIG_FILE") or "~/.kb_config"))
+
+
+def _pair_token() -> str:
+    return (os.environ.get("MEMAI_PAIR_TOKEN") or "").strip()
+
+
+def _require_token() -> bool:
+    return (os.environ.get("MEMAI_REQUIRE_TOKEN") or "off").strip().lower() in {"1", "on", "true", "yes"}
+
+
+def _ensure_pair_token() -> str:
+    """缺失则生成 32 字节 hex 并持久化到配置文件（协议 §1：引擎是信任根）。幂等。"""
+    token = _pair_token()
+    if token:
+        return token
+    token = secrets.token_hex(32)
+    os.environ["MEMAI_PAIR_TOKEN"] = token
+    try:
+        lines = []
+        if _KB_CONFIG_FILE.exists():
+            lines = [
+                l for l in _KB_CONFIG_FILE.read_text(encoding="utf-8").splitlines()
+                if not l.strip().startswith("MEMAI_PAIR_TOKEN=")
+            ]
+        lines.append(f"MEMAI_PAIR_TOKEN={token}")
+        _KB_CONFIG_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        os.chmod(_KB_CONFIG_FILE, 0o600)
+    except Exception as e:
+        print(f"[pair] token 持久化失败（仅本进程内有效）：{e}")
+    return token
+
+
+_ensure_pair_token()
+
+_TOKEN_EXEMPT_PATHS = {"/health", "/pair"}
+
+
+# 注意注册顺序：本中间件先于 cors_guard 定义 = 在 cors_guard 内层运行，
+# 401 响应出去时仍会被 cors_guard 补上信任来源的跨域头（扩展才能读到 401 并自动重配对）。
+@app.middleware("http")
+async def pair_token_guard(request: Request, call_next):
+    if (
+        _require_token()
+        and request.method != "OPTIONS"
+        and request.url.path not in _TOKEN_EXEMPT_PATHS
+    ):
+        supplied = request.headers.get("x-margin-token") or ""
+        expected = _pair_token()
+        if not expected or not secrets.compare_digest(supplied, expected):
+            return Response(
+                '{"detail":"missing or invalid X-Margin-Token"}',
+                status_code=401,
+                media_type="application/json",
+            )
+    return await call_next(request)
+
+
 # ── CORS 收紧（清单 3.1，认证协议配套）──
 # 旧行为：回显任意 Origin + 无条件放行私网访问 = 任何网页都能调本地引擎。
 # 新行为：只有信任来源拿到跨域许可；其余请求浏览器侧直接拦（服务本身仍响应，
@@ -197,6 +262,25 @@ async def local_extension_cors_guard(request: Request, call_next):
         response.headers.setdefault("Access-Control-Allow-Private-Network", "true")
     response.headers.setdefault("Vary", "Origin")
     return response
+
+
+@app.post("/pair")
+def pair_extension(request: Request):
+    """TOFU 配对（认证协议 §2）：仅扩展来源可领取 token；白名单设置后收口。
+    幂等：同一 token 可反复领取（重装/多 profile 无感重配对，协议 §4）。"""
+    origin = request.headers.get("origin") or ""
+    m = _EXT_ORIGIN_RE.match(origin)
+    if not m:
+        raise HTTPException(status_code=403, detail="pairing requires a chrome-extension origin")
+    ext_id = m.group(1)
+    allowed_ids = _allowed_extension_ids()
+    if allowed_ids and ext_id not in allowed_ids:
+        raise HTTPException(status_code=403, detail="extension not in allowlist")
+    token = _ensure_pair_token()
+    mode = "allowlist" if allowed_ids else "tofu"
+    # 配对方 ID 记录（协议 §2：TOFU 期把领取者写进日志，供事后审计）
+    print(f"[pair] token issued to extension {ext_id} (mode={mode})")
+    return {"token": token, "mode": mode}
 
 # ──────────────────────────────────────────
 # 数据库初始化
