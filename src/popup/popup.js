@@ -58,6 +58,12 @@ function installPrompt(provider) {
   return `请在我本机装好 Margin 的本地引擎：安装脚本在 ${INSTALL_SH_URL} （官方版本化地址，请从这里装，不要用其他来源）。用我的 ${label} 作为它的 AI。注意：不要覆盖我已有的批注数据（~/.knowledge-base-extension）。装好后启动服务、跑一次健康检查（curl http://localhost:8766/health），告诉我是否连上。需要系统权限或修改已有配置前先跟我说。`;
 }
 
+// 升级场景专用（2026-08-13 用户反馈修订）：引擎已在用、AI 已配好——
+// 不指定用哪个 AI（收到这段话的 agent 就是用户的 AI），只强调保数据、保配置。
+function upgradePrompt() {
+  return `请帮我把本机已安装的 Margin 引擎升级到新版：升级脚本在 ${INSTALL_SH_URL} （官方版本化地址，请从这里升级，不要用其他来源）。我的批注数据（~/.knowledge-base-extension）和已有配置（~/.kb_config，包括我正在用的 AI 设置）都要原样保留，不要覆盖。升级完成后重启服务，跑一次健康检查（curl http://localhost:8766/health），确认返回里的版本号变新了，然后告诉我结果。过程中需要系统权限、或者要改动我已有的配置时，先停下来问我。`;
+}
+
 function repairPrompt(provider, diagText) {
   const label = PROVIDER_LABEL[provider] || "Claude Code";
   const diag = diagText ? `我这边看到的情况：${diagText}。` : "";
@@ -682,7 +688,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   $("eSwitchBtn").addEventListener("click", () => go("F"));
   $("eUpgradeCopy").addEventListener("click", async () => {
     try {
-      await navigator.clipboard.writeText(installPrompt(conn.chosen || "claude_code"));
+      // 修订（2026-08-13）：升级场景用专用指令，不再复用首装指令——
+      // 首装指令会点名 AI（且 conn.chosen 为空时误报 Claude Code），升级无需换 AI
+      await navigator.clipboard.writeText(upgradePrompt());
       setStatus("已复制，粘给你的 AI 让它升级引擎", "");
     } catch {
       setStatus("复制失败", "error");
