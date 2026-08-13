@@ -45,4 +45,5 @@ def hermetic():
                 os.environ["HOME"] = real_home
     resolved_temp = str(Path(temp_dir).resolve())
     assert worker.DB_PATH.startswith(resolved_temp), f"DB 不在临时目录：{worker.DB_PATH}"
-    yield worker
+    import types
+    yield types.SimpleNamespace(worker=worker, agent_api=agent_api)

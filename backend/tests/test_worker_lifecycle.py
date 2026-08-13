@@ -98,7 +98,7 @@ def _lease_and_run(worker):
 
 def test_b1_growth_job_end_to_end(hermetic, monkeypatch):
     """B1：新批注 → 记忆作业执行 → done + 记忆产物 + 台账可见"""
-    worker = hermetic
+    worker = hermetic.worker
     monkeypatch.setattr(worker, "call_llm_with_meta",
                         lambda prompt, timeout_sec=180: (json.dumps(GROWTH_JSON, ensure_ascii=False),
                                                          {"provider": "fake", "model": "fake-1"}))
@@ -122,7 +122,7 @@ def test_b1_growth_job_end_to_end(hermetic, monkeypatch):
 
 def test_b2_failure_retries_then_failed(hermetic, monkeypatch):
     """B2：LLM 挂 → 重试至 max_attempts → 显式 failed + 错误可见 + 失败日志落盘"""
-    worker = hermetic
+    worker = hermetic.worker
     monkeypatch.setattr(worker, "call_llm_with_meta",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("llm down")))
     cid = _insert_comment(worker, "会失败的批注")
@@ -148,7 +148,7 @@ def test_b2_failure_retries_then_failed(hermetic, monkeypatch):
 
 def test_b3_crash_recovery_requeues_stale_running(hermetic):
     """B3：崩溃恢复——lease 过期的 running 回队（作业不丢），recovery 超限显式 failed"""
-    worker = hermetic
+    worker = hermetic.worker
     jid = _enqueue(worker, "memory_growth_for_comment", {"comment_id": 999999})
     stale = (datetime.now() - timedelta(minutes=10)).isoformat()
     conn = _conn(worker)
@@ -172,7 +172,7 @@ def test_b3_crash_recovery_requeues_stale_running(hermetic):
 
 def test_b3b_lease_is_exclusive(hermetic):
     """B3b：lease 原子性——同一作业不会被两个 worker 同时拿走"""
-    worker = hermetic
+    worker = hermetic.worker
     _enqueue(worker, "memory_growth_for_comment", {"comment_id": 999998})
     c1, c2 = _conn(worker), _conn(worker)
     job1 = worker.lease_next_job(c1)
@@ -189,7 +189,7 @@ def test_b3b_lease_is_exclusive(hermetic):
 def test_b4_rerun_same_comment_interpretation_not_duplicated(hermetic, monkeypatch):
     """B4：同一批注跑两次 growth → 解读不重复（REPLACE 语义）；
     【钉现状】rule_candidates 会重复累积——当前真实行为，候选去重发生在下游蒸馏，不在此层。"""
-    worker = hermetic
+    worker = hermetic.worker
     monkeypatch.setattr(worker, "call_llm_with_meta",
                         lambda prompt, timeout_sec=180: (json.dumps(GROWTH_JSON, ensure_ascii=False),
                                                          {"provider": "fake", "model": "fake-1"}))
@@ -211,7 +211,7 @@ def test_b4_rerun_same_comment_interpretation_not_duplicated(hermetic, monkeypat
 
 def test_unknown_kind_fails_without_retry(hermetic):
     """未知作业类型 → 显式 failed，不重试、不静默"""
-    worker = hermetic
+    worker = hermetic.worker
     jid = _enqueue(worker, "no_such_kind", {})
     ok, job = _lease_and_run(worker)
     assert not ok
@@ -224,7 +224,7 @@ def test_thinking_placeholder_without_llm(hermetic, monkeypatch):
     """批注太少（<3 条相关语料时）思考整理写占位摘要，不浪费 LLM 调用。
     注意：session 内已有批注则走正常路径——此测试只验证'不足时不调 LLM 也能有产物'的分支
     需要空库语义，故直接调 handler 前清空 comments。"""
-    worker = hermetic
+    worker = hermetic.worker
     conn = _conn(worker)
     saved = conn.execute("SELECT * FROM comments").fetchall()
     conn.execute("DELETE FROM comments")
