@@ -29,9 +29,8 @@ def test_f0_health_stays_open(hermetic):
     assert resp.status_code == 200
 
 
-@pytest.mark.xfail(strict=True, reason="F1 由 3.1 CORS 收紧转绿：当前 allow_origins=['*']，恶意网页放行")
 def test_f1_malicious_origin_rejected(hermetic):
-    """F1：恶意网页的简单请求与 CORS 预检都不应获得跨域许可"""
+    """F1【✅ 3.1 已转绿 2026-08-13】恶意网页的简单请求与 CORS 预检都不应获得跨域许可"""
     client = _client(hermetic.agent_api)
     evil = "https://evil.example"
     # 简单请求：服务可用（200）但不给跨域头
@@ -47,6 +46,29 @@ def test_f1_malicious_origin_rejected(hermetic):
     })
     pre_allowed = pre.headers.get("access-control-allow-origin", "")
     assert pre_allowed not in ("*", evil), f"恶意预检获得了跨域许可：{pre_allowed}"
+
+
+def test_f1b_trusted_origins_still_allowed(hermetic):
+    """F1b【✅ 3.1 常绿护栏】信任来源不被误伤：扩展来源（TOFU 期）与阅读界面 8765 拿到跨域许可"""
+    client = _client(hermetic.agent_api)
+    ext_origin = "chrome-extension://" + "a" * 32
+    for origin in (ext_origin, "http://localhost:8765"):
+        resp = client.get("/health", headers={"Origin": origin})
+        assert resp.headers.get("access-control-allow-origin") == origin, \
+            f"信任来源 {origin} 未获跨域许可——修过头会打断插件/阅读界面"
+
+
+def test_f1c_extension_whitelist_closes_tofu(hermetic, monkeypatch):
+    """F1c【✅ 3.1 常绿护栏】设置 MEMAI_ALLOWED_EXTENSION_IDS 后 TOFU 关闭：
+    名单内扩展放行，名单外扩展拒绝（商店发布后 installer 写入商店 ID 即收口）"""
+    client = _client(hermetic.agent_api)
+    listed = "b" * 32
+    monkeypatch.setenv("MEMAI_ALLOWED_EXTENSION_IDS", listed)
+    ok = client.get("/health", headers={"Origin": f"chrome-extension://{listed}"})
+    assert ok.headers.get("access-control-allow-origin") == f"chrome-extension://{listed}"
+    stranger = client.get("/health", headers={"Origin": "chrome-extension://" + "c" * 32})
+    assert not stranger.headers.get("access-control-allow-origin"), \
+        "白名单模式下名单外扩展不应获得跨域许可"
 
 
 @pytest.mark.xfail(strict=True, reason="F2 由 3.3 token 落地转绿：当前后端无任何认证")

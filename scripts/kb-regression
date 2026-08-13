@@ -444,7 +444,9 @@ class Regression:
         # 变多，都会在这里把回归门打红。
         # 转绿仪式：每当一个 xfail 转正，必须同步更新 GATE_MANIFEST 数字，
         # 这次修改就是门禁变更的显式记录。
-        gate_manifest = {"passed": 3, "xfailed": 5, "skipped": 1}
+        # 2026-08-13 3.1 CORS 收紧落地：F1 转绿 + 新增 F1b/F1c 正向护栏
+        # （passed 3→6, xfailed 5→4）
+        gate_manifest = {"passed": 6, "xfailed": 4, "skipped": 1}
         gate_out = run_cmd(
             [sys.executable, "-m", "pytest",
              "backend/tests/test_acceptance_store_gate.py", "-q"],

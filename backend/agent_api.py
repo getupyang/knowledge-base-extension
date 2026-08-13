@@ -20,7 +20,6 @@ from datetime import datetime, timedelta
 from urllib.parse import urlparse
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from llm_client import LLMError, LLMTimeoutError, get_llm_client, get_llm_status
 
@@ -140,18 +139,47 @@ def _ensure_data_dir():
 _ensure_data_dir()
 
 app = FastAPI()
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
+# ── CORS 收紧（清单 3.1，认证协议配套）──
+# 旧行为：回显任意 Origin + 无条件放行私网访问 = 任何网页都能调本地引擎。
+# 新行为：只有信任来源拿到跨域许可；其余请求浏览器侧直接拦（服务本身仍响应，
+# 拦的是"网页读到响应"这一步）。curl/CLI 等无 Origin 请求不受 CORS 约束（本机信任边界）。
+_ALLOWED_WEB_ORIGINS = {
+    # 阅读界面（server.py, 8765）的评论区前端直连本引擎
+    "http://localhost:8765",
+    "http://127.0.0.1:8765",
+}
+_EXT_ORIGIN_RE = re.compile(r"^chrome-extension://([a-p]{32})$")
+
+
+def _allowed_extension_ids() -> set:
+    """MEMAI_ALLOWED_EXTENSION_IDS（逗号分隔）。空 = 开发期 TOFU：放行任意扩展来源。
+    商店发布后 installer 写入固定商店 ID 收口（认证协议 §2/§5）。"""
+    raw = os.environ.get("MEMAI_ALLOWED_EXTENSION_IDS", "")
+    return {x.strip() for x in raw.split(",") if x.strip()}
+
+
+def _origin_allowed(origin: str) -> bool:
+    if not origin:
+        return False
+    if origin in _ALLOWED_WEB_ORIGINS:
+        return True
+    m = _EXT_ORIGIN_RE.match(origin)
+    if m:
+        allowed = _allowed_extension_ids()
+        return (m.group(1) in allowed) if allowed else True
+    return False
+
 
 @app.middleware("http")
 async def local_extension_cors_guard(request: Request, call_next):
-    """Keep public pages and extension pages able to reach the localhost backend."""
-    origin = request.headers.get("origin") or "*"
+    """信任来源白名单 CORS：扩展来源 + 阅读界面；其余不给跨域许可、不给私网访问。"""
+    origin = request.headers.get("origin") or ""
+    allowed = _origin_allowed(origin)
     if request.method == "OPTIONS":
+        if not allowed:
+            # 不带任何 CORS 头返回：浏览器判预检失败，跨域被拒
+            return Response("forbidden origin", status_code=403, headers={"Vary": "Origin"})
         requested_headers = request.headers.get("access-control-request-headers", "content-type")
         headers = {
             "Access-Control-Allow-Origin": origin,
@@ -159,12 +187,15 @@ async def local_extension_cors_guard(request: Request, call_next):
             "Access-Control-Allow-Headers": requested_headers,
             "Access-Control-Max-Age": "600",
             "Access-Control-Allow-Private-Network": "true",
+            "Vary": "Origin",
         }
         return Response("OK", status_code=200, headers=headers)
 
     response = await call_next(request)
-    response.headers.setdefault("Access-Control-Allow-Origin", origin)
-    response.headers.setdefault("Access-Control-Allow-Private-Network", "true")
+    if allowed:
+        response.headers.setdefault("Access-Control-Allow-Origin", origin)
+        response.headers.setdefault("Access-Control-Allow-Private-Network", "true")
+    response.headers.setdefault("Vary", "Origin")
     return response
 
 # ──────────────────────────────────────────
