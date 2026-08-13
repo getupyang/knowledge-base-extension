@@ -170,6 +170,7 @@ class Regression:
 
         self.step("static syntax and contract checks", self.static_checks)
         self.step("hermetic API and DB regression", self.hermetic_backend_regression)
+        self.step("worker lifecycle characterization (pytest)", self.worker_lifecycle_tests)
         if not self.args.skip_live:
             self.step("live health and debug API smoke", self.live_smoke)
         if not self.args.skip_browser:
@@ -432,6 +433,12 @@ class Regression:
                 "contracts present: ledger/events/growth/context/local-first-capture/exposure-memory/default-AI-followup/debug-console",
             ]
         )
+
+    def worker_lifecycle_tests(self) -> str:
+        # 2A.3 worker 生命周期 characterization：pytest 自建隔离环境（backend/tests/conftest.py），
+        # LLM 全 mock，无真实调用。子进程跑避免与本进程已 import 的 agent_api 冲突。
+        out = run_cmd([sys.executable, "-m", "pytest", "backend/tests", "-q"], timeout=300)
+        return out.splitlines()[-1] if out else ""
 
     def hermetic_backend_regression(self) -> str:
         with tempfile.TemporaryDirectory(prefix="kb-regression-") as temp_dir:
