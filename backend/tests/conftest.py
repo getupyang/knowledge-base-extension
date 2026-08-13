@@ -17,6 +17,10 @@ _ENV = {
     "NOTION_DATABASE_ID": "",
     "KB_NOTION_TOKEN": "",
     "KB_NOTION_DATABASE_ID": "",
+    # ⚠ 必须禁用（2026-08-13 发现）：agent_api import 即启动云同步线程，且 endpoint/token
+    # 有内置默认值——不禁用的话，隔离测试的假数据会被同步到真实生产云端（假 install_id 教训）。
+    "MARGIN_CLOUD_ENDPOINT": "disabled",
+    "MARGIN_INGEST_TOKEN": "disabled",
 }
 
 

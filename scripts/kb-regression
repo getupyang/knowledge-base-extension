@@ -449,6 +449,10 @@ class Regression:
                 "NOTION_DATABASE_ID": "",
                 "KB_NOTION_TOKEN": "",
                 "KB_NOTION_DATABASE_ID": "",
+                # 禁云同步（2026-08-13）：agent_api import 即启同步线程且有内置默认
+                # endpoint/token，不禁用会把隔离测试的假数据同步到真实生产云端。
+                "MARGIN_CLOUD_ENDPOINT": "disabled",
+                "MARGIN_INGEST_TOKEN": "disabled",
             }
             with patched_env(env):
                 sys.path.insert(0, str(BACKEND_DIR))
