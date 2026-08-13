@@ -71,9 +71,16 @@ vm.runInThisContext(
 );
 assert.strictEqual(listeners.onMessage.length, 1, "onMessage 应注册且仅注册一个监听器");
 
+// 这些消息的处理是异步回包，监听器必须 return true——否则 Chrome 会提前关闭
+// sendResponse 通道（Codex review #6：mock 不许吞掉这个契约）
+const ASYNC_TYPES = new Set(["VAULT_MIRROR", "SAVE_TO_NOTION", "UPSERT_NOTION_PAGE", "CALL_AI"]);
+
 function send(msg) {
-  return new Promise((resolve) => {
-    listeners.onMessage[0](msg, {}, resolve);
+  return new Promise((resolve, reject) => {
+    const ret = listeners.onMessage[0](msg, {}, resolve);
+    if (ASYNC_TYPES.has(msg.type) && ret !== true) {
+      reject(new Error(`${msg.type} 监听器未 return true——真实 Chrome 中异步 sendResponse 会失效`));
+    }
   });
 }
 

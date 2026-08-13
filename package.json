@@ -4,6 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "test": "python3 scripts/kb-regression --skip-live --skip-browser",
     "regression": "scripts/kb-regression",
     "test:claude": "node scripts/test-claude-collector.js"
   },

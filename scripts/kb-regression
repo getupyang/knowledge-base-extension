@@ -438,7 +438,28 @@ class Regression:
         # 2A.3 worker 生命周期 characterization：pytest 自建隔离环境（backend/tests/conftest.py），
         # LLM 全 mock，无真实调用。子进程跑避免与本进程已 import 的 agent_api 冲突。
         out = run_cmd([sys.executable, "-m", "pytest", "backend/tests", "-q"], timeout=300)
-        return out.splitlines()[-1] if out else ""
+        summary = out.splitlines()[-1] if out else ""
+        # 2B 上架门禁清单核对（2026-08-13 Codex review #1）：acceptance 文件的
+        # 通过/xfail/skip 数量必须与清单一致——整文件被删、测试静默消失、xfail 悄悄
+        # 变多，都会在这里把回归门打红。
+        # 转绿仪式：每当一个 xfail 转正，必须同步更新 GATE_MANIFEST 数字，
+        # 这次修改就是门禁变更的显式记录。
+        gate_manifest = {"passed": 3, "xfailed": 5, "skipped": 1}
+        gate_out = run_cmd(
+            [sys.executable, "-m", "pytest",
+             "backend/tests/test_acceptance_store_gate.py", "-q"],
+            timeout=120,
+        )
+        gate_summary = gate_out.splitlines()[-1] if gate_out else ""
+        for key, expected in gate_manifest.items():
+            token = f"{expected} {key}"
+            if token not in gate_summary:
+                raise RegressionError(
+                    f"store-gate manifest mismatch: expected '{token}' in '{gate_summary}'. "
+                    "acceptance 测试数量与门禁清单不符——若刚转绿一个 xfail，请同步更新 "
+                    "kb-regression 里的 gate_manifest。"
+                )
+        return f"{summary} | store-gate manifest ok ({gate_summary})"
 
     def hermetic_backend_regression(self) -> str:
         with tempfile.TemporaryDirectory(prefix="kb-regression-") as temp_dir:

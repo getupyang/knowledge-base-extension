@@ -173,16 +173,16 @@ def test_b3_crash_recovery_requeues_stale_running(hermetic):
 def test_b3b_lease_is_exclusive(hermetic):
     """B3b：lease 原子性——同一作业不会被两个 worker 同时拿走"""
     worker = hermetic.worker
-    _enqueue(worker, "memory_growth_for_comment", {"comment_id": 999998})
+    jid = _enqueue(worker, "memory_growth_for_comment", {"comment_id": 999998})
     c1, c2 = _conn(worker), _conn(worker)
     job1 = worker.lease_next_job(c1)
     job2 = worker.lease_next_job(c2)
     c1.close(); c2.close()
-    assert job1 is not None
+    assert job1 is not None and job1["id"] == jid, "应 lease 到本测试插入的那个作业"
     assert job2 is None or job2["id"] != job1["id"], "同一作业被 lease 两次 = 重复执行风险"
-    # 清场：把 running 残留标记完成，避免影响后续测试
+    # 清场只碰本测试自己的作业（Codex review #11：不许殃及全表）
     conn = _conn(worker)
-    conn.execute("UPDATE jobs SET status='done' WHERE status IN ('queued','running')")
+    conn.execute("UPDATE jobs SET status='done' WHERE id=?", (jid,))
     conn.commit(); conn.close()
 
 
@@ -226,7 +226,8 @@ def test_thinking_placeholder_without_llm(hermetic, monkeypatch):
     需要空库语义，故直接调 handler 前清空 comments。"""
     worker = hermetic.worker
     conn = _conn(worker)
-    saved = conn.execute("SELECT * FROM comments").fetchall()
+    conn.row_factory = sqlite3.Row
+    saved = [dict(r) for r in conn.execute("SELECT * FROM comments").fetchall()]
     conn.execute("DELETE FROM comments")
     conn.commit()
 
@@ -234,12 +235,20 @@ def test_thinking_placeholder_without_llm(hermetic, monkeypatch):
         raise AssertionError("批注不足时不应调 LLM")
     monkeypatch.setattr(worker, "call_llm_with_meta", boom)
 
-    jid = _enqueue(worker, "synthesize_thinking", {"trigger_reason": "test"})
-    job = worker.lease_next_job(conn)
-    ok = worker.run_one(conn, job)
-    assert ok and job["id"] == jid
-    row = conn.execute(
-        "SELECT * FROM thinking_summaries WHERE status='active' ORDER BY id DESC LIMIT 1"
-    ).fetchone()
-    assert row is not None, "数据不足也应有占位思考整理（用户侧不空白）"
-    conn.close()
+    try:
+        jid = _enqueue(worker, "synthesize_thinking", {"trigger_reason": "test"})
+        job = worker.lease_next_job(conn)
+        ok = worker.run_one(conn, job)
+        assert ok and job["id"] == jid
+        row = conn.execute(
+            "SELECT * FROM thinking_summaries WHERE status='active' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        assert row is not None, "数据不足也应有占位思考整理（用户侧不空白）"
+    finally:
+        # 恢复删掉的批注（Codex review #11：不许把状态泄漏给后续测试）
+        for r in saved:
+            cols = ", ".join(r.keys())
+            marks = ", ".join("?" for _ in r)
+            conn.execute(f"INSERT INTO comments ({cols}) VALUES ({marks})", list(r.values()))
+        conn.commit()
+        conn.close()

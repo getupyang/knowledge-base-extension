@@ -19,4 +19,4 @@ echo
 echo "== 前端覆盖率（c8 全量口径，node 侧测试）=="
 npx c8 --all --include "src/**/*.js" --exclude "src/content/marked.min.js" \
   --reporter=text-summary \
-  sh -c "node scripts/test-vault-core.js >/dev/null && node scripts/test-popup-dom.js >/dev/null"
+  sh -c "node scripts/test-vault-core.js >/dev/null && node scripts/test-popup-dom.js >/dev/null && node scripts/test-rpc-background.js >/dev/null"

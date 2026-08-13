@@ -1,0 +1,25 @@
+# 回归门 CI（2026-08-13，Codex review #9：没有 CI 的门禁不是门禁）
+# 与本地 `npm test` 完全同一条命令；PR 与 push 均触发。
+name: tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install backend deps
+        run: pip install fastapi "uvicorn[standard]" pydantic httpx requests pytest coverage
+      - name: Install frontend dev deps
+        run: npm ci
+      - name: Run regression gate (hermetic)
+        run: python3 scripts/kb-regression --skip-live --skip-browser
