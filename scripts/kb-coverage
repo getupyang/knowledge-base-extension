@@ -1,0 +1,19 @@
+#!/bin/bash
+# kb-coverage: 覆盖率基线一条命令（主清单 2A.1）
+# 后端 = coverage.py 驱动 kb-regression（隔离环境，进程内 TestClient）
+# 前端 = c8 全量口径驱动 node 侧测试（排除 vendored JS）
+# 口径说明见 ~/mem-ai/docs/coverage-baseline-2026-08-13.md
+set -e
+cd "$(dirname "$0")/.."
+
+echo "== 后端覆盖率（coverage.py × kb-regression 隔离套件）=="
+python3 -m coverage run --source=backend \
+  --omit="*/test_*,*/.test_cases/*,*/research/*" \
+  scripts/kb-regression --skip-live --skip-browser >/dev/null
+python3 -m coverage report
+
+echo
+echo "== 前端覆盖率（c8 全量口径，node 侧测试）=="
+npx c8 --all --include "src/**/*.js" --exclude "src/content/marked.min.js" \
+  --reporter=text-summary \
+  sh -c "node scripts/test-vault-core.js >/dev/null && node scripts/test-popup-dom.js >/dev/null"

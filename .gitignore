@@ -28,3 +28,7 @@ docs/
 # 密钥配置
 .kb_config
 *.kb_config
+
+# coverage artifacts (2A.1)
+.coverage
+coverage/
