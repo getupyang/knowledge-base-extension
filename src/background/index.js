@@ -109,8 +109,40 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
 });
 
+// ── 统一 API 代理（清单 3.2）──
+// content script 不再直连本地引擎：所有请求经此单一咽喉转发。
+// 网页上下文的直连迫使后端 CORS 全开；改道后 CORS 可收紧到扩展来源（3.1），
+// token 附加也只需改这一处（3.3）。
+const KB_API_BASE = "http://localhost:8766";
+async function apiProxy(path, options = {}) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 20000);
+  try {
+    const resp = await fetch(KB_API_BASE + path, {
+      method: options.method || "GET",
+      headers: options.headers || undefined,
+      body: options.body ?? undefined,
+      signal: ctrl.signal,
+    });
+    const bodyText = await resp.text();
+    return { ok: resp.ok, status: resp.status, statusText: resp.statusText, bodyText };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // 统一消息处理
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // 认证协议 §6：只处理本扩展发来的消息（配合 manifest 不声明 externally_connectable）
+  if (!sender || sender.id !== chrome.runtime.id) {
+    return;
+  }
+  if (msg.type === "API_FETCH") {
+    apiProxy(msg.path, msg.options || {})
+      .then(sendResponse)
+      .catch((err) => sendResponse({ __error: (err && err.message) || String(err) }));
+    return true;
+  }
   if (msg.type === "RELOAD_CONFIG") {
     // 不再需要缓存，每次调用时实时读取
     sendResponse({ success: true });

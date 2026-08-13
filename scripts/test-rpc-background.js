@@ -17,6 +17,7 @@ let storageFailure = null;
 
 global.chrome = {
   runtime: {
+    id: "test-extension-id",
     onMessage: { addListener: (fn) => listeners.onMessage.push(fn) },
     onInstalled: { addListener: () => {} },
     onStartup: { addListener: () => {} },
@@ -56,7 +57,9 @@ global.fetch = async (url, opts = {}) => {
 const jsonResp = (body, status = 200) => ({
   ok: status >= 200 && status < 300,
   status,
+  statusText: status === 200 ? "OK" : `HTTP ${status}`,
   json: async () => body,
+  text: async () => JSON.stringify(body),
 });
 // /client-error 诊断上报永远吞掉，与产品语义一致（诊断失败不影响主流程）
 const routeClientError = (url) => url.includes("/client-error") ? jsonResp({}) : null;
@@ -73,11 +76,11 @@ assert.strictEqual(listeners.onMessage.length, 1, "onMessage 应注册且仅注�
 
 // 这些消息的处理是异步回包，监听器必须 return true——否则 Chrome 会提前关闭
 // sendResponse 通道（Codex review #6：mock 不许吞掉这个契约）
-const ASYNC_TYPES = new Set(["VAULT_MIRROR", "SAVE_TO_NOTION", "UPSERT_NOTION_PAGE", "CALL_AI"]);
+const ASYNC_TYPES = new Set(["VAULT_MIRROR", "SAVE_TO_NOTION", "UPSERT_NOTION_PAGE", "CALL_AI", "API_FETCH"]);
 
-function send(msg) {
+function send(msg, sender = { id: "test-extension-id" }) {
   return new Promise((resolve, reject) => {
-    const ret = listeners.onMessage[0](msg, {}, resolve);
+    const ret = listeners.onMessage[0](msg, sender, resolve);
     if (ASYNC_TYPES.has(msg.type) && ret !== true) {
       reject(new Error(`${msg.type} 监听器未 return true——真实 Chrome 中异步 sendResponse 会失效`));
     }
@@ -105,6 +108,36 @@ async function check(name, fn) {
 
   await check("A0 PING → pong（通道存活探测）", async () => {
     assert.deepStrictEqual(await send({ type: "PING" }), { pong: true });
+  });
+
+  await check("A5 发件人校验：非本扩展消息被忽略（认证协议 §6）", async () => {
+    let responded = false;
+    const ret = listeners.onMessage[0]({ type: "PING" }, { id: "evil-extension" }, () => { responded = true; });
+    assert.notStrictEqual(ret, true, "陌生发件人不应拿到异步通道");
+    assert.strictEqual(responded, false, "陌生发件人不应收到任何响应");
+  });
+
+  await check("A6 API_FETCH 代理成功：转发路径/方法/响应体", async () => {
+    fetchImpl = (url, opts) => {
+      const ce = routeClientError(url);
+      if (ce) return ce;
+      assert.ok(url === "http://localhost:8766/comments?page_url=x", `代理 URL 错误：${url}`);
+      assert.strictEqual(opts.method, "GET");
+      return jsonResp([{ id: 1 }]);
+    };
+    const r = await send({ type: "API_FETCH", path: "/comments?page_url=x", options: { method: "GET" } });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.bodyText, JSON.stringify([{ id: 1 }]));
+  });
+
+  await check("A7 API_FETCH 后端不可用：__error 明确传回（不静默）", async () => {
+    fetchImpl = (url) => {
+      const ce = routeClientError(url);
+      if (ce) return ce;
+      throw new Error("Failed to fetch");
+    };
+    const r = await send({ type: "API_FETCH", path: "/health", options: {} });
+    assert.strictEqual(r.__error, "Failed to fetch");
   });
 
   await check("A1 保存成功：SAVE_TO_NOTION → 后端 200 → {success:true}", async () => {

@@ -1,6 +1,23 @@
 const KB_CONTENT_VERSION = "0.3.18-margin-share-playground";
 console.info(`[KB] content script loaded: ${KB_CONTENT_VERSION}`);
 
+// ── 引擎请求统一走 background 代理（清单 3.2）──
+// content 在网页上下文里直连本地引擎会迫使后端对所有网页开放 CORS；
+// 改道 background 后，后端只需信任扩展来源，token 也收敛在 background 一处附加。
+// 返回对象兼容 fetch Response 的用法子集：ok / status / statusText / json() / text()
+async function kbApiFetch(path, options = {}) {
+  const r = await chrome.runtime.sendMessage({ type: "API_FETCH", path, options });
+  if (!r) throw new Error("background 未响应（扩展可能刚重载，请刷新页面）");
+  if (r.__error) throw new Error(r.__error);
+  return {
+    ok: r.ok,
+    status: r.status,
+    statusText: r.statusText,
+    json: async () => JSON.parse(r.bodyText || "null"),
+    text: async () => r.bodyText,
+  };
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "ADD_COMMENT") {
     // 右键菜单触发：selection 已消失，先用文字匹配高亮，再打开评论面板
@@ -337,7 +354,7 @@ function capturePageExposureIfAllowed() {
   const text = getPageContent();
   if (!text || text.length < 300) return;
   _pageExposureSent.add(url);
-  fetch("http://localhost:8766/exposures/seen", {
+  kbApiFetch("/exposures/seen", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -951,7 +968,7 @@ const commentSystem = (() => {
 
   async function _postTelemetry(body, attempt = 0) {
     try {
-      const resp = await fetch("http://localhost:8766/telemetry/events", {
+      const resp = await kbApiFetch("/telemetry/events", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -1141,7 +1158,7 @@ const commentSystem = (() => {
       const c = comments.find(x => String(x.id) === String(commentId));
       const r = c?.replies?.find(x => String(x.id) === String(replyId));
       const note = document.getElementById(`kb-feedback-ta-${commentId}-${replyId}`)?.value || r?.problemReportNote || "";
-      const resp = await fetch("http://localhost:8766/debug/problem-reports/preview", {
+      const resp = await kbApiFetch("/debug/problem-reports/preview", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(problemReportPayload(commentId, replyId, rating || r?.problemReportRating || "", note)),
@@ -1189,7 +1206,7 @@ const commentSystem = (() => {
       ...problemReportPayload(commentId, replyId, rating, userNote),
       confirm_consent: true,
     };
-    const resp = await fetch("http://localhost:8766/debug/problem-reports", {
+    const resp = await kbApiFetch("/debug/problem-reports", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -1346,7 +1363,7 @@ const commentSystem = (() => {
     let changed = false;
     for (const url of _pageUrlCandidates()) {
       try {
-        const resp = await fetch(`http://localhost:8766/comments?page_url=${encodeURIComponent(url)}`);
+        const resp = await kbApiFetch(`/comments?page_url=${encodeURIComponent(url)}`);
         if (!resp.ok) continue;
         const rows = await resp.json();
         if (_mergeBackendComments(rows)) changed = true;
@@ -1808,7 +1825,7 @@ const commentSystem = (() => {
 
   // ── 高亮后静默保存到本地记忆库；外部备份由后端按配置处理 ──
   function saveHighlightToVault(excerpt, title, url, platform) {
-    fetch("http://localhost:8766/captures/save", {
+    kbApiFetch("/captures/save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -3647,7 +3664,7 @@ const commentSystem = (() => {
     if (!localBefore?.agentCommentId) return false;
     _backendSyncRunning.add(commentId);
     try {
-      const resp = await fetch(`http://localhost:8766/comments/${localBefore.agentCommentId}`);
+      const resp = await kbApiFetch(`/comments/${localBefore.agentCommentId}`);
       if (!resp.ok) return false;
       const remote = await resp.json();
       const comments = load();
@@ -4194,7 +4211,7 @@ const commentSystem = (() => {
     if (c.agentCommentId) {
       try {
         const identity = await telemetryIdentity(c, "sidebar");
-        await fetch(`http://localhost:8766/comments/${c.agentCommentId}/reply`, {
+        await kbApiFetch(`/comments/${c.agentCommentId}/reply`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ content: text, ...identity }),
@@ -4243,7 +4260,7 @@ const commentSystem = (() => {
         _pageContentSent.add(url);
       }
       const identity = await telemetryIdentity(c, "sidebar");
-      const resp = await fetch("http://localhost:8766/comments", {
+      const resp = await kbApiFetch("/comments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -4305,7 +4322,7 @@ const commentSystem = (() => {
     ].join("\n\n") : "";
 
     const title = `[评论] ${document.title.slice(0, 60)}`;
-    fetch("http://localhost:8766/captures/upsert", {
+    kbApiFetch("/captures/upsert", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -4359,7 +4376,7 @@ const commentSystem = (() => {
     if (sendBtn) { sendBtn.disabled = locked; sendBtn.textContent = locked ? "AI 回复中..." : "发送 + 召唤 AI"; }
   }
 
-  // ── AI 回复（via agent_api localhost:8766）──
+  // ── AI 回复（via agent_api，经 background 代理）──
   const _askAIRunning = new Set(); // per-comment 锁，不同评论可以并行 // AI 回复中的 commentId，用于禁用追问输入
   async function askAI(commentId, options = {}) {
     if (_askAIRunning.has(commentId)) return; // AI 还在回复，忽略
@@ -4445,7 +4462,7 @@ const commentSystem = (() => {
         startPendingAiResumeLoop();
         // 先查当前有多少条 agent reply
         try {
-          const preResp = await fetch(`http://localhost:8766/comments/${agentCommentId}`);
+          const preResp = await kbApiFetch(`/comments/${agentCommentId}`);
           if (preResp.ok) {
             const preData = await preResp.json();
             existingAgentReplyCount = preData.replies.filter(r => r.author === "agent").length;
@@ -4458,12 +4475,12 @@ const commentSystem = (() => {
           }
         } catch { /* ignore */ }
         // 直接 rerun：追问已通过 POST /reply 落库，后端自己重建对话历史
-        const rerunResp = await fetch(`http://localhost:8766/comments/${agentCommentId}/rerun`, { method: "POST" });
+        const rerunResp = await kbApiFetch(`/comments/${agentCommentId}/rerun`, { method: "POST" });
         if (!rerunResp.ok) throw new Error(`无法重新召唤 AI（HTTP ${rerunResp.status}）`);
       } else {
         const surrounding = options.surroundingText || getSurroundingText(c.excerpt || "");
         const identity = await telemetryIdentity(c, "sidebar");
-        const resp = await fetch("http://localhost:8766/comments", {
+        const resp = await kbApiFetch("/comments", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -4525,7 +4542,7 @@ const commentSystem = (() => {
           if (elapsed >= threshold) phaseText = text;
         }
         ensureThinking(`${phaseText} (${elapsed}s)`);
-        const pollResp = await fetch(`http://localhost:8766/comments/${agentCommentId}`);
+        const pollResp = await kbApiFetch(`/comments/${agentCommentId}`);
         if (!pollResp.ok) continue;
         const data = await pollResp.json();
         const agentReplies = data.replies.filter(r => r.author === "agent");
