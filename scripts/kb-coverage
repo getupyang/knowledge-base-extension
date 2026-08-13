@@ -6,10 +6,13 @@
 set -e
 cd "$(dirname "$0")/.."
 
-echo "== 后端覆盖率（coverage.py × kb-regression 隔离套件）=="
+echo "== 后端覆盖率（coverage.py × kb-regression 隔离套件 + pytest）=="
 python3 -m coverage run --source=backend \
-  --omit="*/test_*,*/.test_cases/*,*/research/*" \
+  --omit="*/test_*,*/tests/*,*/.test_cases/*,*/research/*" \
   scripts/kb-regression --skip-live --skip-browser >/dev/null
+python3 -m coverage run -a --source=backend \
+  --omit="*/test_*,*/tests/*,*/.test_cases/*,*/research/*" \
+  -m pytest backend/tests -q >/dev/null
 python3 -m coverage report
 
 echo
