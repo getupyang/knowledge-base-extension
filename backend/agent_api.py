@@ -27,8 +27,10 @@ from llm_client import LLMError, LLMTimeoutError, get_llm_client, get_llm_status
 ROOT = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(ROOT, os.pardir))
 
-# 启动时读取 ~/.kb_config，让 uvicorn 子进程也能拿到配置
-_config_file = os.path.expanduser("~/.kb_config")
+# 启动时读取配置文件，让 uvicorn 子进程也能拿到配置。
+# MEMAI_CONFIG_FILE 可重定向（测试隔离/自托管），缺省 ~/.kb_config。
+# 2026-08-13 Codex review P2-6：此处若写死真实路径，隔离测试会吸入真实配对 token。
+_config_file = os.path.expanduser(os.environ.get("MEMAI_CONFIG_FILE") or "~/.kb_config")
 if os.path.exists(_config_file):
     with open(_config_file) as _f:
         for _line in _f:

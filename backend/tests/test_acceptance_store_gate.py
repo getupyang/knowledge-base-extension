@@ -122,6 +122,20 @@ def test_f4_pair_endpoint_protocol(hermetic, monkeypatch):
     assert stranger.status_code == 403, "白名单设置后名单外扩展不应能配对"
 
 
+@pytest.mark.xfail(strict=True, reason="F5 由第 4 块转绿（Codex review P1-2）：白名单收口时须轮换 token——否则收口前抢跑配对的陌生扩展手里的旧 token 永久有效")
+def test_f5_allowlist_closure_invalidates_earlier_tokens(hermetic, monkeypatch):
+    """F5【真缺口】TOFU 期发出的 token 在白名单收口后应失效。
+    现状：token 校验不绑定来源，收口只拦'新配对'，拦不住'已配对'。
+    目标：设置/变更 MEMAI_ALLOWED_EXTENSION_IDS 时轮换 token（installer 落地时实现）。"""
+    agent_api = hermetic.agent_api
+    client = _client(agent_api)
+    token_issued_during_tofu = agent_api._pair_token()
+    monkeypatch.setenv("MEMAI_ALLOWED_EXTENSION_IDS", "f" * 32)  # 收口
+    monkeypatch.setenv("MEMAI_REQUIRE_TOKEN", "on")
+    resp = client.get("/comments", headers={"X-Margin-Token": token_issued_during_tofu})
+    assert resp.status_code == 401, "收口前发出的 token 仍然有效——需要轮换机制"
+
+
 # ── G 组 · 离线同步（由第 4 块 4.3 转绿）──
 
 def test_g2a_identical_resubmit_already_idempotent(hermetic):

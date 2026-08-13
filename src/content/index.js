@@ -4744,9 +4744,15 @@ const commentSystem = (() => {
   document.addEventListener("DOMContentLoaded", init);
   if (document.readyState !== "loading") init();
 
-  // 测试桥：Playwright 在 main world 无法直接访问 content script 的 window，
-  // 通过 postMessage 桥接
+  // 桥：阅读界面(8765)/Playwright 与 content script 通过 postMessage 通信。
+  // 安全门禁（2026-08-13 Codex review P1-3）：只信任同窗口 + 本地阅读界面来源——
+  // 否则任意网页都能借这座桥触发付费 AI 调用、往记忆库里塞内容（confused deputy）。
+  const KB_BRIDGE_TRUSTED_ORIGINS = new Set([
+    "http://localhost:8765",
+    "http://127.0.0.1:8765",
+  ]);
   window.addEventListener('message', (e) => {
+    if (e.source !== window || !KB_BRIDGE_TRUSTED_ORIGINS.has(e.origin)) return;
     if (e.data && e.data.__kb_test === 'open_comment') {
       open(e.data.excerpt, e.data.url, e.data.title);
     }
