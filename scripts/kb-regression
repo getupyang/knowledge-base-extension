@@ -1016,18 +1016,30 @@ class Regression:
 
     def live_smoke(self) -> str:
         with patched_env(LOCALHOST_ENV):
-            health = run_cmd([str(ROOT / "scripts" / "kb-health"), "--json"], env=LOCALHOST_ENV, timeout=20)
-            payload = json.loads(health)
+            # kb-health 退出码语义：0=全绿 1=有⚠(留意但不阻塞) 2=有✗。
+            # 回归门只拦 ✗；⚠ 写进结论供人看（2026-08-17 修正：此前 ⚠ 会把门打红，
+            # 与 kb-health 自己的"不阻塞"语义矛盾）。
+            proc = subprocess.run(
+                [str(ROOT / "scripts" / "kb-health"), "--json"],
+                cwd=str(ROOT), capture_output=True, text=True, timeout=20,
+                env={**os.environ, **{k: v for k, v in LOCALHOST_ENV.items() if v is not None}},
+            )
+            assert_true(proc.returncode in (0, 1),
+                        f"kb-health exit={proc.returncode}\n{proc.stdout.strip()[:500]}")
+            payload = json.loads(proc.stdout)
             summary = payload.get("summary", {})
             assert_true(summary.get("fail", 0) == 0, f"kb-health failures: {summary}")
-            assert_true(summary.get("warn", 0) == 0, f"kb-health warnings: {summary}")
+            warn_note = ""
+            if summary.get("warn", 0):
+                warns = [c.get("name") for c in payload.get("checks", []) if c.get("status") == "warn"]
+                warn_note = f"；⚠ {summary['warn']} 项警告（不阻塞）：{', '.join(warns)}"
 
             index = http_json("/debug/comments?limit=1")
             assert_true("items" in index and "total" in index and "db" in index, "debug comments index shape changed")
             assert_true(isinstance(index["items"], list), "debug comments items must be a list")
 
             if not index["items"]:
-                return "kb-health green; live debug API reachable; no live comments to inspect"
+                return "kb-health green; live debug API reachable; no live comments to inspect" + warn_note
 
             requested_id = self.args.comment_id or os.environ.get("KB_REGRESSION_COMMENT_ID")
             comment_id = int(requested_id or index["items"][0]["id"])
@@ -1049,7 +1061,7 @@ class Regression:
 
         return "\n".join(
             [
-                "kb-health green",
+                "kb-health green" + warn_note,
                 f"debug API read-only sample: comment#{comment_id}",
                 f"memory_events={len(detail['memory_events'])}, context_packs={len(detail['context_packs'])}, jobs={len(detail['jobs'])}",
             ]
