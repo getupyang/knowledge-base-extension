@@ -12,6 +12,9 @@ set -u
 
 DRY_RUN="${MARGIN_INSTALL_DRY_RUN:-0}"
 REPO_URL="https://github.com/getupyang/knowledge-base-extension.git"
+# 本脚本所属版本（1.4 版本化协议）：装的代码 = 本 tag 的代码，不追 main。
+# 发布流程：打新 tag 前更新此值与 src/common/release-pin.js 保持一致。
+INSTALL_REF="${MARGIN_INSTALL_REF:-v0.4.0}"
 DATA_DIR="${KB_DATA_DIR:-$HOME/.knowledge-base-extension}"
 APP_DIR="${MARGIN_APP_DIR:-$DATA_DIR/app}"
 CONFIG_FILE="$HOME/.kb_config"
@@ -44,18 +47,23 @@ if [ -n "$SCRIPT_SRC" ] && [ -f "$(dirname "$SCRIPT_SRC")/manifest.json" ]; then
   ok "使用本地仓库：$APP_DIR"
 elif [ -d "$APP_DIR/.git" ]; then
   if [ "$DRY_RUN" = "1" ]; then
-    ok "dry-run：将更新 ${APP_DIR} （git pull --ff-only）"
+    ok "dry-run：将更新 ${APP_DIR} 到 ${INSTALL_REF}"
   else
-    say "→ 更新代码：$APP_DIR"
-    git -C "$APP_DIR" pull --ff-only || warn "代码更新失败，继续使用当前版本"
+    say "→ 更新代码到 ${INSTALL_REF}：$APP_DIR"
+    if git -C "$APP_DIR" fetch --depth 1 origin "refs/tags/${INSTALL_REF}:refs/tags/${INSTALL_REF}" 2>/dev/null \
+       && git -C "$APP_DIR" checkout -q "$INSTALL_REF"; then
+      ok "代码已固定在 ${INSTALL_REF}"
+    else
+      warn "更新到 ${INSTALL_REF} 失败，继续使用当前版本"
+    fi
   fi
 else
   if [ "$DRY_RUN" = "1" ]; then
-    ok "dry-run：将 clone $REPO_URL 到 $APP_DIR"
+    ok "dry-run：将 clone $REPO_URL@${INSTALL_REF} 到 $APP_DIR"
   else
-    say "→ 下载代码到 $APP_DIR"
+    say "→ 下载代码（${INSTALL_REF}）到 $APP_DIR"
     mkdir -p "$(dirname "$APP_DIR")"
-    git clone --depth 1 "$REPO_URL" "$APP_DIR" || die "下载失败，请检查网络后重试"
+    git clone --depth 1 --branch "$INSTALL_REF" "$REPO_URL" "$APP_DIR" || die "下载失败，请检查网络后重试"
   fi
 fi
 
