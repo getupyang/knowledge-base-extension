@@ -160,6 +160,22 @@ def _require_token() -> bool:
     return (os.environ.get("MEMAI_REQUIRE_TOKEN") or "off").strip().lower() in {"1", "on", "true", "yes"}
 
 
+def _persist_config_kv(key: str, value: str):
+    """把 KEY=VALUE 写进配置文件（替换同名行），保持 0600。失败仅打日志。"""
+    try:
+        lines = []
+        if _KB_CONFIG_FILE.exists():
+            lines = [
+                l for l in _KB_CONFIG_FILE.read_text(encoding="utf-8").splitlines()
+                if not l.strip().startswith(f"{key}=")
+            ]
+        lines.append(f"{key}={value}")
+        _KB_CONFIG_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        os.chmod(_KB_CONFIG_FILE, 0o600)
+    except Exception as e:
+        print(f"[pair] 配置持久化失败（{key} 仅本进程内有效）：{e}")
+
+
 def _ensure_pair_token() -> str:
     """缺失则生成 32 字节 hex 并持久化到配置文件（协议 §1：引擎是信任根）。幂等。"""
     token = _pair_token()
@@ -167,22 +183,31 @@ def _ensure_pair_token() -> str:
         return token
     token = secrets.token_hex(32)
     os.environ["MEMAI_PAIR_TOKEN"] = token
-    try:
-        lines = []
-        if _KB_CONFIG_FILE.exists():
-            lines = [
-                l for l in _KB_CONFIG_FILE.read_text(encoding="utf-8").splitlines()
-                if not l.strip().startswith("MEMAI_PAIR_TOKEN=")
-            ]
-        lines.append(f"MEMAI_PAIR_TOKEN={token}")
-        _KB_CONFIG_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        os.chmod(_KB_CONFIG_FILE, 0o600)
-    except Exception as e:
-        print(f"[pair] token 持久化失败（仅本进程内有效）：{e}")
+    _persist_config_kv("MEMAI_PAIR_TOKEN", token)
     return token
 
 
+def _allowlist_serialized() -> str:
+    return ",".join(sorted(_allowed_extension_ids()))
+
+
+def _maybe_rotate_token_for_allowlist():
+    """白名单变更即轮换 token（2026-08-13 Codex review P1-2）：
+    TOFU 期发出的 token 不能在收口后继续有效——否则抢跑配对的恶意扩展
+    拿着旧 token 永久畅通。轮换后合法扩展经 401→/pair 自动重配对，无感恢复。"""
+    current = _allowlist_serialized()
+    stamp = (os.environ.get("MEMAI_PAIR_ALLOWLIST_STAMP") or "").strip()
+    if current == stamp:
+        return
+    os.environ.pop("MEMAI_PAIR_TOKEN", None)
+    os.environ["MEMAI_PAIR_ALLOWLIST_STAMP"] = current
+    _persist_config_kv("MEMAI_PAIR_ALLOWLIST_STAMP", current)
+    _ensure_pair_token()
+    print(f"[pair] 白名单变更 → token 已轮换（allowlist={'空(TOFU)' if not current else current}）")
+
+
 _ensure_pair_token()
+# 注意：启动时的白名单对齐轮换在 CORS 段之后调用（依赖 _allowed_extension_ids 定义）
 
 _TOKEN_EXEMPT_PATHS = {"/health", "/pair"}
 
@@ -196,6 +221,7 @@ async def pair_token_guard(request: Request, call_next):
         and request.method != "OPTIONS"
         and request.url.path not in _TOKEN_EXEMPT_PATHS
     ):
+        _maybe_rotate_token_for_allowlist()
         supplied = request.headers.get("x-margin-token") or ""
         expected = _pair_token()
         if not expected or not secrets.compare_digest(supplied, expected):
@@ -266,6 +292,10 @@ async def local_extension_cors_guard(request: Request, call_next):
     return response
 
 
+# 启动即对齐一次：白名单与上次运行不同（如 installer 刚写入收口）→ 立刻轮换
+_maybe_rotate_token_for_allowlist()
+
+
 @app.post("/pair")
 def pair_extension(request: Request):
     """TOFU 配对（认证协议 §2）：仅扩展来源可领取 token；白名单设置后收口。
@@ -278,6 +308,7 @@ def pair_extension(request: Request):
     allowed_ids = _allowed_extension_ids()
     if allowed_ids and ext_id not in allowed_ids:
         raise HTTPException(status_code=403, detail="extension not in allowlist")
+    _maybe_rotate_token_for_allowlist()
     token = _ensure_pair_token()
     mode = "allowlist" if allowed_ids else "tofu"
     # 配对方 ID 记录（协议 §2：TOFU 期把领取者写进日志，供事后审计）

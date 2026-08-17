@@ -160,6 +160,12 @@ else
       upsert_config MEMAI_CODEX_BIN "$CODEX_FOUND"
     fi
   fi
+  # 认证强制开关（认证协议 §3，2026-08-17 落地）：新装/未设置过 → 默认开启。
+  # 用户显式设置过（含 off）则尊重不动。token 由引擎首启自动生成（协议 §1）。
+  if [ -z "$(config_value MEMAI_REQUIRE_TOKEN)" ]; then
+    upsert_config MEMAI_REQUIRE_TOKEN on
+    ok "已开启插件配对认证（MEMAI_REQUIRE_TOKEN=on）"
+  fi
   ok "配置就绪：$CONFIG_FILE"
 fi
 

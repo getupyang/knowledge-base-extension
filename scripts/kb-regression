@@ -447,7 +447,8 @@ class Regression:
         # 2026-08-13 3.1 CORS 收紧：F1 转绿 + F1b/F1c 护栏（3/5/1→6/4/1）
         # 2026-08-13 3.3 token 落地：F2 转绿 + F3 真矩阵 + F4 配对协议（6/4/1→8/3/1）
         # 2026-08-13 Codex 审查：+F5 白名单收口须轮换 token（红，第 4 块转绿）（8/3/1→8/4/1）
-        gate_manifest = {"passed": 8, "xfailed": 4, "skipped": 1}
+        # 2026-08-17 第 4 块：F5 转绿——白名单变更即轮换（8/4/1→9/3/1）
+        gate_manifest = {"passed": 9, "xfailed": 3, "skipped": 1}
         gate_out = run_cmd(
             [sys.executable, "-m", "pytest",
              "backend/tests/test_acceptance_store_gate.py", "-q"],

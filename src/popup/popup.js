@@ -98,7 +98,17 @@ async function api(path, options = {}) {
     ...(options.headers || {}),
   };
   if (pairToken) headers["X-Margin-Token"] = pairToken;
-  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  let res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  if (res.status === 401 && path !== "/pair") {
+    // token 轮换后自愈（2026-08-17 Codex P2-5）：清掉旧 token，重新配对，重试一次
+    pairToken = null;
+    try { await chrome.storage.local.remove(PAIR_TOKEN_KEY); } catch {}
+    await tryPair();
+    if (pairToken) {
+      headers["X-Margin-Token"] = pairToken;
+      res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+    }
+  }
   const text = await res.text();
   let data = {};
   if (text) {

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Margin",
-  "version": "0.3.16",
+  "version": "0.4.0",
   "description": "划线评论，写下思考和疑问。Margin 在右侧回应，并记住项目、做事方式和想法变化。",
   "permissions": [
     "contextMenus",
@@ -15,7 +15,6 @@
   "host_permissions": [
     "https://api.notion.com/*",
     "https://openrouter.ai/*",
-    "https://claude.ai/*",
     "http://localhost/*",
     "http://127.0.0.1/*"
   ],
@@ -29,10 +28,6 @@
       "world": "ISOLATED",
       "all_frames": true,
       "match_about_blank": true
-    },
-    {
-      "matches": ["https://claude.ai/*"],
-      "js": ["src/collectors/claude.js"]
     }
   ],
   "action": {

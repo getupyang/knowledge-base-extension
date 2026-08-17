@@ -178,11 +178,29 @@ async function marginAuthHeaders() {
 }
 
 async function saveToVault({ title, url, platform, excerpt, thought, aiConversation }) {
-  const res = await fetch("http://localhost:8766/captures/save", {
+  const body = JSON.stringify({title, url, platform, excerpt, thought, aiConversation});
+  let res = await fetch("http://localhost:8766/captures/save", {
     method: "POST",
     headers: {"Content-Type": "application/json", ...(await marginAuthHeaders())},
-    body: JSON.stringify({title, url, platform, excerpt, thought, aiConversation})
+    body
   });
+  if (res.status === 401) {
+    // token 轮换后自愈（2026-08-17 Codex P2-5）：扩展页可直接重新配对
+    try {
+      const p = await fetch("http://localhost:8766/pair", { method: "POST" });
+      if (p.ok) {
+        const d = await p.json();
+        if (d.token) {
+          await chrome.storage.local.set({ margin_pair_token: d.token });
+          res = await fetch("http://localhost:8766/captures/save", {
+            method: "POST",
+            headers: {"Content-Type": "application/json", "X-Margin-Token": d.token},
+            body
+          });
+        }
+      }
+    } catch { /* 引擎不可达时保持原 401，走既有错误路径 */ }
+  }
 
   if (!res.ok) {
     throw new Error(`本地 capture 保存失败：HTTP ${res.status}`);

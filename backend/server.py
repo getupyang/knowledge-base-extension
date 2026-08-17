@@ -344,6 +344,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.serve_html(render_index())
             return
 
+        # ── 记忆笔记本(8765 网页版)的认证通道（2026-08-17，Codex review P1-4）──
+        # 本端点【不带任何 CORS 头】：浏览器同源策略保证只有 8765 自己的页面能读到。
+        # token 每次现读配置文件而非进程 env——引擎轮换 token 后这里立即是新值。
+        if path == '/margin/pair-token':
+            token = ''
+            try:
+                cfg = os.path.expanduser(os.environ.get('MEMAI_CONFIG_FILE') or '~/.kb_config')
+                with open(cfg, encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith('MEMAI_PAIR_TOKEN='):
+                            token = line.split('=', 1)[1].strip()
+            except Exception:
+                pass
+            payload = json.dumps({'token': token}).encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('Content-Length', len(payload))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+
         # ── 记忆笔记本：允许直接用 http://localhost:8765/notebook/ 打开 ──
         if path == '/notebook' or path == '/notebook/':
             self.serve_static_file(os.path.join(NOTEBOOK_DIR, 'index.html'), 'text/html; charset=utf-8')

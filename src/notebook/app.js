@@ -4,13 +4,30 @@
 
 const API_BASE = "http://localhost:8766";
 
-// 配对 token（清单 3.3）：background 配对后存 storage，本页请求一律带上（无则不带，
-// 强制开关关闭时后端不校验；开启后无 token 会 401，由 popup/背景页重新配对恢复）
-async function marginAuthHeaders() {
+// 配对 token（清单 3.3 + 2026-08-17 Codex P1-4/P2-5 修订）：
+// 扩展页环境从 chrome.storage 读；8765 网页版环境走同源通道 /margin/pair-token
+// （该端点无 CORS 头，只有本站页面能读）。401 时由 api() 强制刷新重试一次。
+let _marginTokenCache = null;
+async function marginAuthHeaders(forceRenew = false) {
   try {
-    const s = await chrome.storage.local.get("margin_pair_token");
-    return s.margin_pair_token ? { "X-Margin-Token": s.margin_pair_token } : {};
-  } catch { return {}; }
+    if (!forceRenew && _marginTokenCache) return { "X-Margin-Token": _marginTokenCache };
+    if (typeof chrome !== "undefined" && chrome.storage && chrome.storage.local) {
+      const s = await chrome.storage.local.get("margin_pair_token");
+      if (s.margin_pair_token) {
+        _marginTokenCache = s.margin_pair_token;
+        return { "X-Margin-Token": _marginTokenCache };
+      }
+    }
+    const r = await fetch("/margin/pair-token", { cache: "no-store" });
+    if (r.ok) {
+      const d = await r.json();
+      if (d.token) {
+        _marginTokenCache = d.token;
+        return { "X-Margin-Token": _marginTokenCache };
+      }
+    }
+  } catch { /* 拿不到就不带（强制开关关闭时后端不校验） */ }
+  return {};
 }
 
 const BETTER_QUESTION_ASK_AI = "kb_better_question_ask_ai";
@@ -289,7 +306,12 @@ function updateDiaryUnreadNotice() {
 async function api(path, opts = {}) {
   try {
     const authed = { ...opts, headers: { ...(opts.headers || {}), ...(await marginAuthHeaders()) } };
-    const r = await fetch(API_BASE + path, authed);
+    let r = await fetch(API_BASE + path, authed);
+    if (r.status === 401) {
+      // token 轮换后自愈：强制刷新 token 重试一次（P2-5）
+      const renewed = { ...opts, headers: { ...(opts.headers || {}), ...(await marginAuthHeaders(true)) } };
+      r = await fetch(API_BASE + path, renewed);
+    }
     if (!r.ok) throw new Error("HTTP " + r.status);
     return await r.json();
   } catch (e) {
