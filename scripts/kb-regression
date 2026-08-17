@@ -101,10 +101,28 @@ def run_cmd(
     return result.stdout.strip()
 
 
+def _live_pair_token() -> str:
+    """live 冒烟需带配对 token（3.3 认证后 8766 受保护端点拒绝无 token 请求）。"""
+    cfg = os.path.expanduser(os.environ.get("MEMAI_CONFIG_FILE") or "~/.kb_config")
+    try:
+        with open(cfg, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("MEMAI_PAIR_TOKEN="):
+                    return line.split("=", 1)[1].strip()
+    except Exception:
+        pass
+    return ""
+
+
 def http_json(path: str, *, timeout: int = 5) -> dict[str, Any]:
     url = path if path.startswith("http") else API_BASE + path
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as response:
+        req = urllib.request.Request(url)
+        token = _live_pair_token()
+        if token:
+            req.add_header("X-Margin-Token", token)
+        with urllib.request.urlopen(req, timeout=timeout) as response:
             body = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         raise RegressionError(f"GET {url} returned HTTP {exc.code}") from exc

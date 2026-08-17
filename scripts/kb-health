@@ -89,10 +89,28 @@ def port_listening(port):
     return None
 
 
+def _pair_token():
+    """本机诊断工具与引擎同属信任根：直接从配置文件读配对 token（3.3 认证后必需）。"""
+    cfg = os.path.expanduser(os.environ.get("MEMAI_CONFIG_FILE") or "~/.kb_config")
+    try:
+        with open(cfg, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("MEMAI_PAIR_TOKEN="):
+                    return line.split("=", 1)[1].strip()
+    except Exception:
+        pass
+    return ""
+
+
 def http_get(url, timeout=3):
     try:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        with opener.open(url, timeout=timeout) as r:
+        req = urllib.request.Request(url)
+        token = _pair_token()
+        if token:
+            req.add_header("X-Margin-Token", token)
+        with opener.open(req, timeout=timeout) as r:
             return r.status, r.read().decode()
     except urllib.error.HTTPError as e:
         return e.code, ""
