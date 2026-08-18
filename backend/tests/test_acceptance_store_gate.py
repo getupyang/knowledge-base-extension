@@ -153,17 +153,14 @@ def test_g2a_identical_resubmit_already_idempotent(hermetic):
     assert n == 1, f"完全相同的内容提交两次产生 {n} 条（应幂等=1）"
 
 
-@pytest.mark.xfail(strict=True, reason="G2b 由 4.3 稳定 UUID 转绿：内容判重扛不住离线编辑——改过文字的同一批注补传会存成两条")
 def test_g2b_edited_capture_resubmit_needs_stable_uuid(hermetic):
-    """G2b【真缺口】用户离线改了批注文字再补传（同一 client 侧 UUID、内容不同）→
-    仍应只有一条，且保留的是【编辑后】的文字（去重不能变成丢编辑）。
-    当前按内容三元组判重，内容一变即判为新记录。4.3 需引入稳定 client UUID
-    （字段名以实现为准，实现时同步更新本测试）。"""
+    """G2b【✅ 4.3 已转绿 2026-08-18，红名单至此清零】同一 clientCaptureId 编辑后补传
+    → 仍只有一条，且保留编辑后的文字（判重优先级：UUID > notion_page_id > 内容三元组）。"""
     agent_api = hermetic.agent_api
     client = _client(agent_api)
     url = f"https://offline.test/{uuid.uuid4().hex}"
     base = {"title": "离线补传", "url": url, "platform": "博客", "excerpt": "e",
-            "client_capture_id": "cap_fixed_uuid_002"}
+            "clientCaptureId": "cap_fixed_uuid_002"}
     for thought in ("第一版想法", "改过的想法"):
         resp = client.post("/captures/save", json={**base, "thought": thought})
         assert resp.status_code == 200, f"保存失败 HTTP {resp.status_code}（失败不能冒充幂等）"

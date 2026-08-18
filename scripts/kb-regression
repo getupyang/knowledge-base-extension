@@ -481,7 +481,9 @@ class Regression:
         # 2026-08-13 Codex 审查：+F5 白名单收口须轮换 token（红，第 4 块转绿）（8/3/1→8/4/1）
         # 2026-08-17 第 4 块：F5 转绿——白名单变更即轮换（8/4/1→9/3/1）
         # 2026-08-18 4.4：D2 白名单 + E2 默认不勾 转绿（9/3/1→11/1/1，仅剩 G2b 待 4.3）
-        gate_manifest = {"passed": 11, "xfailed": 1, "skipped": 1}
+        # 2026-08-18 4.3：G2b 稳定 UUID 转绿（11/1/1→12/0/1）——🎉 红名单清零，
+        # 上架门禁仅剩 H1 打包件占位（依赖 5.1 产出 zip）
+        gate_manifest = {"passed": 12, "xfailed": 0, "skipped": 1}
         gate_out = run_cmd(
             [sys.executable, "-m", "pytest",
              "backend/tests/test_acceptance_store_gate.py", "-q"],
@@ -489,6 +491,11 @@ class Regression:
         )
         gate_summary = gate_out.splitlines()[-1] if gate_out else ""
         for key, expected in gate_manifest.items():
+            if expected == 0:
+                # pytest 对数量为 0 的类目不显示——出现该类目字样即为非零
+                assert_true(f" {key}" not in gate_summary,
+                            f"store-gate manifest mismatch: expected no '{key}' in '{gate_summary}'")
+                continue
             token = f"{expected} {key}"
             if token not in gate_summary:
                 raise RegressionError(

@@ -51,7 +51,7 @@ function showToast(text, type) {
     position:fixed; bottom:24px; right:24px; z-index:2147483647;
     padding:12px 20px; border-radius:8px; font-size:14px;
     font-family:-apple-system,sans-serif; color:white;
-    background:${type === "success" ? "oklch(0.55 0.14 150)" : "#ef4444"};
+    background:${type === "success" ? "oklch(0.55 0.14 150)" : type === "info" ? "oklch(0.45 0.02 250)" : "#ef4444"};
     box-shadow:0 4px 12px rgba(0,0,0,0.15); transition:opacity 0.3s;
   `;
   document.body.appendChild(toast);
@@ -1062,6 +1062,8 @@ const commentSystem = (() => {
     const c = {
       id: Date.now(),
       telemetryThreadId: kbRandomId("thread"),
+      // 4.3 离线同步：client 侧稳定 UUID——引擎按它判重，补传/编辑重试永不产生重复
+      clientCaptureId: (crypto.randomUUID ? crypto.randomUUID() : kbRandomId("cap")),
       excerpt,
       text,
       createdAt: new Date().toISOString(),
@@ -4316,6 +4318,7 @@ const commentSystem = (() => {
           page_content: pageContent,
           comment: text,
           no_agent: true,  // 告知后端不要立即触发 agent
+          client_capture_id: c.clientCaptureId || "",
           ...identity,
         }),
       });
@@ -4347,6 +4350,58 @@ const commentSystem = (() => {
     collapseInputArea();
   }
 
+  // ── 补传重试（4.3）：未入引擎的批注在面板打开时自动补传一次 ──
+  // client UUID 判重保证幂等：重复补传/编辑后补传都不会在引擎产生重复记录
+  function _markCaptureSyncFailed(comment) {
+    comment.captureSyncFailed = true;
+    const comments = load();
+    const match = comments.find(x => x.id === comment.id);
+    if (match) { match.captureSyncFailed = true; save(comments); }
+  }
+
+  let _pendingSyncRetried = false;
+  function retryPendingEngineSync() {
+    if (_pendingSyncRetried) return;
+    _pendingSyncRetried = true;
+    // 两类待补传：①从未入引擎的批注（连引擎都没到）②入了引擎但记忆库镜像失败的
+    const mirrorFailed = load().filter(c => c.agentCommentId && c.captureSyncFailed);
+    mirrorFailed.forEach(c => syncCaptureToVault(c));
+    const pending = load().filter(c => !c.agentCommentId && c.text);
+    if (!pending.length && !mirrorFailed.length) return;
+    if (mirrorFailed.length) console.info(`[KB] 补传 ${mirrorFailed.length} 条镜像失败的批注`);
+    if (!pending.length) return;
+    console.info(`[KB] 补传 ${pending.length} 条未入引擎的批注`);
+    pending.forEach(async (c) => {
+      try {
+        if (!c.clientCaptureId) {
+          c.clientCaptureId = (crypto.randomUUID ? crypto.randomUUID() : kbRandomId("cap"));
+          const comments = load();
+          const match = comments.find(x => x.id === c.id);
+          if (match) { match.clientCaptureId = c.clientCaptureId; save(comments); }
+        }
+        const resp = await kbApiFetch("/comments", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            page_url: location.href,
+            page_title: document.title,
+            selected_text: c.excerpt || "",
+            comment: c.text,
+            no_agent: true,
+            client_capture_id: c.clientCaptureId,
+          }),
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          const comments = load();
+          const match = comments.find(x => x.id === c.id);
+          if (match) { match.agentCommentId = data.id; save(comments); }
+          syncCaptureToVault(match || c);
+        }
+      } catch { /* 引擎仍离线：下次打开面板再试 */ }
+    });
+  }
+
   // ── Capture upsert：每条划线/评论对应一条本地记录；外部备份由后端处理 ──
   function syncCaptureToVault(comment) {
     const platform = (() => {
@@ -4373,6 +4428,7 @@ const commentSystem = (() => {
       body: JSON.stringify({
         localCommentId: comment.agentCommentId || null,
         notionPageId: comment.notionPageId || null,
+        clientCaptureId: comment.clientCaptureId || "",
         title,
         url: location.href,
         platform,
@@ -4395,19 +4451,29 @@ const commentSystem = (() => {
           const match = comments.find(x => x.id === comment.id);
           if (match) { match.notionPageId = resp.pageId; save(comments); }
         }
+        if (comment.captureSyncFailed) {
+          delete comment.captureSyncFailed;
+          const comments = load();
+          const match = comments.find(x => x.id === comment.id);
+          if (match) { delete match.captureSyncFailed; save(comments); }
+        }
         showToast(captureSavedToast(resp, "已保存到本地记忆库"), "success");
       } else {
+        // 矛盾提示修复（4.3）：批注本体此刻已存在页面本地（且多半已入引擎），
+        // 失败的只是记忆库镜像——不喊"保存失败"吓用户，温和提示并等待自动补传
         const detail = resp.detail || resp.error || "未知错误";
-        console.error("[KB] capture upsert failed:", detail);
-        showToast("✗ 本地保存失败：" + detail, "error");
+        console.warn("[KB] capture upsert failed (批注本体已保存):", detail);
+        _markCaptureSyncFailed(comment);
+        showToast("批注已保存；记忆库镜像稍后自动补传", "info");
       }
     }).catch(err => {
-      console.error("[KB] capture upsert error:", err.message || err);
+      console.warn("[KB] capture upsert error (批注本体已保存):", err.message || err);
       const msg = err.message || String(err);
       const hint = msg.includes("Failed to fetch")
-        ? "本地服务未连接；评论可能只保存在当前页面"
-        : msg;
-      showToast("✗ 本地保存链路异常：" + hint, "error");
+        ? "引擎未连接，批注已存本页，连上后自动补传"
+        : "批注已保存；记忆库镜像稍后自动补传";
+      _markCaptureSyncFailed(comment);
+      showToast(hint, "info");
     });
   }
 
@@ -4729,6 +4795,7 @@ const commentSystem = (() => {
       _showPanel();
       render();
       syncVisibleCommentsFromBackend({ notify: false });
+      retryPendingEngineSync(); // 4.3：离线期间的批注此刻自动补传（UUID 幂等）
       startPendingAiResumeLoop();
       // 展开输入区 + 聚焦（这是划线触发的）
       expandInputArea(true);

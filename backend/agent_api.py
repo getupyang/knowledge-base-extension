@@ -860,12 +860,15 @@ def init_db():
         ("synced_to_cloud_at TEXT", "telemetry_outbox"),
         ("synced_to_cloud_at TEXT", "llm_call_ledger"),
         ("synced_to_cloud_at TEXT", "support_reports"),
+        # 4.3 离线同步（2026-08-18）：client 侧稳定 UUID，补传/编辑判重的第一优先键
+        ("client_capture_id TEXT", "comments"),
     ]:
         try:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {col}")
         except Exception:
             pass  # 列已存在，忽略
     conn.execute("CREATE INDEX IF NOT EXISTS idx_comments_notion_page_id ON comments(notion_page_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_comments_client_capture_id ON comments(client_capture_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_comments_install_created ON comments(anonymous_install_id, created_at DESC)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_comments_thread_telemetry ON comments(thread_telemetry_id)")
     # 非破坏性历史映射：让旧 comments/replies 在 Debug Console 里也能按事件查看。
@@ -4934,6 +4937,8 @@ class CommentCreate(BaseModel):
     page_content: str = ""       # 页面全文（首次提交时传，后端按URL去重缓存）
     comment: str
     no_agent: bool = False  # True 时仅存储，不触发 agent（用户手动召唤时再触发）
+    # 4.3 离线同步：client 侧稳定 UUID。重试补传命中 = 返回既有 id 并更新内容，不重建
+    client_capture_id: str = ""
     # 运营埋点 identity（前端 telemetryIdentity() 注入）
     anonymous_install_id: str = ""
     app_session_id: str = ""
@@ -5368,15 +5373,31 @@ def create_comment(body: CommentCreate):
     # 存储时 agent_type 先记录 v1 类型（兼容），后面会被 v2 覆盖
     agent_type_for_db = v1_agent_type or "v2_pending"
     conn = sqlite3.connect(DB_PATH)
+    # 4.3 离线同步：稳定 UUID 命中 = 补传/编辑重试，更新内容并返回既有 id（不重建、不重触发）
+    ccid = (body.client_capture_id or "").strip() or None
+    if ccid:
+        existing = conn.execute(
+            "SELECT id, agent_type, status FROM comments WHERE client_capture_id=? LIMIT 1", (ccid,)
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE comments SET comment=?, selected_text=?, surrounding_text=?, updated_at=? WHERE id=?",
+                (cleaned_comment, body.selected_text, body.surrounding_text or "", now, existing[0]),
+            )
+            conn.commit()
+            conn.close()
+            return {"id": existing[0], "agent_type": existing[1], "status": existing[2],
+                    "created_at": now, "deduped": True}
     cursor = conn.execute(
         """INSERT INTO comments (page_url, page_title, selected_text, surrounding_text, comment, agent_type, status, created_at, updated_at,
-                                 anonymous_install_id, app_session_id, page_id, thread_telemetry_id, source_surface)
+                                 anonymous_install_id, app_session_id, page_id, thread_telemetry_id, source_surface, client_capture_id)
            VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?,
-                   ?, ?, ?, ?, ?)""",
+                   ?, ?, ?, ?, ?, ?)""",
         (body.page_url, body.page_title, body.selected_text, body.surrounding_text or "",
          cleaned_comment, agent_type_for_db, now, now,
          body.anonymous_install_id or None, body.app_session_id or None,
-         body.page_id or None, body.thread_telemetry_id or None, body.source_surface or None)
+         body.page_id or None, body.thread_telemetry_id or None, body.source_surface or None,
+         ccid)
     )
     comment_id = cursor.lastrowid
 
@@ -6755,6 +6776,8 @@ class NotionSaveRequest(BaseModel):
     excerpt: str = ""
     thought: str = ""
     aiConversation: str = ""
+    # 4.3 离线同步：client 侧稳定 UUID——补传/编辑判重第一优先键（同 id 重传=更新不重建）
+    clientCaptureId: str = ""
 
 class NotionUpsertRequest(BaseModel):
     localCommentId: Optional[int] = None
@@ -6765,6 +6788,8 @@ class NotionUpsertRequest(BaseModel):
     excerpt: str = ""
     thought: str = ""
     aiConversation: str = ""
+    # 4.3 离线同步：无 localCommentId 时（引擎离线期的镜像补传）用它判重
+    clientCaptureId: str = ""
 
 class NotionImportRequest(BaseModel):
     limit: int = 500
@@ -6885,9 +6910,12 @@ def _insert_local_comment_if_missing(notion_page_id: str = None, page_url: str =
                                      page_title: str = "", selected_text: str = "",
                                      comment: str = "", agent_type: str = "notion_import",
                                      created_at: str = None, updated_at: str = None,
-                                     replies: list = None) -> tuple:
+                                     replies: list = None,
+                                     client_capture_id: str = None) -> tuple:
     """Create a local SQLite event unless the same Notion/local event already exists.
 
+    判重优先级（4.3，2026-08-18）：client 稳定 UUID > notion_page_id > 内容三元组。
+    UUID 命中时【更新内容】——离线编辑后补传，保留的是编辑后的文字（去重不丢编辑）。
     Returns (comment_id, created_bool).
     """
     created_at = created_at or _now_iso()
@@ -6897,9 +6925,25 @@ def _insert_local_comment_if_missing(notion_page_id: str = None, page_url: str =
     page_url = page_url or "notion://unknown"
     page_title = page_title or ""
     replies = replies or []
+    client_capture_id = (client_capture_id or "").strip() or None
 
     conn = sqlite3.connect(DB_PATH)
     try:
+        if client_capture_id:
+            existing = conn.execute(
+                "SELECT id FROM comments WHERE client_capture_id=? LIMIT 1",
+                (client_capture_id,),
+            ).fetchone()
+            if existing:
+                comment_id = existing[0]
+                conn.execute(
+                    "UPDATE comments SET comment=?, selected_text=?, page_title=?, "
+                    "notion_page_id=COALESCE(notion_page_id, ?), updated_at=? WHERE id=?",
+                    (comment, selected_text, page_title, notion_page_id, updated_at, comment_id),
+                )
+                conn.commit()
+                return comment_id, False
+
         existing = None
         if notion_page_id:
             existing = conn.execute(
@@ -6913,20 +6957,21 @@ def _insert_local_comment_if_missing(notion_page_id: str = None, page_url: str =
             ).fetchone()
         if existing:
             comment_id = existing[0]
-            if notion_page_id:
+            if notion_page_id or client_capture_id:
                 conn.execute(
-                    "UPDATE comments SET notion_page_id=COALESCE(notion_page_id, ?), updated_at=? WHERE id=?",
-                    (notion_page_id, updated_at, comment_id),
+                    "UPDATE comments SET notion_page_id=COALESCE(notion_page_id, ?), "
+                    "client_capture_id=COALESCE(client_capture_id, ?), updated_at=? WHERE id=?",
+                    (notion_page_id, client_capture_id, updated_at, comment_id),
                 )
                 conn.commit()
             return comment_id, False
 
         cur = conn.execute(
             """INSERT INTO comments
-               (notion_page_id, page_url, page_title, selected_text, surrounding_text, comment,
+               (notion_page_id, client_capture_id, page_url, page_title, selected_text, surrounding_text, comment,
                 agent_type, status, created_at, updated_at)
-               VALUES (?, ?, ?, ?, '', ?, ?, 'open', ?, ?)""",
-            (notion_page_id, page_url, page_title, selected_text, comment, agent_type,
+               VALUES (?, ?, ?, ?, ?, '', ?, ?, 'open', ?, ?)""",
+            (notion_page_id, client_capture_id, page_url, page_title, selected_text, comment, agent_type,
              created_at, updated_at),
         )
         comment_id = cur.lastrowid
@@ -6970,6 +7015,7 @@ async def capture_save(req: NotionSaveRequest):
         selected_text=req.excerpt,
         comment=req.thought,
         agent_type="highlight",
+        client_capture_id=req.clientCaptureId,
     )
     backup = _ensure_local_backup("capture_save", min_interval_hours=24)
 
@@ -7068,6 +7114,7 @@ async def capture_upsert(req: NotionUpsertRequest):
             comment=req.thought,
             agent_type="capture_upsert",
             replies=_parse_notion_conversation(req.aiConversation, _now_iso()),
+            client_capture_id=req.clientCaptureId,
         )
     backup = _ensure_local_backup("capture_upsert", min_interval_hours=24)
     token, db_id = _notion_credentials()
