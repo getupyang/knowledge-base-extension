@@ -7,14 +7,10 @@
     "contextMenus",
     "storage",
     "unlimitedStorage",
-    "activeTab",
-    "scripting",
     "clipboardWrite"
   ],
 
   "host_permissions": [
-    "https://api.notion.com/*",
-    "https://openrouter.ai/*",
     "http://localhost/*",
     "http://127.0.0.1/*"
   ],

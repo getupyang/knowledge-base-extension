@@ -32,3 +32,4 @@ docs/
 # coverage artifacts (2A.1)
 .coverage
 coverage/
+dist/

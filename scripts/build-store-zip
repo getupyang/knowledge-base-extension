@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+"""build-store-zip：Chrome 商店提审包构建（主清单 5.1，2026-08-18）
+
+原则：**精确 allowlist**——只打包 manifest 声明的资源 + 这些页面真实引用的
+相对资源（HTML 里的 script/link/img）。backend/docs/scripts/tests/node_modules
+在物理上不可能进包（不在收集范围，而非靠排除名单兜底）。
+
+用法：python3 scripts/build-store-zip [--out dist/]
+输出：dist/margin-v{version}.zip + 完整清单（验收用）
+"""
+import json
+import re
+import sys
+import zipfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+OUT_DIR = ROOT / "dist"
+
+def fail(msg):
+    print(f"  ✗ {msg}", file=sys.stderr)
+    sys.exit(1)
+
+def expand_glob(pattern: str) -> list[Path]:
+    """manifest web_accessible_resources 的 glob（如 src/notebook/*）"""
+    matches = sorted(p for p in ROOT.glob(pattern) if p.is_file())
+    if not matches:
+        fail(f"manifest 声明的资源不存在：{pattern}")
+    return matches
+
+def html_refs(html_path: Path) -> list[str]:
+    """HTML 页面引用的相对资源（script src / link href / img src）"""
+    text = html_path.read_text(encoding="utf-8")
+    refs = re.findall(r'(?:src|href)="([^"]+)"', text)
+    out = []
+    for r in refs:
+        if r.startswith(("http:", "https:", "data:", "#", "chrome:")):
+            continue
+        resolved = (html_path.parent / r).resolve()
+        if not resolved.exists():
+            fail(f"{html_path.relative_to(ROOT)} 引用的资源不存在：{r}")
+        out.append(str(resolved.relative_to(ROOT)))
+    return out
+
+def collect() -> list[str]:
+    manifest = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
+    files: set[str] = {"manifest.json"}
+
+    # background
+    sw = manifest.get("background", {}).get("service_worker")
+    if sw:
+        files.add(sw)
+    # content scripts
+    for cs in manifest.get("content_scripts", []):
+        files.update(cs.get("js", []))
+        files.update(cs.get("css", []))
+    # action popup + 图标
+    action = manifest.get("action", {})
+    if action.get("default_popup"):
+        files.add(action["default_popup"])
+    for icon in (action.get("default_icon") or {}).values():
+        files.add(icon)
+    for icon in (manifest.get("icons") or {}).values():
+        files.add(icon)
+    # web accessible resources（含 glob）
+    for war in manifest.get("web_accessible_resources", []):
+        for res in war.get("resources", []):
+            if "*" in res:
+                files.update(str(p.relative_to(ROOT)) for p in expand_glob(res))
+            else:
+                files.add(res)
+
+    # HTML 页面的相对引用递归收集（popup/notebook 等页面拉的 js/css/img）
+    frontier = [f for f in files if f.endswith(".html")]
+    seen_html = set()
+    while frontier:
+        page = frontier.pop()
+        if page in seen_html:
+            continue
+        seen_html.add(page)
+        for ref in html_refs(ROOT / page):
+            if ref not in files:
+                files.add(ref)
+                if ref.endswith(".html"):
+                    frontier.append(ref)
+
+    # 存在性 + 边界校验：任何收集到 backend/docs/scripts 下的文件都是设计错误
+    for f in sorted(files):
+        p = ROOT / f
+        if not p.exists():
+            fail(f"待打包文件不存在：{f}")
+        top = f.split("/")[0]
+        if top in {"backend", "docs", "scripts", "node_modules", "dist", ".github"}:
+            fail(f"打包收集越界（不应出现在商店包）：{f}")
+    return sorted(files)
+
+def main():
+    manifest = json.loads((ROOT / "manifest.json").read_text(encoding="utf-8"))
+    version = manifest["version"]
+    files = collect()
+
+    OUT_DIR.mkdir(exist_ok=True)
+    zip_path = OUT_DIR / f"margin-v{version}.zip"
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in files:
+            z.write(ROOT / f, f)
+
+    total = sum((ROOT / f).stat().st_size for f in files)
+    print(f"=== Margin 商店包 v{version} ===")
+    print(f"共 {len(files)} 个文件，源大小 {total/1024:.0f} KB，zip：{zip_path.relative_to(ROOT)}")
+    print("--- 完整清单（验收核对用）---")
+    for f in files:
+        print(f"  {f}")
+
+if __name__ == "__main__":
+    main()
