@@ -389,11 +389,30 @@ function shortAiName(ai) {
   return PROVIDER_SHORT[ai.selectedProvider] || ai.displayName || "AI 服务";
 }
 
+// 模型档位（PRD 2026-08-18）：空串 = 出厂默认（后端解析为 sonnet 别名）
+const MODEL_CHOICE_LABEL = {
+  "": "均衡（推荐）",
+  sonnet: "均衡（推荐）",
+  haiku: "快速",
+  opus: "最强",
+  follow_cli: "跟随终端设置",
+};
+
+function renderModelBlock(ai) {
+  const isClaude = ai.selectedProvider === "claude_code";
+  $("modelBlockWrap").hidden = !isClaude;
+  if (isClaude) {
+    const choice = (ai.claudeModelChoice || "").toLowerCase();
+    setText("modelChoiceLabel", MODEL_CHOICE_LABEL[choice] || MODEL_CHOICE_LABEL[""]);
+  }
+}
+
 function setupE() {
   const ai = (runtimeState || {}).ai || {};
   setText("eProv", shortAiName(ai));
   const schema = (lastHealth && lastHealth.api_schema) || 0;
   $("eUpgrade").hidden = schema === MARGIN_EXPECTED_API_SCHEMA;
+  renderModelBlock(ai);
   if (runtimeState) renderNotion(runtimeState);
   loadVaultStats();
 }
@@ -672,6 +691,31 @@ document.addEventListener("DOMContentLoaded", async () => {
       });
     } catch { /* 存不上则下次再问 */ }
     $("analyticsConsent").hidden = true;
+  });
+
+  // 模型档位（PRD 2026-08-18）：就地展开选择，点击即保存即生效
+  $("modelConfigBtn").addEventListener("click", () => {
+    $("modelPanel").hidden = !$("modelPanel").hidden;
+  });
+  $("closeModelPanelBtn").addEventListener("click", () => {
+    $("modelPanel").hidden = true;
+  });
+  document.querySelectorAll("[data-model-choice]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const choice = btn.getAttribute("data-model-choice");
+      try {
+        const data = await api("/config/ai", {
+          method: "POST",
+          body: JSON.stringify({ provider: "claude_code", claudeModel: choice }),
+        });
+        if (runtimeState) runtimeState.ai = data.ai || runtimeState.ai;
+        renderModelBlock((runtimeState || {}).ai || { selectedProvider: "claude_code", claudeModelChoice: choice });
+        $("modelPanel").hidden = true;
+        setStatus("已切换，下一次 AI 回复即生效", "");
+      } catch (e) {
+        setStatus(`切换失败：${e.message}`, "error");
+      }
+    });
   });
 
   // 事件绑定

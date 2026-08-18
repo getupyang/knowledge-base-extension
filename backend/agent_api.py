@@ -6410,6 +6410,8 @@ def _public_ai_status(llm: dict) -> dict:
         "apiProvider": api_provider,
         "apiModel": api_model,
         "apiKeySet": bool(llm.get("api_key_configured")),
+        # 模型档位（PRD 2026-08-18）：空 = 出厂默认（sonnet）；follow_cli = 跟随终端
+        "claudeModelChoice": os.environ.get("MEMAI_CLAUDE_MODEL", ""),
         "claudeBaseUrl": llm.get("claude_base_url") or "",
         "claudeBaseUrlSet": bool(llm.get("claude_base_url_configured")),
         "available": {
@@ -6468,6 +6470,11 @@ class AiConfigUpdate(BaseModel):
     model: str = ""
     qwenEndpoint: str = "qwen_cn"
     claudeBaseUrl: Optional[str] = None
+    # 模型档位（PRD 2026-08-18）：follow_cli / haiku / sonnet / opus；None=不改
+    claudeModel: Optional[str] = None
+
+
+_CLAUDE_MODEL_CHOICES = {"follow_cli", "haiku", "sonnet", "opus"}
 
 
 _API_ENDPOINT_MAP = {
@@ -6555,6 +6562,11 @@ def update_ai_config(payload: AiConfigUpdate, request: Request):
         claude_base_url = (payload.claudeBaseUrl or "").strip().rstrip("/")
         updates["MEMAI_CLAUDE_BASE_URL"] = claude_base_url
         updates["ANTHROPIC_BASE_URL"] = claude_base_url
+    if provider == "claude_code" and payload.claudeModel is not None:
+        choice = (payload.claudeModel or "").strip().lower()
+        if choice not in _CLAUDE_MODEL_CHOICES:
+            raise HTTPException(status_code=400, detail="模型档位无效")
+        updates["MEMAI_CLAUDE_MODEL"] = choice
     _write_config_values(updates)
     return {"ok": True, "ai": _public_ai_status(get_llm_status())}
 

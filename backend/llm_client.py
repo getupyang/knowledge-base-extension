@@ -346,6 +346,22 @@ class MockProvider(BaseProvider):
         return "MOCK_LLM_RESPONSE"
 
 
+# ── 模型档位（PRD 2026-08-18：用户可配 + 双层防腐）──
+# 第一层防腐：出厂默认用官方稳定别名（CLI 自己解析到当代最新款），绝不写死具体
+# 型号——型号会下线，别名不会。第二层防腐：别名也失效时，运行时剥掉 --model
+# 退回终端默认重试（见 ClaudeCodeProvider.generate_text），产品永不因模型名挂死。
+DEFAULT_CLAUDE_MODEL_ALIAS = "sonnet"
+CLAUDE_MODEL_FOLLOW_CLI = "follow_cli"  # 用户显式选择"跟随终端设置"
+
+
+def resolve_claude_model(explicit: Optional[str] = None) -> Optional[str]:
+    """档位解析：显式参数 > MEMAI_CLAUDE_MODEL > 出厂默认 sonnet；follow_cli → None（不传 --model）。"""
+    value = (explicit or os.environ.get("MEMAI_CLAUDE_MODEL", "") or DEFAULT_CLAUDE_MODEL_ALIAS).strip()
+    if value.lower() == CLAUDE_MODEL_FOLLOW_CLI:
+        return None
+    return value
+
+
 class ClaudeCodeProvider(BaseProvider):
     name = "claude_code"
 
@@ -365,6 +381,7 @@ class ClaudeCodeProvider(BaseProvider):
     ) -> str:
         effective_search_mode = _search_mode_for("CLAUDE", search_mode, default="auto")
         search_enabled = effective_search_mode != "disabled"
+        model = resolve_claude_model(model)
         cmd = [self.bin_path, "-p", prompt, "--output-format", "json"]
         if system_prompt:
             cmd.extend(["--append-system-prompt", system_prompt])
@@ -390,16 +407,37 @@ class ClaudeCodeProvider(BaseProvider):
             "claude_allowed_tools": os.environ.get("MEMAI_CLAUDE_ALLOWED_TOOLS", "WebSearch,WebFetch") if search_enabled else "",
             "claude_system_prompt_mode": "append_system_prompt" if system_prompt else "none",
         }
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                env=_claude_child_env(),
-            )
-        except subprocess.TimeoutExpired as e:
-            raise LLMTimeoutError(f"claude_code timeout after {timeout}s") from e
+        def _run(run_cmd):
+            try:
+                return subprocess.run(
+                    run_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    env=_claude_child_env(),
+                )
+            except subprocess.TimeoutExpired as e:
+                raise LLMTimeoutError(f"claude_code timeout after {timeout}s") from e
+
+        result = _run(cmd)
+        if result.returncode != 0 and model:
+            # 第二层防腐（PRD 2026-08-18）：档位别名/型号不可用时剥掉 --model
+            # 退回终端默认重试一次——产品不因模型名下线而挂死。重试也失败则报原错。
+            stripped = []
+            skip_next = False
+            for arg in cmd:
+                if skip_next:
+                    skip_next = False
+                    continue
+                if arg == "--model":
+                    skip_next = True
+                    continue
+                stripped.append(arg)
+            print(f"[llm] claude --model {model} 调用失败（exit {result.returncode}），剥掉档位退回终端默认重试")
+            self.last_provider_meta["model_fallback_from"] = model
+            retry = _run(stripped)
+            if retry.returncode == 0:
+                result = retry
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "")[:1000]
             raise LLMCallError(f"claude_code exit {result.returncode}: {detail}")
@@ -703,7 +741,8 @@ def _provider_call_meta(provider: BaseProvider, model: Optional[str] = None,
     if provider.name == "codex_cli":
         effective_model = model or os.environ.get("MEMAI_CODEX_MODEL", "") or "default"
     elif provider.name == "claude_code":
-        effective_model = model or os.environ.get("MEMAI_CLAUDE_MODEL", "") or "default"
+        # 与 generate_text 的档位解析保持一致（出生证明字段须反映真实调用）
+        effective_model = resolve_claude_model(model) or "cli_default"
     return {
         "provider": provider.name,
         "provider_config": os.environ.get("MEMAI_LLM_PROVIDER", "auto"),

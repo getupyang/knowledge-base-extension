@@ -297,6 +297,31 @@
         <button class="text-action" id="eUpgradeCopy">复制升级指令，发给你的 AI</button>
       </div>
 
+      <!-- 模型档位（PRD 2026-08-18）：仅 Claude Code 供能时显示。能力话术，不出现具体型号——
+           档位背后是官方稳定别名（防腐第一层），别名失效时后端自动退回终端默认（防腐第二层） -->
+      <div class="status-grid" id="modelBlockWrap" hidden>
+        <div class="status-block">
+          <div class="status-row">
+            <div>
+              <span class="row-label">模型档位</span>
+              <span class="row-value" id="modelChoiceLabel">均衡（推荐）</span>
+            </div>
+            <button class="row-action" id="modelConfigBtn">调整</button>
+          </div>
+          <section class="panel" id="modelPanel" hidden>
+            <div class="panel-head">
+              <div class="panel-title">Margin 用哪一档模型</div>
+              <button class="panel-close" id="closeModelPanelBtn">收起</button>
+            </div>
+            <button data-model-choice="sonnet">均衡 —— 质量与速度兼顾（推荐）</button>
+            <button data-model-choice="haiku" class="kb-secondary">快速 —— 响应最快，日常够用</button>
+            <button data-model-choice="opus" class="kb-secondary">最强 —— 质量最高，消耗你的订阅额度也更快</button>
+            <button data-model-choice="follow_cli" class="kb-secondary">跟随终端设置 —— 和你在终端里选的保持一致</button>
+            <div class="helper">只影响 Margin 的 AI 调用，不改变你终端里的选择。切换立即生效。</div>
+          </section>
+        </div>
+      </div>
+
       <!-- 数据备份区块：导出 + Notion 都是数据安全，同属一个区块（2026-08-09 验收反馈） -->
       <div class="status-grid">
         <div class="indep-label">数据备份</div>
