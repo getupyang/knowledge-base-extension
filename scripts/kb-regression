@@ -395,10 +395,13 @@ class Regression:
             "Boolean(c.agentCommentId) || aiReplies.length > 0" not in content,
             "agentCommentId only means the comment was synced to backend; it must not hide the first AI summon entry",
         )
+        # 2026-08-18 契约随重构更新（意图不变）：锚点匹配策略顺序 = 精确单节点 →
+        # 跨节点 → 压缩空白跨节点。现在由 _insertMarkByText 的策略数组顺序表达。
         assert_true(
             "function _findExactTextRange(excerpt)" in content
-            and "const exactRange = _findExactTextRange(excerpt);" in content
-            and content.index("const exactRange = _findExactTextRange(excerpt);") < content.index("const crossNodeRange = _findTextRangeAcrossNodes(excerpt);"),
+            and "_findExactTextRange(excerpt)," in content
+            and "_findTextRangeAcrossNodes(excerpt)," in content
+            and content.index("_findExactTextRange(excerpt),") < content.index("_findTextRangeAcrossNodes(excerpt),"),
             "anchor restore must try the legacy exact single-text-node path before cross-node fallback",
         )
         assert_true(
@@ -432,6 +435,17 @@ class Regression:
         missing = [term for term in notebook_terms if term not in notebook]
         assert_true(not missing, f"notebook exposure terms missing: {missing}")
 
+        # BUG-2026-08-18-01 契约：临时高亮机制的三个关键挂点必须存在——
+        # 谁删掉任何一个，"放弃评注仍留高亮"的数据污染就会复活
+        content_js = read_text(SRC_DIR / "content" / "index.js")
+        pending_terms = [
+            "_commitPendingHighlight(); // BUG-2026-08-18-01",   # 发送才持久化
+            "_abandonPendingHighlight(); // BUG-2026-08-18-01",  # 关面板放弃
+            "_pendingHighlight.excerpt !== excerpt) _abandonPendingHighlight()",  # 切线程放弃
+        ]
+        missing = [t for t in pending_terms if t not in content_js]
+        assert_true(not missing, f"pending-highlight contract missing: {missing}")
+
         console_terms = [
             "Memory Events",
             "Context Packs",
@@ -448,7 +462,7 @@ class Regression:
                 "python syntax ok",
                 f"node syntax ok: {len(js_files)} files",
                 "html inline script syntax ok",
-                "contracts present: ledger/events/growth/context/local-first-capture/exposure-memory/default-AI-followup/debug-console",
+                "contracts present: ledger/events/growth/context/local-first-capture/exposure-memory/default-AI-followup/debug-console/pending-highlight",
             ]
         )
 

@@ -20,9 +20,9 @@ async function kbApiFetch(path, options = {}) {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "ADD_COMMENT") {
-    // 右键菜单触发：selection 已消失，先用文字匹配高亮，再打开评论面板
-    commentSystem.highlightByText(msg.excerpt);
-    commentSystem.open(msg.excerpt, msg.url, msg.title);
+    // 右键菜单触发：selection 已消失，用文字匹配做【临时】高亮再开面板
+    // （BUG-2026-08-18-01：与工具条"评注"同语义——发送成功才持久化）
+    commentSystem.doHighlightAndOpenComment(msg.excerpt, null);
     sendResponse({ ok: true });
     return;
   }
@@ -1403,6 +1403,36 @@ const commentSystem = (() => {
     localStorage.setItem(HL_KEY(), JSON.stringify(hls));
     _vaultMirror("highlights", hls);
   }
+  // ── 临时高亮（BUG-2026-08-18-01 方案A，2026-08-18）──
+  // 点"评注"只做视觉标记，发送成功才持久化；放弃（关面板/切线程/另起评注）且
+  // 输入为空时移除标记。pending 从不落库，崩溃/刷新天然无残留。
+  // "仅高亮"按钮与右键"高亮保存"不走此路径，仍即时持久化（那是用户的明确意图）。
+  let _pendingHighlight = null;
+
+  function _setPendingHighlight(excerpt, position) {
+    _pendingHighlight = { excerpt, position };
+  }
+
+  function _commitPendingHighlight() {
+    if (_pendingHighlight) {
+      addHighlight(_pendingHighlight.excerpt, _pendingHighlight.position);
+      _pendingHighlight = null;
+    }
+  }
+
+  function _abandonPendingHighlight() {
+    if (!_pendingHighlight) return;
+    const ta = document.getElementById("kb-cp-textarea");
+    if (ta && ta.value.trim()) return; // 有草稿：保留锚点等用户回来，不算放弃
+    const excerpt = _pendingHighlight.excerpt;
+    _pendingHighlight = null;
+    // 同文已有评论或已存高亮时不能误删既有标记
+    const trimmed = (excerpt || "").trim();
+    const hasComment = load().some(c => (c.excerpt || "").trim() === trimmed);
+    const hasSaved = loadHighlights().some(h => h.excerpt === excerpt);
+    if (!hasComment && !hasSaved) _removeMarksForExcerpt(excerpt);
+  }
+
   function addHighlight(excerpt, position) {
     const hls = loadHighlights();
     const samePosition = (a, b) => JSON.stringify(a || {}) === JSON.stringify(b || {});
@@ -1598,6 +1628,8 @@ const commentSystem = (() => {
     // 点击：打开面板 + 锚定 + 闪一下
     mark.addEventListener("click", (e) => {
       e.stopPropagation();
+      // BUG-2026-08-18-01：切去别的划线 = 放弃未发送的临时高亮（点自己不算）
+      if (!_pendingHighlight || _pendingHighlight.excerpt !== excerpt) _abandonPendingHighlight();
       currentExcerpt = excerpt;
       if (!panelEl) buildPanel();
       const wasPanelClosed = !panelOpen;
@@ -1758,31 +1790,42 @@ const commentSystem = (() => {
 
   // ── 高亮 + 打开评论面板（点"评论"按钮）──
   function doHighlightAndOpenComment(excerpt, range) {
-    doHighlight(excerpt, range);
+    // BUG-2026-08-18-01：评注入口只做临时标记，发送成功（submitComment）才持久化
+    _abandonPendingHighlight(); // 另起评注 = 放弃上一条未发送的
+    let position = null;
+    if (range) {
+      position = serializeRange(range);
+      const ok = insertMark(range, excerpt); // 先插 mark，再清 selection
+      try { window.getSelection()?.removeAllRanges(); } catch {}
+      if (!ok) position = _insertMarkByText(excerpt);
+    } else {
+      position = _insertMarkByText(excerpt);
+    }
+    if (position) _setPendingHighlight(excerpt, position);
     open(excerpt, location.href, document.title);
   }
 
-  // ── 右键菜单触发：selection 已消失，用文字内容在页面上匹配并高亮 ──
+  // ── 只插视觉标记，返回可序列化位置（不落库）──
+  function _insertMarkByText(excerpt) {
+    if (!excerpt) return null;
+    for (const range of [
+      _findExactTextRange(excerpt),
+      _findTextRangeAcrossNodes(excerpt),
+      _findTextRangeAcrossNodes(excerpt, { compactWhitespace: true }),
+    ]) {
+      if (range) {
+        const position = serializeRange(range);
+        if (insertMark(range, excerpt) && position) return position;
+        return null; // 与旧行为一致：找到 range 但插入失败不再试下一策略
+      }
+    }
+    return null;
+  }
+
+  // ── 右键菜单触发：selection 已消失，用文字内容在页面上匹配并高亮（即时持久化）──
   function highlightByText(excerpt) {
-    if (!excerpt) return;
-    const exactRange = _findExactTextRange(excerpt);
-    if (exactRange) {
-      const position = serializeRange(exactRange);
-      if (insertMark(exactRange, excerpt) && position) addHighlight(excerpt, position);
-      return;
-    }
-    const crossNodeRange = _findTextRangeAcrossNodes(excerpt);
-    if (crossNodeRange) {
-      const position = serializeRange(crossNodeRange);
-      if (insertMark(crossNodeRange, excerpt) && position) addHighlight(excerpt, position);
-      return;
-    }
-    const compactCrossNodeRange = _findTextRangeAcrossNodes(excerpt, { compactWhitespace: true });
-    if (compactCrossNodeRange) {
-      const position = serializeRange(compactCrossNodeRange);
-      if (insertMark(compactCrossNodeRange, excerpt) && position) addHighlight(excerpt, position);
-      return;
-    }
+    const position = _insertMarkByText(excerpt);
+    if (position) addHighlight(excerpt, position);
   }
 
   // ── 页面加载时恢复所有高亮 ──
@@ -2716,6 +2759,7 @@ const commentSystem = (() => {
     document.getElementById("kb-panel-resizer").addEventListener("mousedown", _startPanelResize);
     document.getElementById("kb-panel-resizer").addEventListener("touchstart", _startPanelResize, { passive: false });
     document.getElementById("kb-cp-close").addEventListener("click", () => {
+      _abandonPendingHighlight(); // BUG-2026-08-18-01：关面板且未写内容 = 放弃临时高亮
       _hidePanel();
     });
     document.getElementById("kb-cp-send-btn").addEventListener("click", submitComment);
@@ -4235,6 +4279,7 @@ const commentSystem = (() => {
     const btn = document.getElementById("kb-cp-send-btn");
     btn.disabled = true;
     status.textContent = "保存中...";
+    _commitPendingHighlight(); // BUG-2026-08-18-01：发送成功路径才持久化临时高亮
     const c = addComment(currentExcerpt, text);
     const initialExcerpt = currentExcerpt || _savedSelection || "";
     telemetryEvent("sidebar_comment_created", "sidebar", {
