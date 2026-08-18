@@ -1129,10 +1129,10 @@ const commentSystem = (() => {
       return el ? Boolean(el.checked) : Boolean(fallback);
     };
     return {
-      include_conversation: readBox("conversation", current.include_conversation ?? true),
-      include_selection: readBox("selection", current.include_selection ?? true),
-      include_page_info: readBox("page", current.include_page_info ?? true),
-      include_model_io: readBox("model", current.include_model_io ?? true),
+      include_conversation: readBox("conversation", current.include_conversation ?? false),
+      include_selection: readBox("selection", current.include_selection ?? false),
+      include_page_info: readBox("page", current.include_page_info ?? false),
+      include_model_io: readBox("model", current.include_model_io ?? false),
     };
   }
 

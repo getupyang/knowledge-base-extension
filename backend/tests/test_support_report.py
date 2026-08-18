@@ -79,17 +79,3 @@ def test_e1d_submit_writes_local_report(hermetic):
     ).fetchone()
     conn.close()
     assert row[0] == 1, "提交后应有且仅有一条本地报告"
-
-
-def test_e2_pin_frontend_defaults_all_checked(hermetic):
-    """【钉现状·E2 的坑】前端四类附件默认全勾（`?? true` ×4）。
-    4.4 改为默认不勾后，本断言应改写为 `?? false`——它变红 = 前端默认已翻转。"""
-    content = (Path(__file__).resolve().parents[2] / "src" / "content" / "index.js").read_text(encoding="utf-8")
-    checked_defaults = [
-        "current.include_conversation ?? true",
-        "current.include_selection ?? true",
-        "current.include_page_info ?? true",
-        "current.include_model_io ?? true",
-    ]
-    for marker in checked_defaults:
-        assert marker in content, f"前端默认勾选现状标记消失：{marker}（若已改默认不勾，请把本测试断言翻转为 ?? false 并转绿 2B.5）"

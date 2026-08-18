@@ -1605,18 +1605,25 @@ def _now_shanghai_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
-_TELEMETRY_FORBIDDEN_KEYS = {
-    # URL / 地址
-    "url", "page_url", "href", "location",
-    # 划线 / 选区 原文
-    "selected_text", "excerpt", "selection", "selected",
-    # 评论 / 用户输入正文
-    "comment", "comment_text", "comment_content", "comment_body",
-    # AI 回复正文
-    "reply", "reply_text", "reply_content", "reply_body", "ai_reply",
-    # 通用正文字段
-    "text", "content", "body", "page_content", "page_text",
-    "surrounding_text", "context_text",
+# ── 埋点字段白名单（2026-08-18，清单 4.4：黑名单升级白名单）──
+# 原则：只有名单内的字段能出门，名单外一律丢弃并打日志——新埋点字段必须显式入册，
+# 这正是白名单相对黑名单的意义（黑名单防已知，白名单防未知）。
+# 名单来源：真实库近 500 事件字段普查 + _enrich_env_properties 注入项。全部为
+# 脱敏设计（bucket/计数/布尔/枚举），不含任何正文/URL 类字段。
+_TELEMETRY_ALLOWED_KEYS = {
+    # 环境（前端 env / 后端 enrich）
+    "app_version", "extension_id", "browser", "os", "locale",
+    "llm_provider_mode", "llm_provider", "llm_model", "notion_configured",
+    # 交互形态（bucket/计数/布尔，无正文）
+    "thread_turn_count_before", "requested_via",
+    "selected_text_chars_bucket", "comment_chars_bucket", "active_note_chars_bucket",
+    "has_selected_text", "existing_ai_reply_count", "replace_reply",
+    "reply_chars_bucket", "followup_chars_bucket",
+    "elapsed_s_user", "status", "notebook_route",
+    # 反馈 / 支持报告（feedback_text 是唯一放行明文，单独截断）
+    "rating", "feedback_text", "support_report_id", "report_id", "has_user_note",
+    "include_conversation", "include_selection", "include_page_info", "include_model_io",
+    "ledger_calls", "request_snapshots",
 }
 _TELEMETRY_ALLOWED_FREE_TEXT_KEYS = {"feedback_text"}
 _TELEMETRY_FEEDBACK_TEXT_MAX = 2000
@@ -1640,7 +1647,8 @@ def _redact_error(msg: str) -> str:
 
 
 def _scrub_telemetry_properties(raw_props) -> dict:
-    """前端发来的 properties 防护：丢禁词 key、截断 feedback_text、强制 dict。"""
+    """前端发来的 properties 防护（白名单语义）：名单外字段一律丢弃并打日志；
+    feedback_text 是唯一放行明文（截断）；强制 dict。"""
     if not isinstance(raw_props, dict):
         return {}
     cleaned = {}
@@ -1648,18 +1656,15 @@ def _scrub_telemetry_properties(raw_props) -> dict:
     for key, value in raw_props.items():
         if not isinstance(key, str) or not key:
             continue
-        if key.startswith("_"):
-            continue
         lk = key.lower()
+        if lk not in _TELEMETRY_ALLOWED_KEYS:
+            dropped.append(key)
+            continue
         # feedback_text 是唯一被允许的明文字段
         if lk in _TELEMETRY_ALLOWED_FREE_TEXT_KEYS:
             if value is None:
                 continue
-            text = str(value)[:_TELEMETRY_FEEDBACK_TEXT_MAX]
-            cleaned[key] = text
-            continue
-        if lk in _TELEMETRY_FORBIDDEN_KEYS:
-            dropped.append(key)
+            cleaned[key] = str(value)[:_TELEMETRY_FEEDBACK_TEXT_MAX]
             continue
         # value 也限制：dict/list/原语，jsonable
         try:
@@ -1669,7 +1674,8 @@ def _scrub_telemetry_properties(raw_props) -> dict:
             continue
         cleaned[key] = value
     if dropped:
-        print(f"[telemetry] dropped forbidden keys: {dropped}")
+        # 白名单丢弃必须可见：可能是新埋点字段忘了入册（入册需过隐私审查）
+        print(f"[telemetry] dropped non-allowlisted keys: {dropped}")
     return cleaned
 
 

@@ -658,6 +658,22 @@ async function decideInitialState() {
 // ── 启动 ──
 
 document.addEventListener("DOMContentLoaded", async () => {
+  // 埋点首启同意卡（清单 4.4）：点"知道了"前 background 闸门丢弃一切埋点事件
+  try {
+    const consent = await chrome.storage.local.get("margin_analytics_consent");
+    if (!consent.margin_analytics_consent || !consent.margin_analytics_consent.granted) {
+      $("analyticsConsent").hidden = false;
+    }
+  } catch { /* storage 异常时保持隐藏，埋点闸门默认关闭仍安全 */ }
+  $("analyticsConsentOk").addEventListener("click", async () => {
+    try {
+      await chrome.storage.local.set({
+        margin_analytics_consent: { granted: true, ts: new Date().toISOString() },
+      });
+    } catch { /* 存不上则下次再问 */ }
+    $("analyticsConsent").hidden = true;
+  });
+
   // 事件绑定
   $("notebookBtn").addEventListener("click", () => {
     chrome.tabs.create({ url: chrome.runtime.getURL("src/notebook/index.html") });

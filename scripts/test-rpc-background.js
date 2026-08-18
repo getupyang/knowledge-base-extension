@@ -112,6 +112,22 @@ async function check(name, fn) {
     assert.deepStrictEqual(await send({ type: "PING" }), { pong: true });
   });
 
+  await check("A8 埋点同意闸门：未同意时 telemetry 不出门（4.4 Chrome 政策）", async () => {
+    fetchImpl = () => { throw new Error("不应发出任何网络请求"); };
+    const r = await send({ type: "API_FETCH", path: "/telemetry/events", options: { method: "POST" } });
+    assert.strictEqual(r.status, 202, "未同意时应本地扣住（202 held）");
+    assert.strictEqual(fetchLog.length, 0, "未同意时不应有任何网络请求");
+  });
+
+  await check("A8b 埋点同意闸门：同意后正常放行", async () => {
+    storageData.set("margin_analytics_consent", { granted: true, ts: "2026-08-18" });
+    fetchImpl = (url) => routeClientError(url) || jsonResp({ ok: true });
+    const r = await send({ type: "API_FETCH", path: "/telemetry/events", options: { method: "POST" } });
+    assert.strictEqual(r.ok, true);
+    assert.ok(fetchLog.some((f) => f.url.includes("/telemetry/events")), "同意后事件应真实发出");
+    storageData.delete("margin_analytics_consent");
+  });
+
   await check("A5 发件人校验：非本扩展消息被忽略（认证协议 §6）", async () => {
     let responded = false;
     const ret = listeners.onMessage[0]({ type: "PING" }, { id: "evil-extension" }, () => { responded = true; });

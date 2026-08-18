@@ -200,6 +200,16 @@
   <div class="helper" id="notebookHint" style="text-align:center;margin:4px 0 0">连上你的 AI 后可用</div>
   <div class="status" id="status"></div>
 
+  <!-- 埋点首启同意卡（清单 4.4，Chrome 政策：收集前醒目披露 + 明确同意动作。
+       拍板口径：默认开、不做常驻关闭；点"知道了"前扩展侧埋点一律不出门（background 闸门） -->
+  <div id="analyticsConsent" hidden
+       style="margin:10px 0;padding:10px 12px;border:1px solid #d7e6d9;border-radius:10px;background:#f4faf5;font-size:12px;line-height:1.6;color:#3a4a3d">
+    Margin 会发送<b>不含任何正文</b>的匿名使用统计（例如"今天召唤了几次 AI、等了多久"），帮我们改进产品。
+    你的划线、批注、网页内容<b>永远不会被发送</b>。
+    <button id="analyticsConsentOk"
+            style="display:block;width:100%;margin-top:8px;padding:6px 0;border:none;border-radius:8px;background:#2e7d43;color:#fff;font-size:12px;cursor:pointer">知道了</button>
+  </div>
+
   <div id="screens">
     <!-- A 未连接·初始：只做一个决策——用哪个 AI -->
     <div class="screen" id="screenA" hidden>

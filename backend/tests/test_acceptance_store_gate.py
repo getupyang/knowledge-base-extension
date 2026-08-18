@@ -179,10 +179,9 @@ def test_g2b_edited_capture_resubmit_needs_stable_uuid(hermetic):
 
 # ── D2 · telemetry 白名单（由第 4 块 4.4 转绿）──
 
-@pytest.mark.xfail(strict=True, reason="D2 由 4.4 白名单化转绿：当前黑名单语义，未知字段放行并落库")
 def test_d2_unknown_telemetry_keys_never_stored(hermetic):
-    """D2：端点级出站行为——未知字段经 POST /telemetry/events 后不应出现在任何落库数据里
-    （Codex review #8：测出站行为，不测内部函数）"""
+    """D2【✅ 4.4 已转绿 2026-08-18】端点级出站行为——未知字段经 POST /telemetry/events
+    后不出现在任何落库数据里（白名单：名单外一律丢弃）"""
     agent_api = hermetic.agent_api
     client = _client(agent_api)
     marker_key = "some_future_field_nobody_reviewed"
@@ -202,9 +201,9 @@ def test_d2_unknown_telemetry_keys_never_stored(hermetic):
 
 # ── E2 · support report 默认不带正文（由第 4 块 4.4 转绿）──
 
-@pytest.mark.xfail(strict=True, reason="E2 由 4.4 转绿：当前前端四类附件默认全勾（?? true）。⚠ 静态文本检查是弱验证，4.4 落地时必须配 Playwright 真点验收")
 def test_e2_frontend_report_defaults_unchecked(hermetic):
-    """E2：用户不做任何勾选动作 → 前端默认不带任何正文附件"""
+    """E2【✅ 4.4 已转绿 2026-08-18】用户不做任何勾选动作 → 前端默认不带任何正文附件。
+    ⚠ 静态文本检查是弱验证，商店 RC 阶段配 Playwright 真点复核。"""
     content = (Path(__file__).resolve().parents[2] / "src" / "content" / "index.js").read_text(encoding="utf-8")
     unchecked_defaults = [
         "current.include_conversation ?? false",
@@ -214,7 +213,6 @@ def test_e2_frontend_report_defaults_unchecked(hermetic):
     ]
     missing = [m for m in unchecked_defaults if m not in content]
     assert not missing, f"前端默认仍是勾选态，未翻转：{missing}"
-    # 翻转完成后，请同步删除 test_support_report.py 里钉 ?? true 现状的 test_e2_pin
 
 
 # ── H 组 · 商店包 E2E（依赖 5.1 先产出 zip，暂无法执行）──

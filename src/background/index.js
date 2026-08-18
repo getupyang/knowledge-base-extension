@@ -157,7 +157,20 @@ async function kbEngineFetch(url, options = {}) {
   return resp;
 }
 
+// ── 埋点同意闸门（清单 4.4，Chrome 政策：收集前须醒目披露+明确同意）──
+// 用户在 popup 首启卡片点"知道了"之前，扩展侧任何埋点事件不出门（直接丢弃）。
+const ANALYTICS_CONSENT_KEY = "margin_analytics_consent";
+async function analyticsConsented() {
+  try {
+    const s = await chrome.storage.local.get(ANALYTICS_CONSENT_KEY);
+    return Boolean(s[ANALYTICS_CONSENT_KEY] && s[ANALYTICS_CONSENT_KEY].granted);
+  } catch { return false; }
+}
+
 async function apiProxy(path, options = {}) {
+  if (path.startsWith("/telemetry") && !(await analyticsConsented())) {
+    return { ok: true, status: 202, statusText: "held", bodyText: '{"ok":false,"reason":"no_consent"}' };
+  }
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 20000);
   try {

@@ -466,7 +466,8 @@ class Regression:
         # 2026-08-13 3.3 token 落地：F2 转绿 + F3 真矩阵 + F4 配对协议（6/4/1→8/3/1）
         # 2026-08-13 Codex 审查：+F5 白名单收口须轮换 token（红，第 4 块转绿）（8/3/1→8/4/1）
         # 2026-08-17 第 4 块：F5 转绿——白名单变更即轮换（8/4/1→9/3/1）
-        gate_manifest = {"passed": 9, "xfailed": 3, "skipped": 1}
+        # 2026-08-18 4.4：D2 白名单 + E2 默认不勾 转绿（9/3/1→11/1/1，仅剩 G2b 待 4.3）
+        gate_manifest = {"passed": 11, "xfailed": 1, "skipped": 1}
         gate_out = run_cmd(
             [sys.executable, "-m", "pytest",
              "backend/tests/test_acceptance_store_gate.py", "-q"],
