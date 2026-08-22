@@ -214,7 +214,7 @@ def test_e2_frontend_report_defaults_unchecked(hermetic):
 
 # ── H 组 · 商店包 E2E（依赖 5.1 先产出 zip，暂无法执行）──
 
-@pytest.mark.skip(reason="H1 依赖 5.1 精确 allowlist 打包脚本产出 zip 后才能执行（真解包装 Chrome 跑核心流程）")
+@pytest.mark.skip(reason="H1 由 scripts/test-store-zip-e2e.js 覆盖（需真实浏览器+服务，回归门保持隔离故此处跳过；2026-08-23 mac 双幕【引擎在线核心流程 + 真停引擎无后端】已通过）")
 def test_h1_store_zip_end_to_end(hermetic):
     """H1：用真正提交商店的 zip 解包装进 Chrome → 划线→批注→AI 回复完整可用"""
     raise NotImplementedError
